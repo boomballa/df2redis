@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		 xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<artifactId>camellia-toolkits</artifactId>
+	<version>${revision}</version>
+	<name>camellia-toolkits</name>
+
+	<packaging>pom</packaging>
+
+	<parent>
+		<groupId>com.netease.nim</groupId>
+		<artifactId>camellia</artifactId>
+		<version>${revision}</version>
+	</parent>
+
+	<modules>
+		<module>camellia-codec</module>
+		<module>camellia-http-console</module>
+		<module>camellia-mq-isolation</module>
+		<module>camellia-tools</module>
+		<module>camellia-zk</module>
+    </modules>
+
+</project>

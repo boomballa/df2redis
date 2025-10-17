@@ -1,0 +1,198 @@
+package com.netease.nim.camellia.id.gen.sdk;
+
+import com.netease.nim.camellia.tools.executor.CamelliaThreadFactory;
+
+import java.util.concurrent.*;
+
+/**
+ * Created by caojiajun on 2021/9/27
+ */
+public class CamelliaIdGenSdkConfig {
+
+    //segment发号器中后台异步load线程池
+    public static final ThreadPoolExecutor defaultAsyncLoadThreadPool = new ThreadPoolExecutor(Runtime.getRuntime().availableProcessors() * 2,
+            Runtime.getRuntime().availableProcessors() * 2, 0, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(10240), new CamelliaThreadFactory("camellia-id-segment-gen-sdk-async-load", true));
+
+    //discovery模式下，兜底的reload线程池
+    private static final ScheduledExecutorService defaultScheduleThreadPool = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors(),
+            new CamelliaThreadFactory("camellia-id-gen-sdk-schedule", true));
+
+    private String url;
+    private IdGenServerDiscovery discovery;
+    private int discoveryReloadIntervalSeconds = 60;
+    private int maxRetry = 5;
+    private long connectTimeoutMillis = 5000;
+    private long readTimeoutMillis = 5000;
+    private long writeTimeoutMillis = 5000;
+    private int maxRequests = 4096;
+    private int maxRequestsPerHost = 1024;
+    private int maxIdleConnections = 1024;
+    private int keepAliveSeconds = 30;
+    private ScheduledExecutorService scheduleThreadPool = defaultScheduleThreadPool;
+
+    private SegmentIdGenSdkConfig segmentIdGenSdkConfig = new SegmentIdGenSdkConfig();
+
+    public static class SegmentIdGenSdkConfig {
+
+        private boolean cacheEnable = false;
+
+        private int step = 100;
+        private int tagCount = 10000;
+        private int maxRetry = 500;
+        private long retryIntervalMillis = 10;
+        private ExecutorService asyncLoadThreadPool = defaultAsyncLoadThreadPool;
+
+        public boolean isCacheEnable() {
+            return cacheEnable;
+        }
+
+        public void setCacheEnable(boolean cacheEnable) {
+            this.cacheEnable = cacheEnable;
+        }
+
+        public int getStep() {
+            return step;
+        }
+
+        public void setStep(int step) {
+            this.step = step;
+        }
+
+        public int getTagCount() {
+            return tagCount;
+        }
+
+        public void setTagCount(int tagCount) {
+            this.tagCount = tagCount;
+        }
+
+        public ExecutorService getAsyncLoadThreadPool() {
+            return asyncLoadThreadPool;
+        }
+
+        public void setAsyncLoadThreadPool(ExecutorService asyncLoadThreadPool) {
+            this.asyncLoadThreadPool = asyncLoadThreadPool;
+        }
+
+        public int getMaxRetry() {
+            return maxRetry;
+        }
+
+        public void setMaxRetry(int maxRetry) {
+            this.maxRetry = maxRetry;
+        }
+
+        public long getRetryIntervalMillis() {
+            return retryIntervalMillis;
+        }
+
+        public void setRetryIntervalMillis(long retryIntervalMillis) {
+            this.retryIntervalMillis = retryIntervalMillis;
+        }
+    }
+
+    public String getUrl() {
+        return url;
+    }
+
+    public void setUrl(String url) {
+        this.url = url;
+    }
+
+    public IdGenServerDiscovery getDiscovery() {
+        return discovery;
+    }
+
+    public void setDiscovery(IdGenServerDiscovery discovery) {
+        this.discovery = discovery;
+    }
+
+    public int getDiscoveryReloadIntervalSeconds() {
+        return discoveryReloadIntervalSeconds;
+    }
+
+    public void setDiscoveryReloadIntervalSeconds(int discoveryReloadIntervalSeconds) {
+        this.discoveryReloadIntervalSeconds = discoveryReloadIntervalSeconds;
+    }
+
+    public int getMaxRetry() {
+        return maxRetry;
+    }
+
+    public void setMaxRetry(int maxRetry) {
+        this.maxRetry = maxRetry;
+    }
+
+    public long getConnectTimeoutMillis() {
+        return connectTimeoutMillis;
+    }
+
+    public void setConnectTimeoutMillis(long connectTimeoutMillis) {
+        this.connectTimeoutMillis = connectTimeoutMillis;
+    }
+
+    public long getReadTimeoutMillis() {
+        return readTimeoutMillis;
+    }
+
+    public void setReadTimeoutMillis(long readTimeoutMillis) {
+        this.readTimeoutMillis = readTimeoutMillis;
+    }
+
+    public long getWriteTimeoutMillis() {
+        return writeTimeoutMillis;
+    }
+
+    public void setWriteTimeoutMillis(long writeTimeoutMillis) {
+        this.writeTimeoutMillis = writeTimeoutMillis;
+    }
+
+    public int getMaxRequests() {
+        return maxRequests;
+    }
+
+    public void setMaxRequests(int maxRequests) {
+        this.maxRequests = maxRequests;
+    }
+
+    public int getMaxRequestsPerHost() {
+        return maxRequestsPerHost;
+    }
+
+    public void setMaxRequestsPerHost(int maxRequestsPerHost) {
+        this.maxRequestsPerHost = maxRequestsPerHost;
+    }
+
+    public int getMaxIdleConnections() {
+        return maxIdleConnections;
+    }
+
+    public void setMaxIdleConnections(int maxIdleConnections) {
+        this.maxIdleConnections = maxIdleConnections;
+    }
+
+    public SegmentIdGenSdkConfig getSegmentIdGenSdkConfig() {
+        return segmentIdGenSdkConfig;
+    }
+
+    public void setSegmentIdGenSdkConfig(SegmentIdGenSdkConfig segmentIdGenSdkConfig) {
+        this.segmentIdGenSdkConfig = segmentIdGenSdkConfig;
+    }
+
+    public int getKeepAliveSeconds() {
+        return keepAliveSeconds;
+    }
+
+    public void setKeepAliveSeconds(int keepAliveSeconds) {
+        this.keepAliveSeconds = keepAliveSeconds;
+    }
+
+    public ScheduledExecutorService getScheduleThreadPool() {
+        return scheduleThreadPool;
+    }
+
+    public void setScheduleThreadPool(ScheduledExecutorService scheduleThreadPool) {
+        this.scheduleThreadPool = scheduleThreadPool;
+    }
+}
