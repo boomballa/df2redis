@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		 xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<artifactId>camellia-redis-proxy-mq</artifactId>
+	<version>${revision}</version>
+	<name>camellia-redis-proxy-mq</name>
+
+	<packaging>pom</packaging>
+
+	<parent>
+		<groupId>com.netease.nim</groupId>
+		<artifactId>camellia-redis-proxy-extensions</artifactId>
+		<version>${revision}</version>
+	</parent>
+
+	<modules>
+		<module>camellia-redis-proxy-mq-common</module>
+		<module>camellia-redis-proxy-mq-kafka</module>
+	</modules>
+</project>
