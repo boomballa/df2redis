@@ -2,9 +2,11 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"df2redis/internal/consistency"
@@ -321,28 +323,58 @@ func NewSyncStage() Stage {
 				_ = ctx.State.SetPipelineStatus("syncing", "实时同步进行中，按 Ctrl+C 触发清理")
 			}
 
-			walTicker := time.NewTicker(3 * time.Second)
-			defer walTicker.Stop()
+			walPath := strings.TrimSpace(ctx.Config.Proxy.WALStatusFile)
+			var walTicker *time.Ticker
+			var walCh <-chan time.Time
+			if walPath != "" {
+				walTicker = time.NewTicker(3 * time.Second)
+				walCh = walTicker.C
+				defer walTicker.Stop()
+			} else {
+				msg := "未配置 walStatusFile，sync 阶段仅执行采样一致性检查"
+				log.Println(msg)
+				if ctx.State != nil {
+					_ = ctx.State.UpdateStage("sync", string(StatusRunning), msg)
+				}
+			}
 			sampleTicker := time.NewTicker(30 * time.Second)
 			defer sampleTicker.Stop()
 
 			lastPending := int64(-1)
 			consecutiveZero := 0
 			readyAnnounced := false
+			walMissingLogged := false
 
 			for {
 				select {
 				case <-base.Done():
 					return Result{Status: StatusSuccess, Message: "同步阶段结束，准备清理"}
-				case <-walTicker.C:
+				case <-walCh:
 					pending, err := ctx.Camellia.WALPending()
 					if err != nil {
-						log.Printf("读取 Camellia WAL 失败: %v", err)
+						switch {
+						case errors.Is(err, os.ErrNotExist), strings.Contains(err.Error(), "no such file"):
+							if !walMissingLogged {
+								msg := fmt.Sprintf("Camellia walStatusFile 未找到 (%s)，请确认代理已输出 backlog", walPath)
+								log.Println(msg)
+								if ctx.State != nil {
+									_ = ctx.State.UpdateStage("sync", string(StatusRunning), msg)
+									_ = ctx.State.RecordMetric("camellia.wal.pending", -1)
+								}
+								walMissingLogged = true
+							}
+						default:
+							log.Printf("读取 Camellia WAL 失败: %v", err)
+							if ctx.State != nil {
+								_ = ctx.State.UpdateStage("sync", string(StatusRunning), fmt.Sprintf("读取 WAL 失败: %v", err))
+							}
+						}
 						if ctx.State != nil {
-							_ = ctx.State.UpdateStage("sync", string(StatusRunning), fmt.Sprintf("读取 WAL 失败: %v", err))
+							_ = ctx.State.RecordMetric("sync.sample.error", 1)
 						}
 						continue
 					}
+					walMissingLogged = false
 					if ctx.State != nil {
 						_ = ctx.State.RecordMetric("camellia.wal.pending", float64(pending))
 						_ = ctx.State.UpdateStage("sync", string(StatusRunning), fmt.Sprintf("WAL backlog=%d", pending))

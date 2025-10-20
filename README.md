@@ -99,6 +99,8 @@ GOOS=linux GOARCH=arm64 go build -o bin/df2redis-arm64 ./cmd/df2redis
 
 Camellia 会在 `metadata` 段使用 `walStatusFile` 持续输出 backlog 指标，`sync` 阶段正是读取该文件判断是否可以切换流量。若自定义模板，请确保字段与 `proxy.walStatusFile` 指向一致且可写。
 
+默认控制台监听 `consolePort`（默认为 16379），df2redis 会定期访问 `/metrics` 接口，将 `kv_write_buffer_stats{metric_type="pending"}` 汇总写入 `walStatusFile`。
+
 ## 下一步 🛣️
 - 将 Camellia 双写侧代码落地（读取 `hook.json`、执行 Lua），并在生产侧验证。
 - 灰度切读阶段接入实际流量控制（接入服务网关/流量调度 API）。

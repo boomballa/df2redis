@@ -52,6 +52,7 @@ type ProxyConfig struct {
 	MetaHookScript string            `json:"metaHookScript"`
 	Env            map[string]string `json:"env"`
 	HookInfoFile   string            `json:"hookInfoFile"`
+	ConsolePort    int               `json:"consolePort"`
 }
 
 func (p ProxyConfig) isAutoBinary() bool {
@@ -193,6 +194,9 @@ func (c *Config) ApplyDefaults() {
 	if c.Proxy.HookInfoFile == "" && c.Proxy.WALDir != "" {
 		c.Proxy.HookInfoFile = filepath.Join(c.Proxy.WALDir, "hook.json")
 	}
+	if c.Proxy.ConsolePort == 0 {
+		c.Proxy.ConsolePort = 16379
+	}
 	if c.Proxy.ConfigFile == "" {
 		c.Proxy.ConfigFile = "auto"
 	}
@@ -272,6 +276,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Proxy.WALStatusFile == "" {
 		errs = append(errs, "proxy.walStatusFile 必填")
+	}
+	if c.Proxy.ConsolePort <= 0 {
+		errs = append(errs, "proxy.consolePort 必须 > 0")
 	}
 	if !c.Proxy.isAutoBinary() && c.Proxy.Binary == "" {
 		errs = append(errs, "proxy.binary 必填或设置为 auto")

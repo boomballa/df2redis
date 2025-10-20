@@ -18,6 +18,7 @@ proxy:
   kind: camellia
   # Camellia 监听地址（df2redis 启动后会自动拉起代理）
   endpoint: 127.0.0.1:16380
+  consolePort: 16379
   walDir: ../out/wal
   mirrorWrites: true
   binary: auto
