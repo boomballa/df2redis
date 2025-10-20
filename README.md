@@ -52,11 +52,28 @@ go build ./cmd/df2redis
 
 为了实现“一站式”体验，请在发布前准备好：
 
-- `assets/camellia/camellia-redis-proxy-bootstrap.jar`：从 `camellia-redis-proxy-bootstrap` 模块 `mvn package` 生成的 jar。
+- `assets/camellia/camellia-redis-proxy-bootstrap.jar`：从 `camellia-redis-proxy-bootstrap` 模块编译获得，命令示例：
+  ```bash
+  cd camellia
+  ./mvnw -pl camellia-redis-proxy/camellia-redis-proxy-bootstrap -am package \
+    && cp camellia-redis-proxy/camellia-redis-proxy-bootstrap/target/camellia-redis-proxy-bootstrap-*.jar \
+      ../assets/camellia/camellia-redis-proxy-bootstrap.jar
+  cd -
+  ```
 - `assets/runtime/jre-<平台>.tar.gz`：精简后的 JRE（例如 Adoptium/Temurin），解压后需包含 `bin/java`。文件名建议遵循 `jre-darwin-arm64.tar.gz`、`jre-linux-amd64.tar.gz` 等格式，或任何包含平台关键字（如 `linux`, `mac`, `darwin`, `arm64`, `x64`）的名字，工具会自动匹配。
+- 推荐从 [Temurin Releases](https://adoptium.net/zh-CN/temurin/releases) 获取对应平台的 JRE。下载后可按平台命名并放置到 `assets/runtime/`，例如：
+  ```bash
+  curl -L -o assets/runtime/jre-darwin-arm64.tar.gz <下载链接>
+  curl -L -o assets/runtime/jre-linux-amd64.tar.gz <下载链接>
+  ```
 - 如需自定义 Camellia 配置模板，可编辑 `assets/camellia/camellia-proxy.toml`，其中的 `{{SOURCE_URL}}`、`{{TARGET_URL}}`、`{{PORT}}` 等占位符会在运行时自动替换。
 
 发布 tarball / 镜像时只需携带这些 asset，用户运行 `df2redis` 即会自动在本地缓存目录解压并使用，无需额外安装 Java 或手动摆放 Jar。
+
+> 注意：GitHub 对单个文件有限制（普通仓库 100 MB）。这些 JRE/Jar、RDB 备份通常都会超过此阈值，建议 **不要直接纳入 Git 提交**。常见做法：
+> - 仅在发行包或内部镜像里附带大文件；
+> - 或使用 Git LFS 管理（需团队所有协作者安装 Git LFS）；
+> - 如果只是本地调试，将其放在 `assets/`、`data/backup/` 后，通过 `.gitignore` 忽略即可。
 
 ## 下一步
 - 将 Camellia 双写侧代码落地（读取 `hook.json`、执行 Lua），并在生产侧验证。
