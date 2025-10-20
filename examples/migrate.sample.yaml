@@ -1,0 +1,60 @@
+source:
+  type: dragonfly
+  addr: 10.46.128.11:7379
+  password: ""
+  tls: false
+
+target:
+  type: redis-standalone
+  # type: redis-cluster
+  seed: 10.46.128.24:6397
+  password: pwd4dba
+  tls: false
+
+stateDir: ../out
+statusFile: ../out/status.json
+
+proxy:
+  kind: camellia
+  # Camellia 监听地址（df2redis 启动后会自动拉起代理）
+  endpoint: 127.0.0.1:16380
+  walDir: ../out/wal
+  mirrorWrites: true
+  binary: auto
+  walStatusFile: ../out/wal/status.json
+  metaHookScript: auto
+  hookInfoFile: ../out/wal/hook.json
+
+migrate:
+  mode: LIVE
+  concurrency: 8
+  pipeline: 256
+  slotBatch: 1024
+  throttle:
+    maxOpsPerMaster: 30000
+    bigKeySlowpath: true
+  snapshotPath: ../data/backup/dragonfly7379-dump.rdb
+  rdbToolBinary: ../redis-rdb-cli/bin/rmt
+  resume: true
+  cutover:
+    batches:
+      - label: warmup
+        percentage: 10
+        duration: 5m
+        maxMismatch: 0
+      - label: half
+        percentage: 50
+        duration: 10m
+        maxMismatch: 0
+      - label: full
+        percentage: 100
+        duration: 15m
+        maxMismatch: 1
+
+consistency:
+  metaKeyPattern: meta:{%s}
+  fenceKey: MIGRATE_FENCE
+  baselineTsKey: MIGRATE_BASE_TS
+  enableCas: true
+  sampleRate: 0.001
+  luaDir: ../lua
