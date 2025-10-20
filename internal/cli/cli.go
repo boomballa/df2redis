@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"df2redis/internal/config"
@@ -103,6 +106,9 @@ func runMigrate(args []string) int {
 		return 0
 	}
 
+	runCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+
 	if err := cfg.EnsureStateDir(); err != nil {
 		log.Printf("创建状态目录失败: %v", err)
 		return 1
@@ -169,7 +175,7 @@ func runMigrate(args []string) int {
 		}()
 	}
 
-	ctxObj, err := pipeline.NewContext(cfg, store)
+	ctxObj, err := pipeline.NewContext(runCtx, cfg, store)
 	if err != nil {
 		log.Printf("初始化上下文失败: %v", err)
 		return 1
@@ -185,6 +191,7 @@ func runMigrate(args []string) int {
 		Add(pipeline.NewFenceStage()).
 		Add(pipeline.NewCutoverStage()).
 		Add(pipeline.NewAutoCutoverStage()).
+		Add(pipeline.NewSyncStage()).
 		Add(pipeline.NewCleanupStage())
 
 	if ok := pl.Run(ctxObj); !ok {
