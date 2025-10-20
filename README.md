@@ -1,17 +1,17 @@
-# df2redis
+# df2redis 🚀
 
-Dragonfly → Redis 迁移与回滚工具的 Go 实现原型。
+Dragonfly → Redis 迁移与回滚工具的 Go 实现原型，用一套 CLI 帮你打通准备、导入、回滚等全流程。🛠️
 
-## 当前能力
-- CLI 子命令：`prepare` / `migrate` / `status` / `rollback`。
-- Camellia 管控：`migrate` 流程中自动解压内置 Jar + 配置并启动代理，读取 WAL backlog，占位 meta hook。
-- Meta Hook：自动加载 Lua 并生成 `hook.json` 给 Camellia 使用，实现 `meta:{key}` 双写回填。
-- 全量导入：封装 `redis-rdb-cli rmt` 调用，自动拼装并发/pipeline/resume 参数。
-- 状态文件：`state/status.json` 记录阶段状态、事件、指标；`status` 命令可观测。
-- 配置解析：轻量 YAML（map-only）→ Go struct，带默认值、合法性校验。
-- Pipeline 架构：阶段化执行，后续可扩展真实 Fence/Cutover 逻辑。
+## 当前能力 ⚙️
+- 🧭 CLI 子命令：`prepare` / `migrate` / `status` / `rollback`。
+- 🛰️ Camellia 管控：`migrate` 流程中自动解压内置 Jar + 配置并启动代理，读取 WAL backlog，占位 meta hook。
+- 🧩 Meta Hook：自动加载 Lua 并生成 `hook.json` 给 Camellia 使用，实现 `meta:{key}` 双写回填。
+- 📦 全量导入：封装 `redis-rdb-cli rmt` 调用，自动拼装并发/pipeline/resume 参数。
+- 📊 状态文件：`state/status.json` 记录阶段状态、事件、指标；`status` 命令可观测。
+- 🧰 配置解析：轻量 YAML（map-only）→ Go struct，带默认值、合法性校验。
+- 🏗️ Pipeline 架构：阶段化执行，后续可扩展真实 Fence/Cutover 逻辑。
 
-## 目录速览
+## 目录速览 🗺️
 
 - `cmd/df2redis`: CLI 入口。
 - `internal/cli`: 子命令解析、状态查询、回滚标记。
@@ -26,7 +26,7 @@ Dragonfly → Redis 迁移与回滚工具的 Go 实现原型。
 - `lua/`: 样例 meta hook Lua 脚本。
 - `camellia/`, `redis-rdb-cli/`: 外部工具源码（后续集成）。
 
-## 编译与示例
+## 编译与示例 🧪
 
 要求 Go 1.21+。
 
@@ -75,17 +75,17 @@ go build ./cmd/df2redis
 > - 或使用 Git LFS 管理（需团队所有协作者安装 Git LFS）；
 > - 如果只是本地调试，将其放在 `assets/`、`data/backup/` 后，通过 `.gitignore` 忽略即可。
 
-## 下一步
+## 下一步 🛣️
 - 将 Camellia 双写侧代码落地（读取 `hook.json`、执行 Lua），并在生产侧验证。
 - 灰度切读阶段接入实际流量控制（接入服务网关/流量调度 API）。
 - 增强一致性校验：支持多类型 key、差异自动回写。
 - 演练灰度切换、回滚剧本，补齐自动化测试与文档。
 
-## 本地开发常用命令
+## 本地开发常用命令 💻
 
 
 
-## 本地开发常用命令
+## 本地开发常用命令 💻
 
 ```bash
 go build ./cmd/df2redis
