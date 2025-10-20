@@ -40,6 +40,9 @@ data/backup/
 # 运行时生成的文件
 assets/runtime/*.tar.gz
 
+# macOS 平台随附的 JRE 目录（避免提交体积巨大的运行时）
+assets/runtime/jdk-macos-jre/
+
 # Camellia 运行时生成的文件
 assets/camellia/*.jar
 
@@ -52,3 +55,6 @@ redis-rdb-cli/log/
 
 # 忽略.github目录
 camellia/.github*
+
+# Go 构建缓存目录
+.gocache/

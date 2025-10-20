@@ -7,7 +7,7 @@ source:
 target:
   type: redis-standalone
   # type: redis-cluster
-  seed: 10.46.128.24:6397
+  seed: 10.46.128.11:6380
   password: pwd4dba
   tls: false
 
