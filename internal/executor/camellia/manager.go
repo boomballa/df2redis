@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"df2redis/internal/config"
@@ -95,7 +96,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 		_ = m.process.Process.Kill()
 		<-done
 	case err := <-done:
-		if err != nil {
+		if err != nil && !isIgnorableExit(err) {
 			return err
 		}
 	}
@@ -187,4 +188,25 @@ func parseArgs(raw string) []string {
 		return nil
 	}
 	return strings.Fields(raw)
+}
+
+func isIgnorableExit(err error) bool {
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		return false
+	}
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok {
+		return false
+	}
+	if status.Exited() {
+		return status.ExitStatus() == 0
+	}
+	if status.Signaled() {
+		switch status.Signal() {
+		case syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL:
+			return true
+		}
+	}
+	return false
 }
