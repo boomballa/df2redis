@@ -27,6 +27,25 @@ go.work.sum
 # env file
 .env
 
+# generated artifacts
+# 运行时生成的文件
+out/
+
+# 数据备份目录
+data/backup/
+
+# macOS 生成的文件
+.DS_Store
+
+# 运行时生成的文件
+assets/runtime/*.tar.gz
+
+# Camellia 运行时生成的文件
+assets/camellia/*.jar
+
+# redis-rdb-cli 运行时生成的文件
+redis-rdb-cli/log/
+
 # Editor/IDE
 # .idea/
 # .vscode/

@@ -1,0 +1,22 @@
+# Auto generated template by df2redis. You can customize after copy.
+[server]
+port = {{PORT}}
+monitorEnable = false
+
+[[upstreams]]
+name = "dragonfly"
+type = "standalone"
+url = "{{SOURCE_URL}}"
+
+[[upstreams]]
+name = "redis"
+type = "standalone"
+url = "{{TARGET_URL}}"
+
+[route]
+type = "multi-write"
+multiWriteType = "broadcast"
+
+[metadata]
+hookInfoFile = "{{HOOK_INFO_FILE}}"
+walDir = "{{WAL_DIR}}"

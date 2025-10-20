@@ -1,0 +1,232 @@
+:root {
+  --bg: #060818;
+  --bg-card: rgba(13, 17, 38, 0.72);
+  --bg-card-highlight: rgba(28, 36, 73, 0.92);
+  --border: rgba(100, 118, 255, 0.25);
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --accent: #6366f1;
+  --accent-soft: rgba(99, 102, 241, 0.2);
+  --success: #22d3ee;
+  --danger: #fb7185;
+  --radius: 18px;
+  font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+body {
+  margin: 0;
+  color: var(--text);
+  background: radial-gradient(circle at 20% 20%, rgba(99,102,241,0.25), transparent 45%),
+              radial-gradient(circle at 80% 0%, rgba(56,189,248,0.22), transparent 40%),
+              radial-gradient(circle at 50% 100%, rgba(236,72,153,0.18), transparent 45%),
+              var(--bg);
+  min-height: 100vh;
+}
+
+.container {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 32px 24px 56px;
+}
+
+h1, h2, h3, h4 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+p { color: var(--muted); margin-top: 0; }
+
+.grid {
+  display: grid;
+  gap: 24px;
+}
+
+.grid-2 {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.grid-3 {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.hero {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 6px);
+  padding: 32px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.35);
+}
+
+.hero::after {
+  content: "";
+  position: absolute;
+  inset: -40% 20% auto auto;
+  width: 280px;
+  height: 280px;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.8), transparent 70%);
+  opacity: .6;
+  filter: blur(60px);
+}
+
+.hero h1 {
+  margin: 0 0 8px;
+  font-size: 32px;
+}
+
+.hero .meta {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.meta-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.card {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  padding: 24px;
+  backdrop-filter: blur(18px);
+  box-shadow: 0 12px 32px rgba(10, 13, 31, 0.35);
+}
+
+.card.highlight {
+  background: var(--bg-card-highlight);
+  border-color: rgba(148, 163, 255, 0.35);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.card-title {
+  margin: 0 0 16px;
+  font-size: 18px;
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 16px;
+}
+
+.metric-item {
+  background: rgba(255,255,255,0.02);
+  padding: 16px;
+  border-radius: calc(var(--radius) - 6px);
+  border: 1px solid rgba(99, 102, 241, 0.24);
+}
+
+.metric-item .label {
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.metric-item .value {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+}
+
+.table thead th {
+  text-align: left;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(148, 163, 255, 0.12);
+}
+
+.table tbody td {
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(148, 163, 255, 0.08);
+  vertical-align: middle;
+}
+
+.stage-row:last-child td {
+  border-bottom: none;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(99,102,241,0.18);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.events {
+  display: grid;
+  gap: 14px;
+}
+
+.event-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 16px;
+  border-radius: calc(var(--radius) - 8px);
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(148, 163, 255, 0.12);
+}
+
+.event-item time {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.state-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(34, 211, 238, 0.18);
+  color: var(--success);
+  font-weight: 600;
+}
+
+.state-badge.failed {
+  background: rgba(251, 113, 133, 0.18);
+  color: var(--danger);
+}
+
+pre {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  border-radius: calc(var(--radius) - 6px);
+}

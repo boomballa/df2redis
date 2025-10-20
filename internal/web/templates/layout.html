@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>df2redis Dashboard</title>
+    <link rel="stylesheet" href="/static/bootstrap.min.css">
+    <style>
+        body { padding: 1.5rem; background: #f7f9fc; }
+        pre { background: #1e1e2f; color: #d6deeb; padding: 1rem; border-radius: .75rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        {{ template "content" . }}
+    </div>
+    <script src="/static/chart.umd.js"></script>
+    <script src="/static/dashboard.js"></script>
+    {{ template "scripts" . }}
+</body>
+</html>

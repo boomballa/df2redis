@@ -1,0 +1,103 @@
+{{ define "content" }}
+<div class="hero">
+    <div>
+        <h1>df2redis 实时仪表盘</h1>
+        <p class="muted">轻松洞察迁移进程、双写状态与切换准备度</p>
+    </div>
+    <div class="meta" style="margin-top:18px;">
+        <div class="meta-item">🗄️ 源：<strong>{{ .Source.Type }} @ {{ .Source.Addr }}</strong></div>
+        <div class="meta-item">🎯 目标：<strong>{{ .Target.Type }} @ {{ .Target.Seed }}</strong></div>
+        <div class="meta-item">🔀 代理：<strong>{{ .Proxy.Endpoint }}</strong></div>
+    </div>
+    <div class="meta" style="margin-top:12px;">
+        <div class="meta-item">🗂️ 状态目录：<strong>{{ .StateDir }}</strong></div>
+        <div class="meta-item">📝 状态文件：<strong>{{ .StatusFile }}</strong></div>
+        <div class="meta-item">⏱️ 页面生成：<strong>{{ .GeneratedAt }}</strong></div>
+    </div>
+</div>
+
+<div class="grid grid-3" style="margin-top:24px;">
+    <div class="card highlight">
+        <div class="card-title">Pipeline</div>
+        <div class="state-badge" id="pipeline-status">{{ with .Snapshot }}{{ .PipelineStatus }}{{ else }}待启动{{ end }}</div>
+        <p class="muted" style="margin-top:12px;">最近刷新：<span id="pipeline-updated">{{ with .Snapshot }}{{ .UpdatedAt }}{{ else }}--{{ end }}</span></p>
+    </div>
+    <div class="card">
+        <div class="card-title">源端</div>
+        <p class="muted">类型：<strong>{{ .Source.Type }}</strong></p>
+        <p class="muted">地址：<strong>{{ .Source.Addr }}</strong></p>
+        <p class="muted">TLS：{{ if .Source.TLS }}启用{{ else }}关闭{{ end }}</p>
+    </div>
+    <div class="card">
+        <div class="card-title">目标集群</div>
+        <p class="muted">类型：<strong>{{ .Target.Type }}</strong></p>
+        <p class="muted">Seed：<strong>{{ .Target.Seed }}</strong></p>
+        <p class="muted">TLS：{{ if .Target.TLS }}启用{{ else }}关闭{{ end }}</p>
+    </div>
+</div>
+
+<div class="grid grid-2" style="margin-top:24px;">
+    <section class="card highlight">
+        <div class="card-title">指标概览</div>
+        <canvas id="metricsChart" height="160"></canvas>
+        <div class="metrics-grid" id="metrics-list" style="margin-top:18px;">
+            {{ with .Snapshot }}
+            {{ range $k, $v := .Metrics }}
+            <div class="metric-item">
+                <div class="label">{{ $k }}</div>
+                <div class="value">{{ printf "%.4f" $v }}</div>
+            </div>
+            {{ end }}
+            {{ else }}
+            <p class="muted">暂无指标。</p>
+            {{ end }}
+        </div>
+    </section>
+
+    <section class="card">
+        <div class="card-title">阶段进度</div>
+        <table class="table" id="stages-table">
+            <thead><tr><th>阶段</th><th>状态</th><th>时间</th><th>说明</th></tr></thead>
+            <tbody>
+            {{ with .Snapshot }}
+            {{ range $name, $st := .Stages }}
+            <tr class="stage-row">
+                <td>{{ $name }}</td>
+                <td><span class="badge">{{ $st.Status }}</span></td>
+                <td>{{ $st.UpdatedAt }}</td>
+                <td>{{ $st.Message }}</td>
+            </tr>
+            {{ end }}
+            {{ else }}
+            <tr><td colspan="4" class="muted">尚无阶段信息</td></tr>
+            {{ end }}
+            </tbody>
+        </table>
+    </section>
+</div>
+
+<section class="card" style="margin-top:24px;">
+    <div class="card-title">事件追踪</div>
+    <div class="events" id="events-list">
+        {{ with .Snapshot }}
+        {{ if .Events }}
+            {{ range .Events }}
+            <div class="event-item">
+                <div>
+                    <div class="badge" style="background:rgba(99,102,241,0.16);color:var(--accent);">{{ .Type }}</div>
+                    <div style="margin-top:6px;">{{ .Message }}</div>
+                </div>
+                <time>{{ .Timestamp }}</time>
+            </div>
+            {{ end }}
+        {{ else }}
+            <p class="muted">暂无事件记录。</p>
+        {{ end }}
+        {{ else }}
+        <p class="muted">暂无事件记录。</p>
+        {{ end }}
+    </div>
+</section>
+{{ end }}
+
+{{ define "scripts" }}{{ end }}
