@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -75,7 +76,11 @@ func NewStartProxyStage() Stage {
 	return StageFunc{
 		name: "start-proxy",
 		run: func(ctx *Context) Result {
-			startCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			base := context.Background()
+			if ctx.RunCtx != nil {
+				base = ctx.RunCtx
+			}
+			startCtx, cancel := context.WithTimeout(base, 10*time.Second)
 			defer cancel()
 			if err := ctx.Camellia.Start(startCtx); err != nil {
 				return Result{Status: StatusFailed, Message: err.Error()}
@@ -120,7 +125,11 @@ func NewImportStage() Stage {
 	return StageFunc{
 		name: "import",
 		run: func(ctx *Context) Result {
-			runCtx, cancel := context.WithCancel(context.Background())
+			base := context.Background()
+			if ctx.RunCtx != nil {
+				base = ctx.RunCtx
+			}
+			runCtx, cancel := context.WithCancel(base)
 			defer cancel()
 			start := time.Now()
 			if err := ctx.Importer.Run(runCtx); err != nil {
@@ -297,6 +306,118 @@ func NewCleanupStage() Stage {
 			return Result{Status: StatusSuccess, Message: "Camellia 已停止"}
 		},
 	}
+}
+
+// NewSyncStage monitors Camellia WAL backlog and consistency sampling.
+func NewSyncStage() Stage {
+	return StageFunc{
+		name: "sync",
+		run: func(ctx *Context) Result {
+			base := context.Background()
+			if ctx.RunCtx != nil {
+				base = ctx.RunCtx
+			}
+			if ctx.State != nil {
+				_ = ctx.State.SetPipelineStatus("syncing", "实时同步进行中，按 Ctrl+C 触发清理")
+			}
+
+			walTicker := time.NewTicker(3 * time.Second)
+			defer walTicker.Stop()
+			sampleTicker := time.NewTicker(30 * time.Second)
+			defer sampleTicker.Stop()
+
+			lastPending := int64(-1)
+			consecutiveZero := 0
+			readyAnnounced := false
+
+			for {
+				select {
+				case <-base.Done():
+					return Result{Status: StatusSuccess, Message: "同步阶段结束，准备清理"}
+				case <-walTicker.C:
+					pending, err := ctx.Camellia.WALPending()
+					if err != nil {
+						log.Printf("读取 Camellia WAL 失败: %v", err)
+						if ctx.State != nil {
+							_ = ctx.State.UpdateStage("sync", string(StatusRunning), fmt.Sprintf("读取 WAL 失败: %v", err))
+						}
+						continue
+					}
+					if ctx.State != nil {
+						_ = ctx.State.RecordMetric("camellia.wal.pending", float64(pending))
+						_ = ctx.State.UpdateStage("sync", string(StatusRunning), fmt.Sprintf("WAL backlog=%d", pending))
+					}
+					if pending != lastPending {
+						log.Printf("Camellia WAL backlog=%d", pending)
+						lastPending = pending
+					}
+					if pending == 0 {
+						if consecutiveZero < 3 {
+							consecutiveZero++
+						}
+						if consecutiveZero >= 3 && !readyAnnounced {
+							msg := "WAL 已连续 3 次为 0，可执行灰度切换，完成后 Ctrl+C 触发清理"
+							log.Println(msg)
+							if ctx.State != nil {
+								_ = ctx.State.SetPipelineStatus("sync-ready", msg)
+							}
+							readyAnnounced = true
+						}
+					} else {
+						consecutiveZero = 0
+						readyAnnounced = false
+					}
+				case <-sampleTicker.C:
+					samples, mismatches, mismatchKeys, err := sampleConsistency(ctx)
+					if err != nil {
+						log.Printf("同步阶段采样校验失败: %v", err)
+						if ctx.State != nil {
+							_ = ctx.State.RecordMetric("sync.sample.error", 1)
+						}
+						continue
+					}
+					if ctx.State != nil {
+						_ = ctx.State.RecordMetric("sync.sample.error", 0)
+						_ = ctx.State.RecordMetric("sync.sample.keys", float64(samples))
+						_ = ctx.State.RecordMetric("sync.mismatch.count", float64(mismatches))
+					}
+					if mismatches > 0 {
+						msg := fmt.Sprintf("同步阶段检测到 %d 个不一致样本，如:%v", mismatches, mismatchKeys)
+						log.Println(msg)
+						if ctx.State != nil {
+							_ = ctx.State.SetPipelineStatus("sync-mismatch", msg)
+						}
+					}
+				}
+			}
+		},
+	}
+}
+
+func sampleConsistency(ctx *Context) (int, int, []string, error) {
+	reply, err := ctx.TargetRedis.Do("SCAN", 0, "COUNT", 50)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	var sampleKeys []string
+	if arr, ok := reply.([]interface{}); ok && len(arr) == 2 {
+		if keys, err := redisx.ToStringSlice(arr[1]); err == nil {
+			sampleKeys = keys
+		}
+	}
+	if len(sampleKeys) == 0 {
+		return 0, 0, nil, nil
+	}
+	result, err := consistency.CompareStringValues(ctx.SourceRedis, ctx.TargetRedis, sampleKeys)
+	if err != nil {
+		return len(sampleKeys), 0, nil, err
+	}
+	mismatches := len(result)
+	mismatchKeys := []string{}
+	for i := 0; i < len(result) && i < 5; i++ {
+		mismatchKeys = append(mismatchKeys, result[i].Key)
+	}
+	return len(sampleKeys), mismatches, mismatchKeys, nil
 }
 
 // StageFunc helper to implement Stage interface inline.

@@ -37,6 +37,7 @@ type Stage interface {
 
 // Context carries shared information across stages.
 type Context struct {
+	RunCtx      context.Context
 	Config      *config.Config
 	StateDir    string
 	StageData   map[string]any
@@ -48,7 +49,7 @@ type Context struct {
 }
 
 // NewContext builds a new context from configuration.
-func NewContext(cfg *config.Config, store *state.Store) (*Context, error) {
+func NewContext(runCtx context.Context, cfg *config.Config, store *state.Store) (*Context, error) {
 	proxyCfg := cfg.ResolvedProxyConfig()
 	migrateCfg := cfg.ResolvedMigrateConfig()
 	cfg.Proxy = proxyCfg
@@ -62,7 +63,11 @@ func NewContext(cfg *config.Config, store *state.Store) (*Context, error) {
 	if err != nil {
 		return nil, err
 	}
-	dialCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	baseCtx := context.Background()
+	if runCtx != nil {
+		baseCtx = runCtx
+	}
+	dialCtx, cancel := context.WithTimeout(baseCtx, 5*time.Second)
 	defer cancel()
 	sourceClient, err := redisx.Dial(dialCtx, redisx.Config{
 		Addr:     cfg.Source.Addr,
@@ -74,7 +79,7 @@ func NewContext(cfg *config.Config, store *state.Store) (*Context, error) {
 		return nil, fmt.Errorf("连接源库失败: %w", err)
 	}
 
-	dialCtx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	dialCtx2, cancel2 := context.WithTimeout(baseCtx, 5*time.Second)
 	defer cancel2()
 	targetClient, err := redisx.Dial(dialCtx2, redisx.Config{
 		Addr:     cfg.Target.Seed,
@@ -88,6 +93,7 @@ func NewContext(cfg *config.Config, store *state.Store) (*Context, error) {
 	}
 
 	return &Context{
+		RunCtx:      runCtx,
 		Config:      cfg,
 		StateDir:    cfg.ResolveStateDir(),
 		StageData:   make(map[string]any),
@@ -121,7 +127,7 @@ type Pipeline struct {
 
 // New creates an empty pipeline.
 func New() *Pipeline {
-	return &Pipeline{stages: make([]Stage, 0, 8)}
+	return &Pipeline{stages: make([]Stage, 0, 10)}
 }
 
 // Add appends stage into pipeline.

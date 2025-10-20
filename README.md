@@ -8,6 +8,7 @@ Dragonfly → Redis 迁移与回滚工具的 Go 实现原型，用一套 CLI 帮
 - 🧩 Meta Hook：自动加载 Lua 并生成 `hook.json` 给 Camellia 使用，实现 `meta:{key}` 双写回填。
 - 📦 全量导入：封装 `redis-rdb-cli rmt` 调用，自动拼装并发/pipeline/resume 参数。
 - 📊 状态文件：`state/status.json` 记录阶段状态、事件、指标；`status` 命令可观测。
+- 🔁 实时同步监控：`sync` 阶段持续读取 Camellia WAL backlog 与样本校验，按 `Ctrl+C` 触发清理。
 - 🧰 配置解析：轻量 YAML（map-only）→ Go struct，带默认值、合法性校验。
 - 🏗️ Pipeline 架构：阶段化执行，后续可扩展真实 Fence/Cutover 逻辑。
 
@@ -61,6 +62,11 @@ GOOS=linux GOARCH=arm64 go build -o bin/df2redis-arm64 ./cmd/df2redis
 ```
 
 > 若使用 ARM64 版本，请将命令中的 `./bin/df2redis` 替换为 `./bin/df2redis-arm64`。
+
+运行 `migrate` 后，流程会进入长期运行的 `sync` 阶段：
+- 命令保持前台运行，持续监控 Camellia WAL backlog、采样比对并写入 `out/status.json`；
+- 当 backlog 连续多次为 0 时会提示可以执行流量切换；
+- 完成切换后在同一终端按 `Ctrl+C`，管道会自动进入 `cleanup` 阶段并优雅停止 Camellia。
 
 > 提示：默认配置下 `proxy.binary: auto`，第一次执行 `migrate` 时会自动在 `~/.df2redis/runtime/<version>/` 解压 Camellia Jar / 配置 / Lua，并优先使用 `assets/runtime/jre-<平台>.tar.gz` 内置 JRE（可按平台准备，如 `jre-darwin-arm64.tar.gz`、`jre-linux-amd64.tar.gz`）。若未提供内置 JRE，则会回退到系统 `java` 或 `JAVA_HOME`。Camellia Jar 会优先从 `assets/camellia/camellia-redis-proxy-bootstrap.jar` 复制，找不到则退回 `camellia/.../target/` 或提示补充文件。
 
