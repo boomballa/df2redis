@@ -28,7 +28,10 @@ Dragonfly → Redis 迁移与回滚工具的 Go 实现原型，用一套 CLI 帮
 
 ## 编译与示例 🧪
 
-要求 Go 1.21+。
+要求：
+- Go 1.21+
+- JDK 21（用于 Camellia 及 redis-rdb-cli 源码构建；JDK 18 及以下会因 `--release 21` 编译参数而失败）
+- [JDK 21 安装指南](docs/jdk-setup.md)
 
 ```bash
 # Linux x86_64 版本（默认产物）
@@ -47,8 +50,11 @@ GOOS=linux GOARCH=arm64 go build -o bin/df2redis-arm64 ./cmd/df2redis
 # 正式执行（需准备 camellia、redis-rdb-cli、RDB 等）
 ./bin/df2redis migrate --config examples/migrate.sample.yaml
 
-# 带内置仪表盘运行
+# 带内置仪表盘运行（默认监听 0.0.0.0:8080）
 ./bin/df2redis migrate --config examples/migrate.sample.yaml --show 8080
+
+# 指定监听地址（例如仅绑定内网 IP）
+./bin/df2redis migrate --config examples/migrate.sample.yaml --show-addr 0.0.0.0:8080
 
 # 查看状态文件
 ./bin/df2redis status --config examples/migrate.sample.yaml

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,20 +16,24 @@ import (
 
 // Importer wraps redis-rdb-cli invocation.
 type Importer struct {
-	cfg config.MigrateConfig
+	cfg    config.MigrateConfig
+	target config.TargetConfig
 }
 
 // NewImporter builds an importer instance.
-func NewImporter(cfg config.MigrateConfig) (*Importer, error) {
+func NewImporter(cfg config.MigrateConfig, target config.TargetConfig) (*Importer, error) {
 	if cfg.RdbToolBinary == "" {
 		return nil, errors.New("rdbToolBinary 未配置")
 	}
-	return &Importer{cfg: cfg}, nil
+	return &Importer{cfg: cfg, target: target}, nil
 }
 
 // Run executes redis-rdb-cli with computed arguments.
-func (i *Importer) Run(ctx context.Context, targetSeed string) error {
-	args := i.buildArgs(targetSeed)
+func (i *Importer) Run(ctx context.Context) error {
+	args, err := i.buildArgs()
+	if err != nil {
+		return err
+	}
 	cmd := exec.CommandContext(ctx, i.cfg.RdbToolBinary, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -45,10 +50,14 @@ func (i *Importer) Run(ctx context.Context, targetSeed string) error {
 	return nil
 }
 
-func (i *Importer) buildArgs(targetSeed string) []string {
+func (i *Importer) buildArgs() ([]string, error) {
+	targetURL, err := i.buildTargetURL()
+	if err != nil {
+		return nil, err
+	}
 	args := []string{
 		"-s", i.cfg.SnapshotPath,
-		"-m", fmt.Sprintf("redis://%s", targetSeed),
+		"-m", targetURL,
 		"-r",
 	}
 	if strings.TrimSpace(i.cfg.RdbToolArgs) != "" {
@@ -57,5 +66,37 @@ func (i *Importer) buildArgs(targetSeed string) []string {
 	if !i.cfg.Resume {
 		args = append(args, "--no-resume")
 	}
-	return args
+	return args, nil
+}
+
+func (i *Importer) buildTargetURL() (string, error) {
+	seed := strings.TrimSpace(i.target.Seed)
+	if seed == "" {
+		return "", errors.New("目标 seed 为空")
+	}
+
+	// If user already provides full URL, respect it (and inject password if missing).
+	if strings.Contains(seed, "://") {
+		u, err := url.Parse(seed)
+		if err != nil {
+			return "", fmt.Errorf("解析目标 seed 失败: %w", err)
+		}
+		if i.target.Password != "" && u.User == nil {
+			u.User = url.UserPassword("", i.target.Password)
+		}
+		return u.String(), nil
+	}
+
+	scheme := "redis"
+	if i.target.TLS {
+		scheme = "rediss"
+	}
+	u := &url.URL{
+		Scheme: scheme,
+		Host:   seed,
+	}
+	if i.target.Password != "" {
+		u.User = url.UserPassword("", i.target.Password)
+	}
+	return u.String(), nil
 }

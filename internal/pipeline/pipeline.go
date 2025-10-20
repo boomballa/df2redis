@@ -58,7 +58,7 @@ func NewContext(cfg *config.Config, store *state.Store) (*Context, error) {
 	if err != nil {
 		return nil, err
 	}
-	importer, err := rdbcli.NewImporter(migrateCfg)
+	importer, err := rdbcli.NewImporter(migrateCfg, cfg.Target)
 	if err != nil {
 		return nil, err
 	}

@@ -123,7 +123,7 @@ func NewImportStage() Stage {
 			runCtx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			start := time.Now()
-			if err := ctx.Importer.Run(runCtx, ctx.Config.Target.Seed); err != nil {
+			if err := ctx.Importer.Run(runCtx); err != nil {
 				return Result{Status: StatusFailed, Message: err.Error()}
 			}
 			duration := time.Since(start)
