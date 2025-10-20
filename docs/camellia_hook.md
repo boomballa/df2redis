@@ -8,6 +8,7 @@
   "script_path": "./lua/meta_cas.lua",
   "meta_pattern": "meta:{%s}",
   "baseline_key": "MIGRATE_BASE_TS",
+  "wal_status_file": "state/wal/status.json",
   "updated_at": 1710000000
 }
 ```
@@ -19,6 +20,8 @@ Camellia 侧需要在双写路径读取该文件，并按以下逻辑执行：
 2. **执行写入**：
    - 在将命令写到 Redis 备端之前，通过 `EVALSHA script_sha 2 <data-key> <meta-key> <timestamp>` 更新 `meta:{key}`，其中 `meta-key` 可使用 `meta_pattern` 格式化得到。
    - 仅在 Lua 返回 1 时继续写入旧值（CAS 逻辑保证不覆盖新写）。
+3. **上报 WAL backlog**：
+   - 将同步积压情况写入 `wal_status_file`（默认 `state/wal/status.json`），供 df2redis 的 `sync` 阶段读取。
 3. **保持最新**：
    - 监听 `hook.json` 的更新时间（例如使用文件监听或定时刷新），确保脚本/配置变更后及时生效。
 
@@ -41,4 +44,4 @@ if (Objects.equals(result, Long.valueOf(1))) {
 
 完成集成后，即可实现框架内的 “双写 + CAS meta 更新” 闭环。
 
-> df2redis 的 `sync` 阶段会持续轮询 `wal/status.json`，当 backlog 清零并通过定期采样校验后会在 `status.json` 中写入 `sync-ready` 提示。请按提示完成人工流量切换，然后在 df2redis 终端按 `Ctrl+C`，流程会进入清理阶段并停止 Camellia。
+> df2redis 的 `sync` 阶段会持续轮询 `wal_status_file`，当 backlog 清零并通过定期采样校验后会在 `status.json` 中写入 `sync-ready` 提示。请按提示完成人工流量切换，然后在 df2redis 终端按 `Ctrl+C`，流程会进入清理阶段并停止 Camellia。

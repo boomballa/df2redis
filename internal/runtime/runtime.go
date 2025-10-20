@@ -307,12 +307,19 @@ func extractTarGz(archive, dest string) error {
 }
 
 func generateCamelliaConfig(cfg *cfgpkg.Config, dest string) error {
+	if dir := cfg.ResolvePath(cfg.Proxy.WALDir); dir != "" {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+	if status := cfg.ResolvePath(cfg.Proxy.WALStatusFile); status != "" {
+		_ = os.MkdirAll(filepath.Dir(status), 0o755)
+	}
 	data := map[string]string{
-		"PORT":           fmt.Sprintf("%d", parsePort(cfg.Proxy.Endpoint)),
-		"SOURCE_URL":     buildRedisURL(cfg.Source.Addr, cfg.Source.Password, cfg.Source.TLS),
-		"TARGET_URL":     buildRedisURL(cfg.Target.Seed, cfg.Target.Password, cfg.Target.TLS),
-		"HOOK_INFO_FILE": cfg.ResolvePath(cfg.Proxy.HookInfoFile),
-		"WAL_DIR":        cfg.ResolvePath(cfg.Proxy.WALDir),
+		"PORT":            fmt.Sprintf("%d", parsePort(cfg.Proxy.Endpoint)),
+		"SOURCE_URL":      buildRedisURL(cfg.Source.Addr, cfg.Source.Password, cfg.Source.TLS),
+		"TARGET_URL":      buildRedisURL(cfg.Target.Seed, cfg.Target.Password, cfg.Target.TLS),
+		"HOOK_INFO_FILE":  cfg.ResolvePath(cfg.Proxy.HookInfoFile),
+		"WAL_DIR":         cfg.ResolvePath(cfg.Proxy.WALDir),
+		"WAL_STATUS_FILE": cfg.ResolvePath(cfg.Proxy.WALStatusFile),
 	}
 
 	templateCandidates := []string{
@@ -365,6 +372,7 @@ url = "{{TARGET_URL}}"
 [metadata]
 hookInfoFile = "{{HOOK_INFO_FILE}}"
 walDir = "{{WAL_DIR}}"
+walStatusFile = "{{WAL_STATUS_FILE}}"
 `
 
 func parsePort(endpoint string) int {
