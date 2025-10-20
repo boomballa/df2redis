@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,10 +71,12 @@ func runMigrate(args []string) int {
 	var configPath string
 	var dryRun bool
 	var showPort int
+	var showAddr string
 	fs.StringVar(&configPath, "config", "", "配置文件路径 (YAML)")
 	fs.StringVar(&configPath, "c", "", "配置文件路径 (YAML)")
 	fs.BoolVar(&dryRun, "dry-run", false, "仅校验配置，不执行真实迁移")
 	fs.IntVar(&showPort, "show", 0, "启动内置仪表盘并监听指定端口 (例如 --show 8080)")
+	fs.StringVar(&showAddr, "show-addr", "", "启动内置仪表盘并监听指定地址 (例如 --show-addr 0.0.0.0:8080)")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -129,11 +132,29 @@ func runMigrate(args []string) int {
 
 	store := state.NewStore(cfg.StatusFilePath())
 
-	if showPort > 0 && !dryRun {
-		addr := fmt.Sprintf(":%d", showPort)
+	var dashboardAddr string
+	if showAddr != "" {
+		if !strings.Contains(showAddr, ":") {
+			if showPort > 0 {
+				showAddr = fmt.Sprintf("%s:%d", showAddr, showPort)
+			} else {
+				log.Printf("show-addr 必须包含端口，例如 0.0.0.0:8080")
+				return 2
+			}
+		}
+		if _, _, err := net.SplitHostPort(showAddr); err != nil {
+			log.Printf("show-addr 格式不合法: %v", err)
+			return 2
+		}
+		dashboardAddr = showAddr
+	} else if showPort > 0 {
+		dashboardAddr = fmt.Sprintf(":%d", showPort)
+	}
+
+	if dashboardAddr != "" && !dryRun {
 		go func() {
 			server, err := web.New(web.Options{
-				Addr:  addr,
+				Addr:  dashboardAddr,
 				Cfg:   cfg,
 				Store: store,
 			})
@@ -141,7 +162,7 @@ func runMigrate(args []string) int {
 				log.Printf("⚠️ 仪表盘初始化失败: %v", err)
 				return
 			}
-			log.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📺 自动仪表盘已启动\n   🌐 地址 : http://127.0.0.1%s\n   ⌨️ 提示 : 按 Ctrl+C 结束仪表盘服务\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", addr)
+			log.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📺 自动仪表盘已启动\n   🔊 监听 : %s\n   🌐 访问 : %s\n   ⌨️ 提示 : 按 Ctrl+C 结束仪表盘服务\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", dashboardAddr, formatDashboardURL(dashboardAddr))
 			if err := server.Start(); err != nil {
 				log.Printf("dashboard 停止: %v", err)
 			}
@@ -263,12 +284,36 @@ func runDashboard(args []string) int {
 		return 1
 	}
 
-	log.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📺 仪表盘已就绪\n   🌐 地址 : http://%s\n   ⌨️ 提示 : 按 Ctrl+C 结束仪表盘服务\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", addr)
+	log.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📺 仪表盘已就绪\n   🔊 监听 : %s\n   🌐 访问 : %s\n   ⌨️ 提示 : 按 Ctrl+C 结束仪表盘服务\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", addr, formatDashboardURL(addr))
 	if err := server.Start(); err != nil {
 		log.Printf("dashboard 停止: %v", err)
 		return 1
 	}
 	return 0
+}
+
+func formatDashboardURL(addr string) string {
+	if addr == "" {
+		return ""
+	}
+	clean := addr
+	if strings.HasPrefix(clean, "http://") || strings.HasPrefix(clean, "https://") {
+		return clean
+	}
+	if strings.HasPrefix(clean, ":") {
+		port := strings.TrimPrefix(clean, ":")
+		return fmt.Sprintf("http://127.0.0.1:%s (或 http://<服务器IP>:%s)", port, port)
+	}
+	host, port, err := net.SplitHostPort(clean)
+	if err != nil {
+		return "http://" + clean
+	}
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		return fmt.Sprintf("http://<服务器IP>:%s (监听 %s:%s)", port, host, port)
+	default:
+		return fmt.Sprintf("http://%s:%s", host, port)
+	}
 }
 
 func loadConfigFromArgs(cmd string, args []string) (*config.Config, error) {
