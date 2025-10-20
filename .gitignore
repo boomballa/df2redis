@@ -58,3 +58,6 @@ camellia/.github*
 
 # Go 构建缓存目录
 .gocache/
+
+# 旧版根目录二进制（现统一输出到 bin/）
+/df2redis

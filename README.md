@@ -31,20 +31,30 @@ Dragonfly → Redis 迁移与回滚工具的 Go 实现原型，用一套 CLI 帮
 要求 Go 1.21+。
 
 ```bash
-go build ./cmd/df2redis
+# Linux x86_64 版本（默认产物）
+GOOS=linux GOARCH=amd64 go build -o bin/df2redis ./cmd/df2redis
 
+# Linux ARM64 版本（可选，如需在 ARM 服务器部署）
+GOOS=linux GOARCH=arm64 go build -o bin/df2redis-arm64 ./cmd/df2redis
+```
+
+将生成的二进制复制到目标 Linux 主机的 `bin/` 目录后即可运行：
+
+```bash
 # dry-run 仅校验配置
-./df2redis migrate --config examples/migrate.sample.yaml --dry-run
+./bin/df2redis migrate --config examples/migrate.sample.yaml --dry-run
 
 # 正式执行（需准备 camellia、redis-rdb-cli、RDB 等）
-./df2redis migrate --config examples/migrate.sample.yaml
+./bin/df2redis migrate --config examples/migrate.sample.yaml
 
 # 带内置仪表盘运行
-./df2redis migrate --config examples/migrate.sample.yaml --show 8080
+./bin/df2redis migrate --config examples/migrate.sample.yaml --show 8080
 
 # 查看状态文件
-./df2redis status --config examples/migrate.sample.yaml
+./bin/df2redis status --config examples/migrate.sample.yaml
 ```
+
+> 若使用 ARM64 版本，请将命令中的 `./bin/df2redis` 替换为 `./bin/df2redis-arm64`。
 
 > 提示：默认配置下 `proxy.binary: auto`，第一次执行 `migrate` 时会自动在 `~/.df2redis/runtime/<version>/` 解压 Camellia Jar / 配置 / Lua，并优先使用 `assets/runtime/jre-<平台>.tar.gz` 内置 JRE（可按平台准备，如 `jre-darwin-arm64.tar.gz`、`jre-linux-amd64.tar.gz`）。若未提供内置 JRE，则会回退到系统 `java` 或 `JAVA_HOME`。Camellia Jar 会优先从 `assets/camellia/camellia-redis-proxy-bootstrap.jar` 复制，找不到则退回 `camellia/.../target/` 或提示补充文件。
 
@@ -83,11 +93,11 @@ go build ./cmd/df2redis
 
 ## 本地开发常用命令 💻
 
-
-
-## 本地开发常用命令 💻
-
 ```bash
-go build ./cmd/df2redis
-./df2redis migrate --config examples/migrate.sample.yaml --show 8080
+# 交叉编译至 Linux（x86_64）
+GOOS=linux GOARCH=amd64 go build -o bin/df2redis ./cmd/df2redis
+
+# 在 Mac 上快速调试（任选其一）
+go run ./cmd/df2redis --help
+go test ./...
 ```
