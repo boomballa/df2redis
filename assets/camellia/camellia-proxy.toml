@@ -1,7 +1,8 @@
 # Auto generated template by df2redis. You can customize after copy.
 [server]
 port = {{PORT}}
-monitorEnable = false
+consolePort = {{CONSOLE_PORT}}
+monitorEnable = true
 
 [[upstreams]]
 name = "dragonfly"

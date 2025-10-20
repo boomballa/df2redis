@@ -44,4 +44,4 @@ if (Objects.equals(result, Long.valueOf(1))) {
 
 完成集成后，即可实现框架内的 “双写 + CAS meta 更新” 闭环。
 
-> df2redis 的 `sync` 阶段会持续轮询 `wal_status_file`，当 backlog 清零并通过定期采样校验后会在 `status.json` 中写入 `sync-ready` 提示。请按提示完成人工流量切换，然后在 df2redis 终端按 `Ctrl+C`，流程会进入清理阶段并停止 Camellia。
+> df2redis 的 `sync` 阶段会通过 Camellia 的 console（默认 `http://127.0.0.1:16379/metrics`）持续轮询 `wal_status_file` 指定的位置，当 backlog 清零并通过定期采样校验后会在 `status.json` 中写入 `sync-ready` 提示。请按提示完成人工流量切换，然后在 df2redis 终端按 `Ctrl+C`，流程会进入清理阶段并停止 Camellia。

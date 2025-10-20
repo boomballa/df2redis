@@ -320,6 +320,7 @@ func generateCamelliaConfig(cfg *cfgpkg.Config, dest string) error {
 		"HOOK_INFO_FILE":  cfg.ResolvePath(cfg.Proxy.HookInfoFile),
 		"WAL_DIR":         cfg.ResolvePath(cfg.Proxy.WALDir),
 		"WAL_STATUS_FILE": cfg.ResolvePath(cfg.Proxy.WALStatusFile),
+		"CONSOLE_PORT":    fmt.Sprintf("%d", cfg.Proxy.ConsolePort),
 	}
 
 	templateCandidates := []string{
@@ -357,7 +358,8 @@ func generateCamelliaConfig(cfg *cfgpkg.Config, dest string) error {
 const defaultCamelliaTemplate = `# Auto generated Camellia config
 [server]
 port = {{PORT}}
-monitorEnable = false
+consolePort = {{CONSOLE_PORT}}
+monitorEnable = true
 
 [[upstreams]]
 name = "dragonfly"
