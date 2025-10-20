@@ -97,6 +97,8 @@ GOOS=linux GOARCH=arm64 go build -o bin/df2redis-arm64 ./cmd/df2redis
 > - 或使用 Git LFS 管理（需团队所有协作者安装 Git LFS）；
 > - 如果只是本地调试，将其放在 `assets/`、`data/backup/` 后，通过 `.gitignore` 忽略即可。
 
+Camellia 会在 `metadata` 段使用 `walStatusFile` 持续输出 backlog 指标，`sync` 阶段正是读取该文件判断是否可以切换流量。若自定义模板，请确保字段与 `proxy.walStatusFile` 指向一致且可写。
+
 ## 下一步 🛣️
 - 将 Camellia 双写侧代码落地（读取 `hook.json`、执行 Lua），并在生产侧验证。
 - 灰度切读阶段接入实际流量控制（接入服务网关/流量调度 API）。

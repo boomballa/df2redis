@@ -20,3 +20,4 @@ multiWriteType = "broadcast"
 [metadata]
 hookInfoFile = "{{HOOK_INFO_FILE}}"
 walDir = "{{WAL_DIR}}"
+walStatusFile = "{{WAL_STATUS_FILE}}"
