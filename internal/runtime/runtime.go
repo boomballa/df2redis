@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	runtimeVersion         = "0.1.0"
+	runtimeVersion         = "0.1.1"
 	camelliaJarName        = "camellia-redis-proxy-bootstrap.jar"
 	camelliaConfigFileName = "camellia-proxy.toml"
 	camelliaLuaFileName    = "meta_cas.lua"
