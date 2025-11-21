@@ -2,12 +2,12 @@
 <div class="hero">
     <div>
         <h1>df2redis 实时仪表盘</h1>
-        <p class="muted">轻松洞察迁移进程、双写状态与切换准备度</p>
+        <p class="muted">观察 Dragonfly → Redis 迁移与导入进度</p>
     </div>
     <div class="meta" style="margin-top:18px;">
         <div class="meta-item">🗄️ 源：<strong>{{ .Source.Type }} @ {{ .Source.Addr }}</strong></div>
         <div class="meta-item">🎯 目标：<strong>{{ .Target.Type }} @ {{ .Target.Seed }}</strong></div>
-        <div class="meta-item">🔀 代理：<strong>{{ .Proxy.Endpoint }}</strong></div>
+        <div class="meta-item">🧊 快照：<strong>{{ .Snapshot }}</strong></div>
     </div>
     <div class="meta" style="margin-top:12px;">
         <div class="meta-item">🗂️ 状态目录：<strong>{{ .StateDir }}</strong></div>

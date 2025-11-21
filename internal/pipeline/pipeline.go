@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"df2redis/internal/config"
-	"df2redis/internal/executor/camellia"
 	"df2redis/internal/executor/rdbcli"
 	"df2redis/internal/redisx"
 	"df2redis/internal/state"
@@ -42,7 +41,6 @@ type Context struct {
 	StateDir    string
 	StageData   map[string]any
 	State       *state.Store
-	Camellia    *camellia.Manager
 	Importer    *rdbcli.Importer
 	SourceRedis *redisx.Client
 	TargetRedis *redisx.Client
@@ -50,15 +48,9 @@ type Context struct {
 
 // NewContext builds a new context from configuration.
 func NewContext(runCtx context.Context, cfg *config.Config, store *state.Store) (*Context, error) {
-	proxyCfg := cfg.ResolvedProxyConfig()
 	migrateCfg := cfg.ResolvedMigrateConfig()
-	cfg.Proxy = proxyCfg
 	cfg.Migrate = migrateCfg
 
-	cam, err := camellia.NewManager(proxyCfg)
-	if err != nil {
-		return nil, err
-	}
 	importer, err := rdbcli.NewImporter(migrateCfg, cfg.Target)
 	if err != nil {
 		return nil, err
@@ -75,7 +67,6 @@ func NewContext(runCtx context.Context, cfg *config.Config, store *state.Store) 
 		TLS:      cfg.Source.TLS,
 	})
 	if err != nil {
-		cam.Stop(context.Background())
 		return nil, fmt.Errorf("连接源库失败: %w", err)
 	}
 
@@ -88,7 +79,6 @@ func NewContext(runCtx context.Context, cfg *config.Config, store *state.Store) 
 	})
 	if err != nil {
 		sourceClient.Close()
-		cam.Stop(context.Background())
 		return nil, fmt.Errorf("连接目标库失败: %w", err)
 	}
 
@@ -98,7 +88,6 @@ func NewContext(runCtx context.Context, cfg *config.Config, store *state.Store) 
 		StateDir:    cfg.ResolveStateDir(),
 		StageData:   make(map[string]any),
 		State:       store,
-		Camellia:    cam,
 		Importer:    importer,
 		SourceRedis: sourceClient,
 		TargetRedis: targetClient,
@@ -112,11 +101,6 @@ func (c *Context) Close() {
 	}
 	if c.TargetRedis != nil {
 		_ = c.TargetRedis.Close()
-	}
-	if c.Camellia != nil {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = c.Camellia.Stop(stopCtx)
-		cancel()
 	}
 }
 
