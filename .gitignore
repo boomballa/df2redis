@@ -64,3 +64,7 @@ camellia/.github*
 
 # 忽略测试生成 macos版本二进制文件
 ./df2redis
+
+# 本地参考源码与构建产物
+dragonfly/
+bin/

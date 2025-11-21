@@ -79,15 +79,12 @@ func (s *DashboardServer) refreshLoop() {
 
 func (s *DashboardServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	ctx := map[string]interface{}{
-		"StateDir":        s.cfg.ResolveStateDir(),
-		"StatusFile":      s.cfg.StatusFilePath(),
-		"GeneratedAt":     time.Now().Format(time.RFC3339),
-		"Source":          s.cfg.Source,
-		"Target":          s.cfg.Target,
-		"Proxy":           s.cfg.Proxy,
-		"MigrateMode":     s.cfg.Migrate.Mode,
-		"MigratePipeline": s.cfg.Migrate.Pipeline,
-		"MigrateConc":     s.cfg.Migrate.Concurrency,
+		"StateDir":    s.cfg.ResolveStateDir(),
+		"StatusFile":  s.cfg.StatusFilePath(),
+		"GeneratedAt": time.Now().Format(time.RFC3339),
+		"Source":      s.cfg.Source,
+		"Target":      s.cfg.Target,
+		"Snapshot":    s.cfg.Migrate.SnapshotPath,
 	}
 	s.snapshotMu.RLock()
 	ctx["Snapshot"] = s.snapshot

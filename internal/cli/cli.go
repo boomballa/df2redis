@@ -15,7 +15,6 @@ import (
 
 	"df2redis/internal/config"
 	"df2redis/internal/pipeline"
-	runtpkg "df2redis/internal/runtime"
 	"df2redis/internal/state"
 	"df2redis/internal/web"
 )
@@ -114,28 +113,6 @@ func runMigrate(args []string) int {
 		return 1
 	}
 
-	autoBinary := cfg.Proxy.Binary == "" || strings.EqualFold(cfg.Proxy.Binary, "auto")
-	autoConfigFile := cfg.Proxy.IsAutoConfigFile()
-	autoMeta := cfg.Proxy.IsAutoMetaHookScript()
-	if autoBinary || autoConfigFile || autoMeta {
-		assets, err := runtpkg.Ensure(cfg)
-		if err != nil {
-			log.Printf("准备内置 Camellia 运行环境失败: %v", err)
-			return 1
-		}
-		if autoBinary {
-			cfg.Proxy.Binary = assets.JavaBinary
-			cfg.Proxy.Args = fmt.Sprintf("-jar %s --config %s", assets.CamelliaJar, assets.ConfigFile)
-			cfg.Proxy.WorkDir = assets.WorkDir
-		}
-		if autoConfigFile {
-			cfg.Proxy.ConfigFile = assets.ConfigFile
-		}
-		if autoMeta {
-			cfg.Proxy.MetaHookScript = assets.LuaScript
-		}
-	}
-
 	store := state.NewStore(cfg.StatusFilePath())
 
 	var dashboardAddr string
@@ -184,15 +161,8 @@ func runMigrate(args []string) int {
 
 	pl := pipeline.New().
 		Add(pipeline.NewPrecheckStage()).
-		Add(pipeline.NewMetaHookStage()).
-		Add(pipeline.NewStartProxyStage()).
-		Add(pipeline.NewBaselineStage()).
 		Add(pipeline.NewImportStage()).
-		Add(pipeline.NewFenceStage()).
-		Add(pipeline.NewCutoverStage()).
-		Add(pipeline.NewAutoCutoverStage()).
-		Add(pipeline.NewSyncStage()).
-		Add(pipeline.NewCleanupStage())
+		Add(pipeline.NewIncrementalPlaceholderStage())
 
 	if ok := pl.Run(ctxObj); !ok {
 		log.Println("迁移管线执行失败，详情见日志。")

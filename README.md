@@ -1,119 +1,69 @@
 # df2redis 🚀
 
-Dragonfly → Redis 迁移与回滚工具的 Go 实现原型，用一套 CLI 帮你打通准备、导入、回滚等全流程。🛠️
+Dragonfly → Redis 迁移工具的 Go 原型，目标是直接兼容 Dragonfly 复制协议完成全量+增量同步，不再依赖 Camellia 代理双写。
 
-## 当前能力 ⚙️
-- 🧭 CLI 子命令：`prepare` / `migrate` / `status` / `rollback`。
-- 🛰️ Camellia 管控：`migrate` 流程中自动解压内置 Jar + 配置并启动代理，读取 WAL backlog，占位 meta hook。
-- 🧩 Meta Hook：自动加载 Lua 并生成 `hook.json` 给 Camellia 使用，实现 `meta:{key}` 双写回填。
-- 📦 全量导入：封装 `redis-rdb-cli rmt` 调用，自动拼装并发/pipeline/resume 参数。
-- 📊 状态文件：`state/status.json` 记录阶段状态、事件、指标；`status` 命令可观测。
-- 🔁 实时同步监控：`sync` 阶段持续读取 Camellia WAL backlog 与样本校验，按 `Ctrl+C` 触发清理。
-- 🧰 配置解析：轻量 YAML（map-only）→ Go struct，带默认值、合法性校验。
-- 🏗️ Pipeline 架构：阶段化执行，后续可扩展真实 Fence/Cutover 逻辑。
+> 当前状态：仅完成 CLI 框架、配置解析、状态文件、基于 `redis-rdb-cli rmt` 的全量导入，以及仪表盘展示。Dragonfly journal 流的增量复制尚未实现，流水线会提示跳过该阶段。
 
-## 目录速览 🗺️
+## 现在能做什么
+- 🧭 CLI：`prepare` / `migrate` / `status` / `rollback` / `dashboard`。
+- 📦 全量导入：封装 `redis-rdb-cli rmt` 调用，按配置导入 Dragonfly 生成的 RDB。
+- 📊 状态与仪表盘：`state/status.json` 记录阶段状态、指标、事件；可通过 `--show` / `dashboard` 查看。
+- 🧹 清爽依赖：去掉 Camellia/JRE 预置与相关逻辑，保留 `redis-rdb-cli` 源码供构建使用；`dragonfly/` 仅作参考，不纳入版本控制。
 
+待完成：
+- Dragonfly 复制握手/DFLY FLOW/STARTSTABLE 接入。
+- Journal 解析、命令重放、LSN 续传、多 shard 协调。
+- Redis Cluster 路由与一致性校验。
+
+## 目录速览
 - `cmd/df2redis`: CLI 入口。
-- `internal/cli`: 子命令解析、状态查询、回滚标记。
-- `internal/config`: 配置解析、默认值、校验、状态/工具路径处理。
-- `internal/pipeline`: 阶段编排（预检、启动双写、基线、导入、Fence、清理等）。
-- `internal/executor`: Camellia / redis-rdb-cli 封装。
-- `internal/state`: 状态文件读写、指标/事件记录。
-- `internal/redisx`: 轻量 RESP 客户端，与 Redis 源/目标交互。
-- `docs/architecture.md`: 架构规划。
-- `docs/camellia_hook.md`: Camellia Meta Hook 接入指引。
+- `internal/cli`: 子命令解析。
+- `internal/config`: 配置解析与默认值。
+- `internal/pipeline`: 阶段化编排（预检、全量导入、增量占位）。
+- `internal/executor/rdbcli`: `redis-rdb-cli rmt` 调用封装。
+- `internal/state`: 状态快照存储。
+- `internal/web`: 简易仪表盘。
+- `docs/architecture.md`: 方向和技术要点，已更新为 Dragonfly 复制协议路线。
 - `examples/migrate.sample.yaml`: 配置样例。
-- `lua/`: 样例 meta hook Lua 脚本。
-- `camellia/`, `redis-rdb-cli/`: 外部工具源码（后续集成）。
+- `redis-rdb-cli/`: 上游工具源码，便于自行编译二进制。
+- `camellia/`: 历史参考源码，当前未使用。
+- `dragonfly/`: 上游 Dragonfly 源码（仅作比对参考，已 `.gitignore`）。
 
-## 编译与示例 🧪
-
+## 构建与运行
 要求：
 - Go 1.21+
-- JDK 21（用于 Camellia 及 redis-rdb-cli 源码构建；JDK 18 及以下会因 `--release 21` 编译参数而失败）
-- [JDK 21 安装指南](docs/jdk-setup.md)
+- 可选：已编译好的 `redis-rdb-cli` 二进制（或使用仓库下源码自行构建）
 
 ```bash
-# Linux x86_64 版本（默认产物）
+# 构建
 GOOS=linux GOARCH=amd64 go build -o bin/df2redis ./cmd/df2redis
 
-# Linux ARM64 版本（可选，如需在 ARM 服务器部署）
-GOOS=linux GOARCH=arm64 go build -o bin/df2redis-arm64 ./cmd/df2redis
-```
+# 查看帮助
+./bin/df2redis --help
 
-将生成的二进制复制到目标 Linux 主机的 `bin/` 目录后即可运行：
-
-```bash
-# dry-run 仅校验配置
+# 仅校验配置
 ./bin/df2redis migrate --config examples/migrate.sample.yaml --dry-run
 
-# 正式执行（需准备 camellia、redis-rdb-cli、RDB 等）
+# 执行全量导入（需提前准备 snapshot/rdbToolBinary）
 ./bin/df2redis migrate --config examples/migrate.sample.yaml
 
-# 带内置仪表盘运行（默认监听 0.0.0.0:8080）
+# 启动仪表盘
 ./bin/df2redis migrate --config examples/migrate.sample.yaml --show 8080
-
-# 指定监听地址（例如仅绑定内网 IP）
-./bin/df2redis migrate --config examples/migrate.sample.yaml --show-addr 0.0.0.0:8080
-
-# 查看状态文件
-./bin/df2redis status --config examples/migrate.sample.yaml
 ```
 
-> 若使用 ARM64 版本，请将命令中的 `./bin/df2redis` 替换为 `./bin/df2redis-arm64`。
+> 构建 redis-rdb-cli：进入 `redis-rdb-cli` 目录，按其文档编译生成 `bin/rmt`，并在配置里填入路径。
 
-运行 `migrate` 后，流程会进入长期运行的 `sync` 阶段：
-- 命令保持前台运行，持续监控 Camellia WAL backlog、采样比对并写入 `out/status.json`；
-- 当 backlog 连续多次为 0 时会提示可以执行流量切换；
-- 完成切换后在同一终端按 `Ctrl+C`，管道会自动进入 `cleanup` 阶段并优雅停止 Camellia。
+## 配置要点
+详见 `examples/migrate.sample.yaml`，核心字段：
+- `source.addr` / `target.seed`：源 Dragonfly、目标 Redis 地址。
+- `migrate.snapshotPath`：Dragonfly 生成的 RDB 路径。
+- `migrate.rdbToolBinary`：`redis-rdb-cli rmt` 可执行文件路径。
+- `stateDir` / `statusFile`：状态文件输出位置。
 
-> 提示：默认配置下 `proxy.binary: auto`，第一次执行 `migrate` 时会自动在 `~/.df2redis/runtime/<version>/` 解压 Camellia Jar / 配置 / Lua，并优先使用 `assets/runtime/jre-<平台>.tar.gz` 内置 JRE（可按平台准备，如 `jre-darwin-arm64.tar.gz`、`jre-linux-amd64.tar.gz`）。若未提供内置 JRE，则会回退到系统 `java` 或 `JAVA_HOME`。Camellia Jar 会优先从 `assets/camellia/camellia-redis-proxy-bootstrap.jar` 复制，找不到则退回 `camellia/.../target/` 或提示补充文件。
+## 路线图
+1) Dragonfly 复制握手 + RDB 拉取（bgsave 或 PSYNC），替换外部导入为内置 loader。  
+2) Journal 流解析器（packed uint + Op/LSN/SELECT/COMMAND），命令重放到 Redis/Redis Cluster。  
+3) 断线重连与 LSN 续传、指标观测、回压与限流。  
+4) 集群路由/slot 对齐、多 shard 协调与一致性校验。  
 
-### 打包运行时资产
-
-为了实现“一站式”体验，请在发布前准备好：
-
-- `assets/camellia/camellia-redis-proxy-bootstrap.jar`：从 `camellia-redis-proxy-bootstrap` 模块编译获得，命令示例：
-  ```bash
-  cd camellia
-  ./mvnw -pl camellia-redis-proxy/camellia-redis-proxy-bootstrap -am package \
-    && cp camellia-redis-proxy/camellia-redis-proxy-bootstrap/target/camellia-redis-proxy-bootstrap-*.jar \
-      ../assets/camellia/camellia-redis-proxy-bootstrap.jar
-  cd -
-  ```
-- `assets/runtime/jre-<平台>.tar.gz`：精简后的 JRE（例如 Adoptium/Temurin），解压后需包含 `bin/java`。文件名建议遵循 `jre-darwin-arm64.tar.gz`、`jre-linux-amd64.tar.gz` 等格式，或任何包含平台关键字（如 `linux`, `mac`, `darwin`, `arm64`, `x64`）的名字，工具会自动匹配。
-- 推荐从 [Temurin Releases](https://adoptium.net/zh-CN/temurin/releases) 获取对应平台的 JRE。下载后可按平台命名并放置到 `assets/runtime/`，例如：
-  ```bash
-  curl -L -o assets/runtime/jre-darwin-arm64.tar.gz <下载链接>
-  curl -L -o assets/runtime/jre-linux-amd64.tar.gz <下载链接>
-  ```
-- 如需自定义 Camellia 配置模板，可编辑 `assets/camellia/camellia-proxy.toml`，其中的 `{{SOURCE_URL}}`、`{{TARGET_URL}}`、`{{PORT}}` 等占位符会在运行时自动替换。
-
-发布 tarball / 镜像时只需携带这些 asset，用户运行 `df2redis` 即会自动在本地缓存目录解压并使用，无需额外安装 Java 或手动摆放 Jar。
-
-> 注意：GitHub 对单个文件有限制（普通仓库 100 MB）。这些 JRE/Jar、RDB 备份通常都会超过此阈值，建议 **不要直接纳入 Git 提交**。常见做法：
-> - 仅在发行包或内部镜像里附带大文件；
-> - 或使用 Git LFS 管理（需团队所有协作者安装 Git LFS）；
-> - 如果只是本地调试，将其放在 `assets/`、`data/backup/` 后，通过 `.gitignore` 忽略即可。
-
-Camellia 会在 `metadata` 段使用 `walStatusFile` 持续输出 backlog 指标，`sync` 阶段正是读取该文件判断是否可以切换流量。若自定义模板，请确保字段与 `proxy.walStatusFile` 指向一致且可写。
-
-默认控制台监听 `consolePort`（默认为 16379），df2redis 会定期访问 `/metrics` 接口，将 `kv_write_buffer_stats{metric_type="pending"}` 汇总写入 `walStatusFile`。
-
-## 下一步 🛣️
-- 将 Camellia 双写侧代码落地（读取 `hook.json`、执行 Lua），并在生产侧验证。
-- 灰度切读阶段接入实际流量控制（接入服务网关/流量调度 API）。
-- 增强一致性校验：支持多类型 key、差异自动回写。
-- 演练灰度切换、回滚剧本，补齐自动化测试与文档。
-
-## 本地开发常用命令 💻
-
-```bash
-# 交叉编译至 Linux（x86_64）
-GOOS=linux GOARCH=amd64 go build -o bin/df2redis ./cmd/df2redis
-
-# 在 Mac 上快速调试（任选其一）
-go run ./cmd/df2redis --help
-go test ./...
-```
+欢迎在 issue 中反馈需求与想法。
