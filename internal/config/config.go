@@ -40,6 +40,7 @@ type MigrateConfig struct {
 	RdbToolBinary string `json:"rdbToolBinary"`
 	RdbToolArgs   string `json:"rdbToolArgs"`
 	Resume        bool   `json:"resume"`
+	NodesConf     string `json:"nodesConf"`
 }
 
 // ValidationError collects configuration issues.
@@ -219,5 +220,6 @@ func (c *Config) ResolvedMigrateConfig() MigrateConfig {
 	mc := c.Migrate
 	mc.SnapshotPath = c.ResolvePath(mc.SnapshotPath)
 	mc.RdbToolBinary = c.ResolvePath(mc.RdbToolBinary)
+	mc.NodesConf = c.ResolvePath(mc.NodesConf)
 	return mc
 }

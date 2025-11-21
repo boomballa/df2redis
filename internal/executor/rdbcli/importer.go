@@ -28,6 +28,11 @@ func NewImporter(cfg config.MigrateConfig, target config.TargetConfig) (*Importe
 	return &Importer{cfg: cfg, target: target}, nil
 }
 
+// SetNodesConf allows updating nodes.conf path for cluster imports.
+func (i *Importer) SetNodesConf(path string) {
+	i.cfg.NodesConf = path
+}
+
 // Run executes redis-rdb-cli with computed arguments.
 func (i *Importer) Run(ctx context.Context) error {
 	args, err := i.buildArgs()
@@ -65,6 +70,9 @@ func (i *Importer) buildArgs() ([]string, error) {
 	}
 	if !i.cfg.Resume {
 		args = append(args, "--no-resume")
+	}
+	if strings.TrimSpace(i.cfg.NodesConf) != "" {
+		args = append(args, "-c", i.cfg.NodesConf)
 	}
 	return args, nil
 }
