@@ -161,6 +161,7 @@ func runMigrate(args []string) int {
 
 	pl := pipeline.New().
 		Add(pipeline.NewPrecheckStage()).
+		Add(pipeline.NewClusterNodesStage()).
 		Add(pipeline.NewImportStage()).
 		Add(pipeline.NewIncrementalPlaceholderStage())
 

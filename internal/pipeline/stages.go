@@ -4,7 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
+
+	"df2redis/internal/redisx"
 )
 
 // NewPrecheckStage validates external dependencies.
@@ -35,6 +39,41 @@ func NewPrecheckStage() Stage {
 				return Result{Status: StatusFailed, Message: fmt.Sprintf("目标库不可用: %v", err)}
 			}
 			return Result{Status: StatusSuccess, Message: "依赖校验通过"}
+		},
+	}
+}
+
+// NewClusterNodesStage auto-generates nodes.conf for Redis Cluster if missing.
+func NewClusterNodesStage() Stage {
+	return StageFunc{
+		name: "cluster-nodes",
+		run: func(ctx *Context) Result {
+			if ctx.Config.Target.Type != "redis-cluster" {
+				return Result{Status: StatusSkipped, Message: "目标非 cluster，跳过 nodes.conf 生成"}
+			}
+			if strings.TrimSpace(ctx.Config.Migrate.NodesConf) != "" {
+				return Result{Status: StatusSkipped, Message: "已提供 nodes.conf，跳过生成"}
+			}
+			reply, err := ctx.TargetRedis.Do("CLUSTER", "NODES")
+			if err != nil {
+				return Result{Status: StatusFailed, Message: fmt.Sprintf("获取 CLUSTER NODES 失败: %v", err)}
+			}
+			content, err := redisx.ToString(reply)
+			if err != nil {
+				return Result{Status: StatusFailed, Message: fmt.Sprintf("解析 CLUSTER NODES 失败: %v", err)}
+			}
+			if err := os.MkdirAll(ctx.StateDir, 0o755); err != nil {
+				return Result{Status: StatusFailed, Message: fmt.Sprintf("创建 state 目录失败: %v", err)}
+			}
+			path := filepath.Join(ctx.StateDir, "nodes.conf")
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				return Result{Status: StatusFailed, Message: fmt.Sprintf("写入 nodes.conf 失败: %v", err)}
+			}
+			ctx.Config.Migrate.NodesConf = path
+			if ctx.Importer != nil {
+				ctx.Importer.SetNodesConf(path)
+			}
+			return Result{Status: StatusSuccess, Message: fmt.Sprintf("nodes.conf 已生成到 %s", path)}
 		},
 	}
 }
