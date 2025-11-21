@@ -1,20 +1,20 @@
 source:
   type: dragonfly
-  addr: 127.0.0.1:6379
+  addr: 10.180.1.162:6379
   password: ""
   tls: false
 
 target:
-  type: redis-standalone
-  seed: 127.0.0.1:6380
-  password: ""
+  type: redis-cluster
+  seed: 10.180.50.231:6379
+  password: "pwd4dba"
   tls: false
 
 stateDir: ../out
 statusFile: ../out/status.json
 
 migrate:
-  snapshotPath: ../data/backup/dragonfly-dump.rdb
+  snapshotPath: ../data/backup/dragonfly7379-dump.rdb
   rdbToolBinary: ../redis-rdb-cli/bin/rmt
   rdbToolArgs: ""
   resume: true
