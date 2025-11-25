@@ -28,7 +28,7 @@ func NewPrecheckStage() Stage {
 				if check.path == "" {
 					return Result{Status: StatusFailed, Message: fmt.Sprintf("%s 未配置", check.desc)}
 				}
-				if check.desc == "RDB snapshot" && ctx.Config.Migrate.AutoBgsave {
+				if check.desc == "RDB snapshot" && bool(ctx.Config.Migrate.AutoBgsave) {
 					continue
 				}
 				if _, err := os.Stat(check.path); err != nil {
@@ -119,7 +119,7 @@ func NewBgsaveStage() Stage {
 	return StageFunc{
 		name: "bgsave",
 		run: func(ctx *Context) Result {
-			if !ctx.Config.Migrate.AutoBgsave {
+			if !bool(ctx.Config.Migrate.AutoBgsave) {
 				return Result{Status: StatusSkipped, Message: "未开启 autoBgsave，跳过"}
 			}
 			startVal, err := ctx.SourceRedis.Do("LASTSAVE")

@@ -35,13 +35,39 @@ type TargetConfig struct {
 	TLS      bool   `json:"tls"`
 }
 
+// Boolish accepts true/false or quoted "true"/"false" in JSON decoding.
+type Boolish bool
+
+// UnmarshalJSON allows bool values represented as strings.
+func (b *Boolish) UnmarshalJSON(data []byte) error {
+	// Try plain bool first.
+	var bv bool
+	if err := json.Unmarshal(data, &bv); err == nil {
+		*b = Boolish(bv)
+		return nil
+	}
+	// Try string "true"/"false".
+	var sv string
+	if err := json.Unmarshal(data, &sv); err == nil {
+		switch strings.ToLower(strings.TrimSpace(sv)) {
+		case "true":
+			*b = Boolish(true)
+			return nil
+		case "false":
+			*b = Boolish(false)
+			return nil
+		}
+	}
+	return fmt.Errorf("cannot decode %s as bool", string(data))
+}
+
 type MigrateConfig struct {
-	SnapshotPath    string `json:"snapshotPath"`
-	ShakeBinary     string `json:"shakeBinary"`
-	ShakeArgs       string `json:"shakeArgs"`
-	ShakeConfigFile string `json:"shakeConfigFile"`
-	AutoBgsave      bool   `json:"autoBgsave"`
-	BgsaveTimeout   int    `json:"bgsaveTimeoutSeconds"`
+	SnapshotPath    string  `json:"snapshotPath"`
+	ShakeBinary     string  `json:"shakeBinary"`
+	ShakeArgs       string  `json:"shakeArgs"`
+	ShakeConfigFile string  `json:"shakeConfigFile"`
+	AutoBgsave      Boolish `json:"autoBgsave"`
+	BgsaveTimeout   int     `json:"bgsaveTimeoutSeconds"`
 }
 
 // ValidationError collects configuration issues.
