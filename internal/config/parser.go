@@ -174,6 +174,7 @@ func parseScalar(value string) interface{} {
 		value = strings.Trim(value, "'")
 	}
 
+	value = strings.TrimSpace(value)
 	lower := strings.ToLower(value)
 	switch lower {
 	case "", "null", "~":
