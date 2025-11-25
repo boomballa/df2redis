@@ -56,23 +56,24 @@ func (i *Importer) Run(ctx context.Context) error {
 }
 
 func (i *Importer) buildArgs() ([]string, error) {
-	targetURL, err := i.buildTargetURL()
-	if err != nil {
-		return nil, err
+	args := []string{"-s", i.cfg.SnapshotPath}
+
+	useNodesConf := strings.TrimSpace(i.cfg.NodesConf) != ""
+	if useNodesConf {
+		args = append(args, "-c", i.cfg.NodesConf)
+	} else {
+		targetURL, err := i.buildTargetURL()
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, "-m", targetURL)
 	}
-	args := []string{
-		"-s", i.cfg.SnapshotPath,
-		"-m", targetURL,
-		"-r",
-	}
+	args = append(args, "-r")
 	if strings.TrimSpace(i.cfg.RdbToolArgs) != "" {
 		args = append(args, strings.Fields(i.cfg.RdbToolArgs)...)
 	}
 	if !i.cfg.Resume {
 		args = append(args, "--no-resume")
-	}
-	if strings.TrimSpace(i.cfg.NodesConf) != "" {
-		args = append(args, "-c", i.cfg.NodesConf)
 	}
 	return args, nil
 }
