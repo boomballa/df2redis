@@ -165,6 +165,15 @@ func parseList(lines []yamlLine, idx int, indent int) ([]interface{}, int, error
 }
 
 func parseScalar(value string) interface{} {
+	// Try to unquote first so quoted booleans/numbers are handled.
+	if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
+		if unquoted, err := strconv.Unquote(value); err == nil {
+			value = unquoted
+		}
+	} else if strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
+		value = strings.Trim(value, "'")
+	}
+
 	lower := strings.ToLower(value)
 	switch lower {
 	case "", "null", "~":
@@ -179,14 +188,6 @@ func parseScalar(value string) interface{} {
 	}
 	if f, err := strconv.ParseFloat(value, 64); err == nil {
 		return f
-	}
-	if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
-		if unquoted, err := strconv.Unquote(value); err == nil {
-			return unquoted
-		}
-	}
-	if strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") {
-		return strings.Trim(value, "'")
 	}
 	return value
 }
