@@ -251,17 +251,18 @@ func (c *Config) ResolvedMigrateConfig() MigrateConfig {
 	mc := c.Migrate
 	mc.SnapshotPath = c.ResolvePath(mc.SnapshotPath)
 	mc.ShakeBinary = c.ResolvePath(mc.ShakeBinary)
-	mc.ShakeConfigFile = cleanPath(mc.ShakeConfigFile)
+	mc.ShakeConfigFile = cleanValue(mc.ShakeConfigFile)
 	if mc.ShakeConfigFile != "" {
 		mc.ShakeConfigFile = c.ResolvePath(mc.ShakeConfigFile)
 	}
+	mc.ShakeArgs = cleanValue(mc.ShakeArgs)
 	if mc.BgsaveTimeout <= 0 {
 		mc.BgsaveTimeout = 300
 	}
 	return mc
 }
 
-func cleanPath(raw string) string {
+func cleanValue(raw string) string {
 	s := strings.TrimSpace(raw)
 	if idx := strings.Index(s, "#"); idx >= 0 {
 		s = strings.TrimSpace(s[:idx])
