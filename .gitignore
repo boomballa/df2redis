@@ -47,7 +47,8 @@ assets/runtime/jdk-macos-jre/
 assets/camellia/*.jar
 
 # redis-rdb-cli 运行时生成的文件
-redis-rdb-cli/log/
+redis-rdb-cli/
+camellia/
 
 # Editor/IDE
 # .idea/

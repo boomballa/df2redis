@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"df2redis/internal/config"
-	"df2redis/internal/executor/rdbcli"
+	"df2redis/internal/executor/shake"
 	"df2redis/internal/redisx"
 	"df2redis/internal/state"
 )
@@ -41,7 +41,7 @@ type Context struct {
 	StateDir    string
 	StageData   map[string]any
 	State       *state.Store
-	Importer    *rdbcli.Importer
+	Importer    *shake.Importer
 	SourceRedis *redisx.Client
 	TargetRedis *redisx.Client
 }
@@ -51,7 +51,7 @@ func NewContext(runCtx context.Context, cfg *config.Config, store *state.Store) 
 	migrateCfg := cfg.ResolvedMigrateConfig()
 	cfg.Migrate = migrateCfg
 
-	importer, err := rdbcli.NewImporter(migrateCfg, cfg.Target)
+	importer, err := shake.NewImporter(migrateCfg, cfg.Target)
 	if err != nil {
 		return nil, err
 	}

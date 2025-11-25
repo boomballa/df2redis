@@ -1,0 +1,27 @@
+# redis-shake v4 配置（配合 df2redis），默认开启日志到 ../out/shake.log
+
+[source]
+type = "dump"
+local_dir = "../data/backup"
+file_name = "dragonfly-dump.rdb"
+
+[target]
+type = "redis_cluster"
+address = "127.0.0.1:6380"
+username = ""
+password = ""
+tls = false
+
+[advanced]
+pipeline = 64
+parallel = 8
+resume_from_breakpoint = true
+full_sync_reader_buffer_size = "64MB"
+
+[metric]
+enable = false
+address = "0.0.0.0:9100"
+
+[log]
+level = "info"
+file = "../out/shake.log"
