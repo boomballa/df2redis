@@ -1,27 +1,47 @@
-# redis-shake v4 配置（配合 df2redis），默认开启日志到 ../out/shake.log
+# redis-shake v4 配置（配合 df2redis）
 
-[source]
-type = "dump"
-local_dir = "../data/backup"
-file_name = "dragonfly-dump.rdb"
+[rdb_reader]
+filepath = "../data/backup/dragonfly-dump.rdb"
 
-[target]
-type = "redis_cluster"
+[redis_writer]
+cluster = true
 address = "127.0.0.1:6380"
 username = ""
 password = ""
 tls = false
+off_reply = false
+
+[filter]
+allow_keys = []
+allow_key_prefix = []
+allow_key_suffix = []
+allow_key_regex = []
+block_keys = []
+block_key_prefix = []
+block_key_suffix = []
+block_key_regex = []
+allow_db = []
+block_db = []
+allow_command = []
+block_command = []
+allow_command_group = []
+block_command_group = []
+function = ""
 
 [advanced]
-pipeline = 64
-parallel = 8
-resume_from_breakpoint = true
-full_sync_reader_buffer_size = "64MB"
-
-[metric]
-enable = false
-address = "0.0.0.0:9100"
-
-[log]
-level = "info"
-file = "../out/shake.log"
+dir = "data"
+ncpu = 0
+pprof_port = 0
+status_port = 0
+log_file = "../out/shake.log"
+log_level = "info"
+log_interval = 5
+log_rotation = true
+log_max_size = 512
+log_max_age = 7
+log_max_backups = 3
+log_compress = true
+pipeline_count_limit = 1024
+target_redis_client_max_querybuf_len = 1073741824
+target_redis_proto_max_bulk_len = 512000000
+empty_db_before_sync = false
