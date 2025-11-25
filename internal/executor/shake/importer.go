@@ -62,7 +62,12 @@ func (i *Importer) buildArgs() ([]string, error) {
 	}
 	args := []string{}
 	if i.cfg.ShakeConfigFile != "" {
-		args = append(args, "-conf", i.cfg.ShakeConfigFile)
+		// redis-shake v4 支持直接传配置文件路径作为第一个参数，也支持 -conf。
+		if rawArgs == "" {
+			args = append(args, i.cfg.ShakeConfigFile)
+		} else {
+			args = append(args, "-conf", i.cfg.ShakeConfigFile)
+		}
 	}
 	if rawArgs != "" {
 		args = append(args, strings.Fields(rawArgs)...)

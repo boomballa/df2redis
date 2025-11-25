@@ -15,7 +15,7 @@ stateDir: ../out
 statusFile: ../out/status.json
 
 migrate:
-  snapshotPath: ../data/backup/dragonfly-dump.rdb
+  snapshotPath: ../data/backup/dragonfly7380-dump.rdb
   shakeBinary: ../redis-shake-v4/redis-shake
   shakeArgs: ""          # 选填：完整命令行参数（如不用配置文件）
   shakeConfigFile: ""    # 选填：redis-shake 配置文件路径（如使用 -conf）

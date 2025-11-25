@@ -33,8 +33,11 @@ Dragonfly → Redis 迁移工具的 Go 原型，目标是直接兼容 Dragonfly 
 - 已编译好的 **redis-shake** 可执行文件（建议 v3/v4）
 
 ```bash
-# 构建
+# 构建（Linux amd64）
 GOOS=linux GOARCH=amd64 go build -o bin/df2redis ./cmd/df2redis
+
+# 构建（macOS arm64）
+GOCACHE=$PWD/.gocache GOOS=darwin GOARCH=arm64 go build -o bin/df2redis-mac ./cmd/df2redis
 
 # 查看帮助
 ./bin/df2redis --help
