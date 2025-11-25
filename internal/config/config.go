@@ -36,11 +36,12 @@ type TargetConfig struct {
 }
 
 type MigrateConfig struct {
-	SnapshotPath  string `json:"snapshotPath"`
-	RdbToolBinary string `json:"rdbToolBinary"`
-	RdbToolArgs   string `json:"rdbToolArgs"`
-	Resume        bool   `json:"resume"`
-	NodesConf     string `json:"nodesConf"`
+	SnapshotPath    string `json:"snapshotPath"`
+	ShakeBinary     string `json:"shakeBinary"`
+	ShakeArgs       string `json:"shakeArgs"`
+	ShakeConfigFile string `json:"shakeConfigFile"`
+	AutoBgsave      bool   `json:"autoBgsave"`
+	BgsaveTimeout   int    `json:"bgsaveTimeoutSeconds"`
 }
 
 // ValidationError collects configuration issues.
@@ -116,6 +117,9 @@ func (c *Config) ApplyDefaults() {
 	if c.StatusFile == "" {
 		c.StatusFile = "state/status.json"
 	}
+	if c.Migrate.BgsaveTimeout == 0 {
+		c.Migrate.BgsaveTimeout = 300
+	}
 }
 
 // Validate ensures config is usable.
@@ -131,9 +135,10 @@ func (c *Config) Validate() error {
 	if c.Migrate.SnapshotPath == "" {
 		errs = append(errs, "migrate.snapshotPath 必填 (RDB 文件路径)")
 	}
-	if c.Migrate.RdbToolBinary == "" {
-		errs = append(errs, "migrate.rdbToolBinary 必填 (redis-rdb-cli 路径)")
+	if c.Migrate.ShakeBinary == "" {
+		errs = append(errs, "migrate.shakeBinary 必填 (redis-shake 可执行文件路径)")
 	}
+	// 如果既没有提供 shakeArgs 也没有提供 shakeConfigFile，将自动生成配置文件
 
 	if len(errs) > 0 {
 		return &ValidationError{Path: c.path, Errors: errs}
@@ -180,10 +185,10 @@ func (c *Config) EnsureStateDir() error {
 
 // Summary returns concise overview.
 func (c *Config) Summary() string {
-	return fmt.Sprintf("source=%s@%s, target=%s@%s, migrate(snapshot=%s resume=%t), stateDir=%s, statusFile=%s",
+	return fmt.Sprintf("source=%s@%s, target=%s@%s, migrate(snapshot=%s), stateDir=%s, statusFile=%s",
 		c.Source.Type, c.Source.Addr,
 		c.Target.Type, c.Target.Seed,
-		c.Migrate.SnapshotPath, c.Migrate.Resume,
+		c.Migrate.SnapshotPath,
 		c.ResolveStateDir(), c.StatusFilePath())
 }
 
@@ -192,7 +197,7 @@ func (c *Config) PrettySummary() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "  🗄️ source    : %s @ %s\n", c.Source.Type, c.Source.Addr)
 	fmt.Fprintf(&b, "  🎯 target    : %s @ %s\n", c.Target.Type, c.Target.Seed)
-	fmt.Fprintf(&b, "  🚚 migrate   : snapshot=%s resume=%t\n", c.Migrate.SnapshotPath, c.Migrate.Resume)
+	fmt.Fprintf(&b, "  🚚 migrate   : snapshot=%s\n", c.Migrate.SnapshotPath)
 	fmt.Fprintf(&b, "  📂 stateDir  : %s\n", c.ResolveStateDir())
 	fmt.Fprintf(&b, "  📝 statusFile: %s", c.StatusFilePath())
 	return b.String()
@@ -219,7 +224,10 @@ func (c *Config) ConfigDir() string {
 func (c *Config) ResolvedMigrateConfig() MigrateConfig {
 	mc := c.Migrate
 	mc.SnapshotPath = c.ResolvePath(mc.SnapshotPath)
-	mc.RdbToolBinary = c.ResolvePath(mc.RdbToolBinary)
-	mc.NodesConf = c.ResolvePath(mc.NodesConf)
+	mc.ShakeBinary = c.ResolvePath(mc.ShakeBinary)
+	mc.ShakeConfigFile = c.ResolvePath(mc.ShakeConfigFile)
+	if mc.BgsaveTimeout <= 0 {
+		mc.BgsaveTimeout = 300
+	}
 	return mc
 }
