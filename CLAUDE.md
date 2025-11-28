@@ -4,6 +4,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 工作偏好与规范
 
+### 协作流程（重要！）
+
+**IMPORTANT**: 在开始实现每个新 Phase 之前，必须先向用户确认关键的源码细节问题，避免浪费 token 做无效尝试。
+
+**标准流程：**
+1. **确定实现目标** - 明确本 Phase 要实现的功能
+2. **提出关键问题** - 列出需要确认的 Dragonfly 协议细节、数据格式、编码规则等
+3. **等待用户确认** - 用户会提供答案或指引查看源码位置
+4. **开始编码实现** - 基于确认的信息进行准确实现
+5. **测试验证** - 与真实 Dragonfly 实例测试
+6. **文档总结** - 完成后创建 Phase 文档
+
+**示例问题：**
+- "DFLY FLOW 返回后，数据传输方式是什么？"
+- "Packed Uint 的编码格式是什么？"
+- "Journal Entry 的完整结构是什么？"
+- "是否需要发送 DFLY STARTSTABLE 命令？"
+
+**备选方案：**
+如果用户也不确定，再去 `dragonfly/` 目录下查看源码（`src/server/dflycmd.cc`、`src/server/journal/`等）。
+
 ### 沟通语言
 - **IMPORTANT**: 必须使用中文回答用户的所有问题和进行日常交流
 - 代码注释保持中文（与项目现有风格一致）
