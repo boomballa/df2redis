@@ -64,6 +64,8 @@ type MasterInfo struct {
 
 // FlowInfo 保存单个 Flow 的信息
 type FlowInfo struct {
-	FlowID int    // Flow ID（对应 shard ID）
-	State  string // Flow 状态
+	FlowID   int    // Flow ID（对应 shard ID）
+	State    string // Flow 状态
+	EOFToken string // EOF 标记（用于标识 RDB 快照结束）
+	SyncType string // 同步类型（FULL 或 PARTIAL）
 }

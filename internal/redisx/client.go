@@ -88,6 +88,37 @@ func (c *Client) Ping() error {
 	return err
 }
 
+// RawRead 直接从底层连接读取原始数据（用于 RDB 快照和 Journal 流）
+// 使用较长的超时时间（60秒），适配 Dragonfly 的 30 秒超时机制
+func (c *Client) RawRead(buf []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return 0, errors.New("redisx: client closed")
+	}
+	// 设置 60 秒读取超时，略长于 Dragonfly 的 30 秒写入超时
+	if err := c.conn.SetReadDeadline(time.Now().Add(60 * time.Second)); err != nil {
+		return 0, err
+	}
+	return c.conn.Read(buf)
+}
+
+// Read 实现 io.Reader 接口，用于 Journal 流解析
+// 从 bufio.Reader 读取，确保不会跳过已缓冲的数据
+func (c *Client) Read(buf []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return 0, errors.New("redisx: client closed")
+	}
+	// 设置 60 秒读取超时，略长于 Dragonfly 的 30 秒写入超时
+	if err := c.conn.SetReadDeadline(time.Now().Add(60 * time.Second)); err != nil {
+		return 0, err
+	}
+	// 从 bufio.Reader 读取，它会自动处理缓冲区和底层连接
+	return c.reader.Read(buf)
+}
+
 // Do sends a command and returns the parsed RESP reply.
 func (c *Client) Do(cmd string, args ...interface{}) (interface{}, error) {
 	c.mu.Lock()
