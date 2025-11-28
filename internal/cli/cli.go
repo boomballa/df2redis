@@ -15,6 +15,7 @@ import (
 
 	"df2redis/internal/config"
 	"df2redis/internal/pipeline"
+	"df2redis/internal/replica"
 	"df2redis/internal/state"
 	"df2redis/internal/web"
 )
@@ -34,6 +35,8 @@ func Execute(args []string) int {
 		return runPrepare(args[1:])
 	case "migrate":
 		return runMigrate(args[1:])
+	case "replicate":
+		return runReplicate(args[1:])
 	case "status":
 		return runStatus(args[1:])
 	case "rollback":
@@ -328,6 +331,43 @@ func errorToExitCode(err error) int {
 	return 1
 }
 
+func runReplicate(args []string) int {
+	cfg, err := loadConfigFromArgs("replicate", args)
+	if err != nil {
+		return errorToExitCode(err)
+	}
+
+	// 创建复制器
+	replicator := replica.NewReplicator(cfg)
+
+	// 设置信号处理
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	// 启动复制器
+	errCh := make(chan error, 1)
+	go func() {
+		if err := replicator.Start(); err != nil {
+			errCh <- err
+			return
+		}
+		// 握手成功后，保持运行等待信号
+		log.Println("\n⌨️  按 Ctrl+C 停止复制器")
+		select {}
+	}()
+
+	// 等待错误或信号
+	select {
+	case err := <-errCh:
+		log.Printf("❌ 复制器启动失败: %v", err)
+		return 1
+	case sig := <-sigCh:
+		log.Printf("\n📡 收到信号 %v，正在停止...", sig)
+		replicator.Stop()
+		return 0
+	}
+}
+
 func printUsage() {
 	binary := filepath.Base(os.Args[0])
 	fmt.Printf(`df2redis - Dragonfly → Redis 迁移工具 (原型)
@@ -336,14 +376,17 @@ func printUsage() {
   %[1]s <command> [options]
 
 可用命令:
-  prepare   预先检查环境、依赖与配置
-  migrate   执行迁移流程 (支持 --dry-run)
-  status    查看当前迁移状态
-  rollback  执行回滚到 Dragonfly 的流程
-  help      显示此帮助
-  version   显示版本信息
+  prepare    预先检查环境、依赖与配置
+  migrate    执行迁移流程 (支持 --dry-run)
+  replicate  启动 Dragonfly 复制器（测试握手）
+  status     查看当前迁移状态
+  rollback   执行回滚到 Dragonfly 的流程
+  dashboard  启动独立仪表盘
+  help       显示此帮助
+  version    显示版本信息
 
 示例:
   %[1]s migrate --config examples/migrate.sample.yaml --dry-run
+  %[1]s replicate --config examples/migrate.sample.yaml
 `, binary)
 }
