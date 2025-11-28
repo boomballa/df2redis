@@ -1,0 +1,23 @@
+# Dragonfly 复制配置示例
+# 用于测试握手和复制功能
+
+source:
+  type: dragonfly
+  addr: 10.46.128.12:7380       # Dragonfly 地址（请修改为实际地址）
+  password: ""                  # Dragonfly 密码（如果有）
+  tls: false
+
+target:
+  type: redis-standalone      # 目标 Redis 类型
+  seed: 10.180.7.93:6379        # 目标 Redis 地址
+  password: "pwd4dba"
+  tls: false
+
+stateDir: ./out               # 状态文件目录
+statusFile: ./out/status.json
+
+# 注意：replicate 命令目前仅测试握手流程
+# 以下参数仅为通过配置校验，实际不使用
+migrate:
+  snapshotPath: /tmp/placeholder.rdb
+  shakeBinary: /tmp/placeholder
