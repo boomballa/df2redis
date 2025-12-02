@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"df2redis/internal/cluster"
 	"df2redis/internal/config"
 	"df2redis/internal/redisx"
 )
@@ -27,6 +28,9 @@ type Replicator struct {
 	// 每个 FLOW 的独立连接
 	flowConns []*redisx.Client
 
+	// Redis Cluster 客户端（用于命令重放）
+	clusterClient *cluster.ClusterClient
+
 	// 复制状态
 	state      ReplicaState
 	masterInfo MasterInfo
@@ -35,6 +39,9 @@ type Replicator struct {
 	// 配置
 	listeningPort int
 	announceIP    string
+
+	// 统计信息
+	replayStats ReplayStats
 }
 
 // NewReplicator 创建一个新的复制器
@@ -63,6 +70,26 @@ func (r *Replicator) Start() error {
 	// 执行握手
 	if err := r.handshake(); err != nil {
 		return fmt.Errorf("握手失败: %w", err)
+	}
+
+	// 初始化 Redis 客户端（自动检测 Cluster/Standalone）
+	log.Println("")
+	log.Println("🔗 连接到目标 Redis...")
+	r.clusterClient = cluster.NewClusterClient(
+		r.cfg.Target.Seed,
+		r.cfg.Target.Password,
+		r.cfg.Target.TLS,
+	)
+	if err := r.clusterClient.Connect(); err != nil {
+		return fmt.Errorf("连接目标 Redis 失败: %w", err)
+	}
+
+	// 检测模式
+	topology := r.clusterClient.GetTopology()
+	if len(topology) > 0 {
+		log.Printf("  ✓ Redis Cluster 连接成功（%d 个主节点）", len(topology))
+	} else {
+		log.Println("  ✓ Redis Standalone 连接成功")
 	}
 
 	// 发送 DFLY SYNC 触发 RDB 数据传输
@@ -687,9 +714,26 @@ func (r *Replicator) receiveJournal() error {
 		// 显示解析的命令
 		r.displayFlowEntry(flowEntry.FlowID, entry, currentDB, entriesCount)
 
+		// 重放命令到 Redis Cluster
+		r.replayStats.mu.Lock()
+		r.replayStats.TotalCommands++
+		r.replayStats.mu.Unlock()
+
+		if err := r.replayCommand(entry); err != nil {
+			log.Printf("  ✗ 重放失败: %v", err)
+		}
+
 		// 每 50 条打印一次统计
 		if entriesCount%50 == 0 {
-			log.Printf("  📊 已接收 %d 条 Journal 条目", entriesCount)
+			r.replayStats.mu.Lock()
+			log.Printf("  📊 统计: 总计=%d, 成功=%d, 跳过=%d, 失败=%d, 最新LSN=%d",
+				r.replayStats.TotalCommands,
+				r.replayStats.ReplayedOK,
+				r.replayStats.Skipped,
+				r.replayStats.Failed,
+				r.replayStats.LastLSN)
+			r.replayStats.mu.Unlock()
+
 			for fid, count := range flowStats {
 				log.Printf("    FLOW-%d: %d 条", fid, count)
 			}
@@ -832,4 +876,124 @@ func (r *Replicator) GetMasterInfo() MasterInfo {
 // GetFlows 获取所有 Flow 信息
 func (r *Replicator) GetFlows() []FlowInfo {
 	return r.flows
+}
+
+// ReplayStats 记录命令重放统计
+type ReplayStats struct {
+	mu             sync.Mutex
+	TotalCommands  int64
+	ReplayedOK     int64
+	Skipped        int64
+	Failed         int64
+	LastLSN        uint64
+	LastReplayTime time.Time
+}
+
+// replayCommand 重放单条命令到 Redis Cluster
+func (r *Replicator) replayCommand(entry *JournalEntry) error {
+	switch entry.Opcode {
+	case OpSelect:
+		// Redis Cluster 只有 DB 0，忽略 SELECT 命令
+		r.replayStats.mu.Lock()
+		r.replayStats.Skipped++
+		r.replayStats.mu.Unlock()
+		return nil
+
+	case OpPing:
+		// 忽略 PING 心跳
+		r.replayStats.mu.Lock()
+		r.replayStats.Skipped++
+		r.replayStats.mu.Unlock()
+		return nil
+
+	case OpLSN:
+		// 记录 LSN，不执行
+		r.replayStats.mu.Lock()
+		r.replayStats.LastLSN = entry.LSN
+		r.replayStats.mu.Unlock()
+		return nil
+
+	case OpExpired:
+		// 处理过期键：使用 PEXPIRE 设置剩余 TTL
+		if err := r.handleExpiredKey(entry); err != nil {
+			r.replayStats.mu.Lock()
+			r.replayStats.Failed++
+			r.replayStats.mu.Unlock()
+			return fmt.Errorf("处理过期键失败: %w", err)
+		}
+		r.replayStats.mu.Lock()
+		r.replayStats.ReplayedOK++
+		r.replayStats.LastReplayTime = time.Now()
+		r.replayStats.mu.Unlock()
+		return nil
+
+	case OpCommand:
+		// 检查是否为全局命令
+		cmd := strings.ToUpper(entry.Command)
+		if isGlobalCommand(cmd) {
+			log.Printf("  ⚠ 跳过全局命令: %s（需要多分片协调）", cmd)
+			r.replayStats.mu.Lock()
+			r.replayStats.Skipped++
+			r.replayStats.mu.Unlock()
+			return nil
+		}
+
+		// 执行普通命令
+		if err := r.executeCommand(entry); err != nil {
+			r.replayStats.mu.Lock()
+			r.replayStats.Failed++
+			r.replayStats.mu.Unlock()
+			return fmt.Errorf("执行命令失败: %w", err)
+		}
+
+		r.replayStats.mu.Lock()
+		r.replayStats.ReplayedOK++
+		r.replayStats.LastReplayTime = time.Now()
+		r.replayStats.mu.Unlock()
+		return nil
+
+	default:
+		return fmt.Errorf("未知的 opcode: %d", entry.Opcode)
+	}
+}
+
+// handleExpiredKey 处理过期键
+func (r *Replicator) handleExpiredKey(entry *JournalEntry) error {
+	if len(entry.Args) == 0 {
+		return fmt.Errorf("EXPIRED 命令缺少 key 参数")
+	}
+
+	key := entry.Args[0]
+
+	// 假设 TTL 为 1ms（键已过期）
+	// 实际实现中可以从 Args 中解析 TTL（如果 Dragonfly 提供）
+	ttlMs := int64(1)
+
+	_, err := r.clusterClient.Do("PEXPIRE", key, fmt.Sprintf("%d", ttlMs))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// executeCommand 执行普通命令
+func (r *Replicator) executeCommand(entry *JournalEntry) error {
+	// 构建完整的命令参数列表
+	args := make([]string, len(entry.Args))
+	copy(args, entry.Args)
+
+	// 执行命令
+	_, err := r.clusterClient.Do(entry.Command, args...)
+	return err
+}
+
+// isGlobalCommand 检查是否为全局命令（需要多分片协调）
+func isGlobalCommand(cmd string) bool {
+	globalCmds := map[string]bool{
+		"FLUSHDB":                true,
+		"FLUSHALL":               true,
+		"DFLYCLUSTER FLUSHSLOTS": true,
+	}
+	return globalCmds[cmd]
 }
