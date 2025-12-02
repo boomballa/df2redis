@@ -10,12 +10,12 @@ import (
 type JournalOpcode uint8
 
 const (
-	OpNoop    JournalOpcode = 0
-	OpSelect  JournalOpcode = 1  // SELECT 数据库
-	OpCommand JournalOpcode = 2  // 普通命令
-	OpExpired JournalOpcode = 3  // 过期键
-	OpLSN     JournalOpcode = 4  // LSN 标记
-	OpPing    JournalOpcode = 5  // PING 心跳
+	OpNoop    JournalOpcode = 0  // NOOP
+	OpSelect  JournalOpcode = 6  // SELECT 数据库
+	OpExpired JournalOpcode = 9  // 过期键
+	OpCommand JournalOpcode = 10 // 普通命令
+	OpPing    JournalOpcode = 13 // PING 心跳
+	OpLSN     JournalOpcode = 15 // LSN 标记
 	OpFin     JournalOpcode = 99 // 流结束标记（自定义）
 )
 
