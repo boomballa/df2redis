@@ -627,46 +627,57 @@ func (r *Replicator) verifyEofTokens() error {
 	return nil
 }
 
-// receiveJournal 接收并解析 Journal 流
+// FlowEntry 表示带有 FLOW ID 的 Journal Entry
+type FlowEntry struct {
+	FlowID int
+	Entry  *JournalEntry
+	Error  error
+}
+
+// receiveJournal 接收并解析 Journal 流（并行监听所有 FLOW）
 func (r *Replicator) receiveJournal() error {
 	log.Println("")
 	log.Println("📡 开始接收 Journal 流...")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-	// 使用第一个 FLOW 连接接收 Journal 流
-	// TODO(Phase 3): 实现多 FLOW 的 Journal 流合并
-	if len(r.flowConns) == 0 {
+	numFlows := len(r.flowConns)
+	if numFlows == 0 {
 		return fmt.Errorf("没有可用的 FLOW 连接")
 	}
 
-	log.Println("  • 使用 FLOW-0 接收 Journal 流")
+	log.Printf("  • 并行监听所有 %d 个 FLOW", numFlows)
 
-	// 创建 Journal 读取器（使用第一个 FLOW 连接）
-	reader := NewJournalReader(r.flowConns[0])
+	// 创建 channel 接收所有 FLOW 的 Entry
+	entryChan := make(chan *FlowEntry, 100)
 
+	// 为每个 FLOW 启动一个 goroutine
+	var wg sync.WaitGroup
+	for i := 0; i < numFlows; i++ {
+		wg.Add(1)
+		go r.readFlowJournal(i, entryChan, &wg)
+	}
+
+	// 启动一个 goroutine 等待所有 FLOW 结束后关闭 channel
+	go func() {
+		wg.Wait()
+		close(entryChan)
+	}()
+
+	// 主循环处理 Entry
 	entriesCount := 0
 	currentDB := uint64(0)
+	flowStats := make(map[int]int) // 每个 FLOW 的 Entry 计数
 
-	for {
-		// 检查取消信号
-		select {
-		case <-r.ctx.Done():
-			log.Println("  • 收到停止信号")
-			return nil
-		default:
-		}
-
-		// 读取一条 Entry
-		entry, err := reader.ReadEntry()
-		if err != nil {
-			if err == io.EOF {
-				log.Println("  • Journal 流结束（EOF）")
-				return nil
-			}
-			return fmt.Errorf("读取 Journal Entry 失败: %w", err)
+	for flowEntry := range entryChan {
+		// 检查错误
+		if flowEntry.Error != nil {
+			log.Printf("  ✗ FLOW-%d 错误: %v", flowEntry.FlowID, flowEntry.Error)
+			continue
 		}
 
 		entriesCount++
+		flowStats[flowEntry.FlowID]++
+		entry := flowEntry.Entry
 
 		// 更新当前数据库
 		if entry.Opcode == OpSelect {
@@ -674,12 +685,92 @@ func (r *Replicator) receiveJournal() error {
 		}
 
 		// 显示解析的命令
-		r.displayEntry(entry, currentDB, entriesCount)
+		r.displayFlowEntry(flowEntry.FlowID, entry, currentDB, entriesCount)
 
-		// 每 100 条打印一次统计
-		if entriesCount%100 == 0 {
+		// 每 50 条打印一次统计
+		if entriesCount%50 == 0 {
 			log.Printf("  📊 已接收 %d 条 Journal 条目", entriesCount)
+			for fid, count := range flowStats {
+				log.Printf("    FLOW-%d: %d 条", fid, count)
+			}
 		}
+	}
+
+	log.Println("  • 所有 FLOW 的 Journal 流已结束")
+	return nil
+}
+
+// readFlowJournal 读取单个 FLOW 的 Journal 流
+func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	reader := NewJournalReader(r.flowConns[flowID])
+	log.Printf("  [FLOW-%d] 开始接收 Journal 流", flowID)
+
+	for {
+		// 检查取消信号
+		select {
+		case <-r.ctx.Done():
+			log.Printf("  [FLOW-%d] 收到停止信号", flowID)
+			return
+		default:
+		}
+
+		// 读取一条 Entry
+		entry, err := reader.ReadEntry()
+		if err != nil {
+			if err == io.EOF {
+				log.Printf("  [FLOW-%d] Journal 流结束（EOF）", flowID)
+				return
+			}
+			// 发送错误到 channel
+			entryChan <- &FlowEntry{
+				FlowID: flowID,
+				Error:  fmt.Errorf("读取失败: %w", err),
+			}
+			return
+		}
+
+		// 发送 Entry 到 channel
+		entryChan <- &FlowEntry{
+			FlowID: flowID,
+			Entry:  entry,
+		}
+	}
+}
+
+// displayFlowEntry 显示带 FLOW ID 的 Journal Entry
+func (r *Replicator) displayFlowEntry(flowID int, entry *JournalEntry, currentDB uint64, count int) {
+	// 根据 opcode 不同显示不同格式
+	switch entry.Opcode {
+	case OpSelect:
+		log.Printf("  [%d] FLOW-%d: SELECT DB=%d", count, flowID, entry.DbIndex)
+
+	case OpLSN:
+		log.Printf("  [%d] FLOW-%d: LSN %d", count, flowID, entry.LSN)
+
+	case OpPing:
+		log.Printf("  [%d] FLOW-%d: PING", count, flowID)
+
+	case OpCommand:
+		// 格式化参数
+		args := make([]string, len(entry.Args))
+		for i, arg := range entry.Args {
+			if len(arg) > 50 {
+				args[i] = fmt.Sprintf("\"%s...\"", arg[:50])
+			} else {
+				args[i] = fmt.Sprintf("\"%s\"", arg)
+			}
+		}
+		log.Printf("  [%d] FLOW-%d: %s %s (txid=%d, shards=%d)",
+			count, flowID, entry.Command, strings.Join(args, " "), entry.TxID, entry.ShardCnt)
+
+	case OpExpired:
+		log.Printf("  [%d] FLOW-%d: EXPIRED %s (txid=%d)",
+			count, flowID, entry.Command, entry.TxID)
+
+	default:
+		log.Printf("  [%d] FLOW-%d: %s", count, flowID, entry.Opcode)
 	}
 }
 
