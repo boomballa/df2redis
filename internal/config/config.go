@@ -10,11 +10,12 @@ import (
 
 // Config holds migration configuration.
 type Config struct {
-	Source     SourceConfig  `json:"source"`
-	Target     TargetConfig  `json:"target"`
-	Migrate    MigrateConfig `json:"migrate"`
-	StateDir   string        `json:"stateDir"`
-	StatusFile string        `json:"statusFile"`
+	Source     SourceConfig     `json:"source"`
+	Target     TargetConfig     `json:"target"`
+	Migrate    MigrateConfig    `json:"migrate"`
+	Checkpoint CheckpointConfig `json:"checkpoint"`
+	StateDir   string           `json:"stateDir"`
+	StatusFile string           `json:"statusFile"`
 
 	path         string
 	stateDirPath string
@@ -68,6 +69,13 @@ type MigrateConfig struct {
 	ShakeConfigFile string  `json:"shakeConfigFile"`
 	AutoBgsave      Boolish `json:"autoBgsave"`
 	BgsaveTimeout   int     `json:"bgsaveTimeoutSeconds"`
+}
+
+// CheckpointConfig 配置 LSN 检查点持久化
+type CheckpointConfig struct {
+	Enabled  bool   `json:"enabled"`          // 是否启用 checkpoint
+	Interval int    `json:"intervalSeconds"`  // 自动保存间隔（秒）
+	Path     string `json:"path"`             // checkpoint 文件路径（可选，默认为 stateDir/checkpoint.json）
 }
 
 // ValidationError collects configuration issues.
@@ -146,6 +154,12 @@ func (c *Config) ApplyDefaults() {
 	if c.Migrate.BgsaveTimeout == 0 {
 		c.Migrate.BgsaveTimeout = 300
 	}
+	// Checkpoint 默认值
+	if c.Checkpoint.Interval == 0 {
+		c.Checkpoint.Interval = 10 // 默认 10 秒
+	}
+	// Checkpoint.Enabled 默认为 false，需要显式启用
+	// Checkpoint.Path 默认为空，后续在 Replicator 中使用 stateDir/checkpoint.json
 }
 
 // Validate ensures config is usable.
@@ -195,6 +209,16 @@ func (c *Config) ResolveStateDir() string {
 // StatusFilePath returns absolute path to status file.
 func (c *Config) StatusFilePath() string {
 	return c.statusPath
+}
+
+// ResolveCheckpointPath 返回 checkpoint 文件的绝对路径
+func (c *Config) ResolveCheckpointPath() string {
+	if c.Checkpoint.Path != "" {
+		// 如果配置了自定义路径，解析它
+		return c.ResolvePath(c.Checkpoint.Path)
+	}
+	// 默认使用 stateDir/checkpoint.json
+	return filepath.Join(c.stateDirPath, "checkpoint.json")
 }
 
 // EnsureStateDir makes sure state directory exists.

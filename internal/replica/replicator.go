@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"df2redis/internal/checkpoint"
 	"df2redis/internal/cluster"
 	"df2redis/internal/config"
 	"df2redis/internal/redisx"
@@ -31,6 +32,9 @@ type Replicator struct {
 	// Redis Cluster 客户端（用于命令重放）
 	clusterClient *cluster.ClusterClient
 
+	// Checkpoint 管理器
+	checkpointMgr *checkpoint.Manager
+
 	// 复制状态
 	state      ReplicaState
 	masterInfo MasterInfo
@@ -42,22 +46,41 @@ type Replicator struct {
 
 	// 统计信息
 	replayStats ReplayStats
+
+	// Checkpoint 自动保存
+	checkpointInterval time.Duration
+	lastCheckpointTime time.Time
+
+	// 用于等待 Start() 完成的 channel
+	done chan struct{}
 }
 
 // NewReplicator 创建一个新的复制器
 func NewReplicator(cfg *config.Config) *Replicator {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// Checkpoint 文件路径：使用配置中的路径或默认路径
+	checkpointPath := cfg.ResolveCheckpointPath()
+
+	// Checkpoint 保存间隔：从配置读取（默认 10 秒）
+	checkpointInterval := time.Duration(cfg.Checkpoint.Interval) * time.Second
+
 	return &Replicator{
-		cfg:           cfg,
-		ctx:           ctx,
-		cancel:        cancel,
-		state:         StateDisconnected,
-		listeningPort: 6380, // 默认端口
+		cfg:                cfg,
+		ctx:                ctx,
+		cancel:             cancel,
+		state:              StateDisconnected,
+		listeningPort:      6380, // 默认端口
+		checkpointMgr:      checkpoint.NewManager(checkpointPath),
+		checkpointInterval: checkpointInterval,
+		done:               make(chan struct{}),
 	}
 }
 
 // Start 启动复制流程
 func (r *Replicator) Start() error {
+	defer close(r.done) // 确保退出时通知 Stop()
+
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	log.Println("🚀 启动 Dragonfly 复制器")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -128,14 +151,14 @@ func (r *Replicator) Start() error {
 // Stop 停止复制
 func (r *Replicator) Stop() {
 	log.Println("⏸  停止复制器...")
+
+	// 先取消上下文
 	r.cancel()
 
-	// 关闭主连接
+	// 立即关闭所有连接，强制阻塞的读取操作失败
 	if r.mainConn != nil {
 		r.mainConn.Close()
 	}
-
-	// 关闭所有 FLOW 连接
 	for i, conn := range r.flowConns {
 		if conn != nil {
 			log.Printf("  • 关闭 FLOW-%d 连接", i)
@@ -143,7 +166,12 @@ func (r *Replicator) Stop() {
 		}
 	}
 
+	// 等待 Start() 完成（包括 checkpoint 保存）
+	log.Println("  • 等待所有 goroutine 退出...")
+	<-r.done
+
 	r.state = StateStopped
+	log.Println("✓ 复制器已停止")
 }
 
 // connect 连接到 Dragonfly 主库（建立主连接用于握手）
@@ -719,28 +747,43 @@ func (r *Replicator) receiveJournal() error {
 		r.replayStats.TotalCommands++
 		r.replayStats.mu.Unlock()
 
-		if err := r.replayCommand(entry); err != nil {
+		if err := r.replayCommand(flowEntry.FlowID, entry); err != nil {
 			log.Printf("  ✗ 重放失败: %v", err)
 		}
+
+		// 尝试自动保存 checkpoint
+		r.tryAutoSaveCheckpoint()
 
 		// 每 50 条打印一次统计
 		if entriesCount%50 == 0 {
 			r.replayStats.mu.Lock()
-			log.Printf("  📊 统计: 总计=%d, 成功=%d, 跳过=%d, 失败=%d, 最新LSN=%d",
+			log.Printf("  📊 统计: 总计=%d, 成功=%d, 跳过=%d, 失败=%d",
 				r.replayStats.TotalCommands,
 				r.replayStats.ReplayedOK,
 				r.replayStats.Skipped,
-				r.replayStats.Failed,
-				r.replayStats.LastLSN)
-			r.replayStats.mu.Unlock()
+				r.replayStats.Failed)
 
+			// 打印每个 FLOW 的统计
 			for fid, count := range flowStats {
-				log.Printf("    FLOW-%d: %d 条", fid, count)
+				lsn := r.replayStats.FlowLSNs[fid]
+				log.Printf("    FLOW-%d: %d 条, LSN=%d", fid, count, lsn)
 			}
+			r.replayStats.mu.Unlock()
 		}
 	}
 
 	log.Println("  • 所有 FLOW 的 Journal 流已结束")
+
+	// 最终保存 checkpoint（如果启用）
+	if r.cfg.Checkpoint.Enabled {
+		log.Println("  💾 保存最终 checkpoint...")
+		if err := r.saveCheckpoint(); err != nil {
+			log.Printf("  ⚠ 保存最终 checkpoint 失败: %v", err)
+		} else {
+			log.Println("  ✓ Checkpoint 已保存")
+		}
+	}
+
 	return nil
 }
 
@@ -885,12 +928,12 @@ type ReplayStats struct {
 	ReplayedOK     int64
 	Skipped        int64
 	Failed         int64
-	LastLSN        uint64
+	FlowLSNs       map[int]uint64 // 每个 FLOW 的最新 LSN
 	LastReplayTime time.Time
 }
 
 // replayCommand 重放单条命令到 Redis Cluster
-func (r *Replicator) replayCommand(entry *JournalEntry) error {
+func (r *Replicator) replayCommand(flowID int, entry *JournalEntry) error {
 	switch entry.Opcode {
 	case OpSelect:
 		// Redis Cluster 只有 DB 0，忽略 SELECT 命令
@@ -909,7 +952,10 @@ func (r *Replicator) replayCommand(entry *JournalEntry) error {
 	case OpLSN:
 		// 记录 LSN，不执行
 		r.replayStats.mu.Lock()
-		r.replayStats.LastLSN = entry.LSN
+		if r.replayStats.FlowLSNs == nil {
+			r.replayStats.FlowLSNs = make(map[int]uint64)
+		}
+		r.replayStats.FlowLSNs[flowID] = entry.LSN
 		r.replayStats.mu.Unlock()
 		return nil
 
@@ -996,4 +1042,45 @@ func isGlobalCommand(cmd string) bool {
 		"DFLYCLUSTER FLUSHSLOTS": true,
 	}
 	return globalCmds[cmd]
+}
+
+// saveCheckpoint 保存当前 checkpoint
+func (r *Replicator) saveCheckpoint() error {
+	r.replayStats.mu.Lock()
+	defer r.replayStats.mu.Unlock()
+
+	// 构建 checkpoint
+	cp := &checkpoint.Checkpoint{
+		ReplicationID: r.masterInfo.ReplID,
+		SessionID:     r.masterInfo.SyncID,
+		NumFlows:      len(r.flows),
+		FlowLSNs:      make(map[int]uint64),
+	}
+
+	// 复制 FlowLSNs
+	for flowID, lsn := range r.replayStats.FlowLSNs {
+		cp.FlowLSNs[flowID] = lsn
+	}
+
+	// 保存到文件
+	if err := r.checkpointMgr.Save(cp); err != nil {
+		return fmt.Errorf("保存 checkpoint 失败: %w", err)
+	}
+
+	r.lastCheckpointTime = time.Now()
+	return nil
+}
+
+// tryAutoSaveCheckpoint 尝试自动保存 checkpoint（如果时间到了）
+func (r *Replicator) tryAutoSaveCheckpoint() {
+	// 检查是否启用了 checkpoint
+	if !r.cfg.Checkpoint.Enabled {
+		return
+	}
+
+	if time.Since(r.lastCheckpointTime) >= r.checkpointInterval {
+		if err := r.saveCheckpoint(); err != nil {
+			log.Printf("  ⚠ 自动保存 checkpoint 失败: %v", err)
+		}
+	}
 }
