@@ -16,6 +16,12 @@ target:
 stateDir: ./out               # 状态文件目录
 statusFile: ./out/status.json
 
+# Checkpoint 配置（LSN 持久化）
+checkpoint:
+  enabled: true               # 是否启用 checkpoint（默认 false）
+  intervalSeconds: 10         # 自动保存间隔（秒，默认 10）
+  path: ""                    # checkpoint 文件路径（可选，默认为 stateDir/checkpoint.json）
+
 # 注意：replicate 命令目前仅测试握手流程
 # 以下参数仅为通过配置校验，实际不使用
 migrate:
