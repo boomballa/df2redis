@@ -25,6 +25,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **备选方案：**
 如果用户也不确定，再去 `dragonfly/` 目录下查看源码（`src/server/dflycmd.cc`、`src/server/journal/`等）。
 
+**重要原则：**
+- **禁止盲目尝试和猜测**：遇到 Dragonfly 协议细节、数据格式、源码实现等不确定的问题时，**必须先向用户确认**，不要浪费 token 做无效尝试
+- **主动寻求帮助**：用户可以帮忙查询 Dragonfly 源码、验证协议细节、确认数据格式等
+- **高效协作**：通过提前确认关键细节，避免反复试错，提高开发效率
+
 ### 沟通语言
 - **IMPORTANT**: 必须使用中文回答用户的所有问题和进行日常交流
 - 代码注释保持中文（与项目现有风格一致）

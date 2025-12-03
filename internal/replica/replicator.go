@@ -1120,6 +1120,18 @@ func (r *Replicator) writeRDBEntry(entry *RDBEntry) error {
 	case RDB_TYPE_STRING:
 		return r.writeString(entry)
 
+	case RDB_TYPE_HASH, RDB_TYPE_HASH_ZIPLIST:
+		return r.writeHash(entry)
+
+	case RDB_TYPE_LIST_QUICKLIST_2, 18: // 18 是 Dragonfly 使用的 List Listpack 类型
+		return r.writeList(entry)
+
+	case RDB_TYPE_SET, RDB_TYPE_SET_INTSET:
+		return r.writeSet(entry)
+
+	case RDB_TYPE_ZSET_2, RDB_TYPE_ZSET_ZIPLIST:
+		return r.writeZSet(entry)
+
 	default:
 		return fmt.Errorf("暂不支持的 RDB 类型: %d", entry.Type)
 	}
@@ -1142,6 +1154,160 @@ func (r *Replicator) writeString(entry *RDBEntry) error {
 	// 3. 设置 TTL（如果有）
 	if entry.ExpireMs > 0 {
 		// 计算剩余 TTL（毫秒）
+		remainingMs := entry.ExpireMs - getCurrentTimeMillis()
+		if remainingMs > 0 {
+			_, err := r.clusterClient.Do("PEXPIRE", entry.Key, fmt.Sprintf("%d", remainingMs))
+			if err != nil {
+				return fmt.Errorf("PEXPIRE 命令失败: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// writeHash 写入 Hash 类型的键值对
+func (r *Replicator) writeHash(entry *RDBEntry) error {
+	// 1. 提取值
+	hashVal, ok := entry.Value.(*HashValue)
+	if !ok {
+		return fmt.Errorf("Hash 类型值转换失败")
+	}
+
+	// 2. 删除旧键（避免残留字段）
+	_, _ = r.clusterClient.Do("DEL", entry.Key)
+
+	// 3. 写入所有字段（使用 HSET key field1 value1 field2 value2 ...）
+	log.Printf("  [DEBUG] writeHash: key=%s, fields=%d", entry.Key, len(hashVal.Fields))
+	if len(hashVal.Fields) > 0 {
+		args := []string{entry.Key}
+		for field, value := range hashVal.Fields {
+			args = append(args, field, value)
+			log.Printf("  [DEBUG]   field=%s, value=%s", field, value)
+		}
+		log.Printf("  [DEBUG] 执行 HSET 命令，参数数量=%d", len(args))
+		_, err := r.clusterClient.Do("HSET", args...)
+		if err != nil {
+			return fmt.Errorf("HSET 命令失败: %w", err)
+		}
+		log.Printf("  [DEBUG] HSET 命令执行成功")
+	} else {
+		log.Printf("  [DEBUG] 字段为空，跳过写入")
+	}
+
+	// 4. 设置 TTL（如果有）
+	if entry.ExpireMs > 0 {
+		remainingMs := entry.ExpireMs - getCurrentTimeMillis()
+		if remainingMs > 0 {
+			_, err := r.clusterClient.Do("PEXPIRE", entry.Key, fmt.Sprintf("%d", remainingMs))
+			if err != nil {
+				return fmt.Errorf("PEXPIRE 命令失败: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// writeList 写入 List 类型的键值对
+func (r *Replicator) writeList(entry *RDBEntry) error {
+	// 1. 提取值
+	listVal, ok := entry.Value.(*ListValue)
+	if !ok {
+		return fmt.Errorf("List 类型值转换失败")
+	}
+
+	// 2. 删除旧键
+	_, _ = r.clusterClient.Do("DEL", entry.Key)
+
+	// 3. 写入所有元素（使用 RPUSH key element1 element2 ...）
+	if len(listVal.Elements) > 0 {
+		args := []string{entry.Key}
+		for _, elem := range listVal.Elements {
+			args = append(args, elem)
+		}
+		_, err := r.clusterClient.Do("RPUSH", args...)
+		if err != nil {
+			return fmt.Errorf("RPUSH 命令失败: %w", err)
+		}
+	}
+
+	// 4. 设置 TTL（如果有）
+	if entry.ExpireMs > 0 {
+		remainingMs := entry.ExpireMs - getCurrentTimeMillis()
+		if remainingMs > 0 {
+			_, err := r.clusterClient.Do("PEXPIRE", entry.Key, fmt.Sprintf("%d", remainingMs))
+			if err != nil {
+				return fmt.Errorf("PEXPIRE 命令失败: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// writeSet 写入 Set 类型的键值对
+func (r *Replicator) writeSet(entry *RDBEntry) error {
+	// 1. 提取值
+	setVal, ok := entry.Value.(*SetValue)
+	if !ok {
+		return fmt.Errorf("Set 类型值转换失败")
+	}
+
+	// 2. 删除旧键
+	_, _ = r.clusterClient.Do("DEL", entry.Key)
+
+	// 3. 写入所有成员（使用 SADD key member1 member2 ...）
+	if len(setVal.Members) > 0 {
+		args := []string{entry.Key}
+		for _, member := range setVal.Members {
+			args = append(args, member)
+		}
+		_, err := r.clusterClient.Do("SADD", args...)
+		if err != nil {
+			return fmt.Errorf("SADD 命令失败: %w", err)
+		}
+	}
+
+	// 4. 设置 TTL（如果有）
+	if entry.ExpireMs > 0 {
+		remainingMs := entry.ExpireMs - getCurrentTimeMillis()
+		if remainingMs > 0 {
+			_, err := r.clusterClient.Do("PEXPIRE", entry.Key, fmt.Sprintf("%d", remainingMs))
+			if err != nil {
+				return fmt.Errorf("PEXPIRE 命令失败: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// writeZSet 写入 ZSet 类型的键值对
+func (r *Replicator) writeZSet(entry *RDBEntry) error {
+	// 1. 提取值
+	zsetVal, ok := entry.Value.(*ZSetValue)
+	if !ok {
+		return fmt.Errorf("ZSet 类型值转换失败")
+	}
+
+	// 2. 删除旧键
+	_, _ = r.clusterClient.Do("DEL", entry.Key)
+
+	// 3. 写入所有成员（使用 ZADD key score1 member1 score2 member2 ...）
+	if len(zsetVal.Members) > 0 {
+		args := []string{entry.Key}
+		for _, zm := range zsetVal.Members {
+			args = append(args, fmt.Sprintf("%f", zm.Score), zm.Member)
+		}
+		_, err := r.clusterClient.Do("ZADD", args...)
+		if err != nil {
+			return fmt.Errorf("ZADD 命令失败: %w", err)
+		}
+	}
+
+	// 4. 设置 TTL（如果有）
+	if entry.ExpireMs > 0 {
 		remainingMs := entry.ExpireMs - getCurrentTimeMillis()
 		if remainingMs > 0 {
 			_, err := r.clusterClient.Do("PEXPIRE", entry.Key, fmt.Sprintf("%d", remainingMs))
