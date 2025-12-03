@@ -1,7 +1,6 @@
 package replica
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -486,11 +485,11 @@ func (r *Replicator) expectOK(resp interface{}) error {
 	return nil
 }
 
-// receiveSnapshot 并行接收所有 FLOW 的 RDB 快照
-// 流程：读取 RDB 数据直到 FULLSYNC_END (0xC8) 标记
+// receiveSnapshot 并行接收和解析所有 FLOW 的 RDB 快照
+// 流程：使用 RDB 解析器解析数据，并写入目标 Redis
 func (r *Replicator) receiveSnapshot() error {
 	log.Println("")
-	log.Println("📦 开始并行接收 RDB 快照...")
+	log.Println("📦 开始并行接收和解析 RDB 快照...")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	numFlows := len(r.flows)
@@ -498,31 +497,44 @@ func (r *Replicator) receiveSnapshot() error {
 		return fmt.Errorf("没有可用的 FLOW")
 	}
 
-	log.Printf("  • 将使用 %d 个 FLOW 并行接收 RDB 快照", numFlows)
-	log.Printf("  • 目标：读取到 FULLSYNC_END 标记 (0xC8 + 8 零字节)")
+	log.Printf("  • 将使用 %d 个 FLOW 并行接收和解析 RDB 快照", numFlows)
 
 	// 使用 WaitGroup 等待所有 goroutine 完成
 	var wg sync.WaitGroup
 	errChan := make(chan error, numFlows)
 
-	// FULLSYNC_END 标记：0xC8 + 8 个零字节
-	fullsyncEndMarker := []byte{0xC8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	// 统计信息
+	type FlowStats struct {
+		KeyCount     int
+		SkippedCount int
+		ErrorCount   int
+	}
+	statsMap := make(map[int]*FlowStats)
+	var statsMu sync.Mutex
 
-	// 为每个 FLOW 启动一个 goroutine 接收 RDB 数据
+	// 为每个 FLOW 启动一个 goroutine 接收和解析 RDB 数据
 	for i := 0; i < numFlows; i++ {
+		statsMap[i] = &FlowStats{}
 		wg.Add(1)
 		go func(flowID int) {
 			defer wg.Done()
 
 			flowConn := r.flowConns[flowID]
+			stats := statsMap[flowID]
 
-			log.Printf("  [FLOW-%d] 开始读取 RDB 数据...", flowID)
+			log.Printf("  [FLOW-%d] 开始解析 RDB 数据...", flowID)
 
-			// 从 TCP 连接读取数据直到找到 FULLSYNC_END 标记
-			buf := make([]byte, 8192)
-			totalBytes := uint64(0)
-			searchBuf := []byte{}
+			// 创建 RDB 解析器
+			parser := NewRDBParser(flowConn, flowID)
 
+			// 1. 解析 RDB 头部
+			if err := parser.ParseHeader(); err != nil {
+				errChan <- fmt.Errorf("FLOW-%d: 解析 RDB 头部失败: %w", flowID, err)
+				return
+			}
+			log.Printf("  [FLOW-%d] ✓ RDB 头部解析成功", flowID)
+
+			// 2. 逐个解析键值对
 			for {
 				// 检查取消信号
 				select {
@@ -532,37 +544,41 @@ func (r *Replicator) receiveSnapshot() error {
 				default:
 				}
 
-				// 使用 Read() 从 bufio.Reader 读取
-				n, err := flowConn.Read(buf)
+				// 解析下一个 entry
+				entry, err := parser.ParseNext()
 				if err != nil {
 					if err == io.EOF {
-						errChan <- fmt.Errorf("FLOW-%d: 连接意外关闭（未找到 FULLSYNC_END 标记）", flowID)
+						log.Printf("  [FLOW-%d] ✓ RDB 解析完成（成功=%d, 跳过=%d, 失败=%d）",
+							flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount)
 						return
 					}
-					errChan <- fmt.Errorf("FLOW-%d: 读取快照数据失败: %w", flowID, err)
+					errChan <- fmt.Errorf("FLOW-%d: 解析失败: %w", flowID, err)
 					return
 				}
 
-				totalBytes += uint64(n)
-
-				// 将新数据添加到搜索缓冲区
-				searchBuf = append(searchBuf, buf[:n]...)
-
-				// 在搜索缓冲区中查找 FULLSYNC_END 标记
-				if bytes.Contains(searchBuf, fullsyncEndMarker) {
-					log.Printf("  [FLOW-%d] ✓ 找到 FULLSYNC_END 标记（已接收 %d 字节）", flowID, totalBytes)
-					return
+				// 跳过已过期的键
+				if entry.IsExpired() {
+					statsMu.Lock()
+					stats.SkippedCount++
+					statsMu.Unlock()
+					continue
 				}
 
-				// 限制搜索缓冲区大小（保留最后的 N 字节，足够容纳标记）
-				maxSearchBuf := len(fullsyncEndMarker) * 2
-				if len(searchBuf) > maxSearchBuf {
-					searchBuf = searchBuf[len(searchBuf)-maxSearchBuf:]
-				}
+				// 写入 Redis
+				if err := r.writeRDBEntry(entry); err != nil {
+					log.Printf("  [FLOW-%d] ⚠ 写入失败 (key=%s): %v", flowID, entry.Key, err)
+					statsMu.Lock()
+					stats.ErrorCount++
+					statsMu.Unlock()
+				} else {
+					statsMu.Lock()
+					stats.KeyCount++
+					statsMu.Unlock()
 
-				// 每 10MB 打印一次进度
-				if totalBytes%(10*1024*1024) == 0 && totalBytes > 0 {
-					log.Printf("  [FLOW-%d] • 已接收: %d MB", flowID, totalBytes/(1024*1024))
+					// 每 100 个键打印一次进度
+					if stats.KeyCount%100 == 0 {
+						log.Printf("  [FLOW-%d] • 已导入: %d 个键", flowID, stats.KeyCount)
+					}
 				}
 			}
 		}(i)
@@ -579,7 +595,20 @@ func (r *Replicator) receiveSnapshot() error {
 		}
 	}
 
-	log.Println("  ✓ 所有 FLOW 已读取到 FULLSYNC_END 标记")
+	// 打印最终统计
+	totalKeys := 0
+	totalSkipped := 0
+	totalErrors := 0
+	for flowID, stats := range statsMap {
+		totalKeys += stats.KeyCount
+		totalSkipped += stats.SkippedCount
+		totalErrors += stats.ErrorCount
+		log.Printf("  [FLOW-%d] 统计: 成功=%d, 跳过=%d, 失败=%d",
+			flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount)
+	}
+
+	log.Printf("  ✓ RDB 全量导入完成: 总计 %d 个键, 跳过 %d 个（已过期）, 失败 %d 个",
+		totalKeys, totalSkipped, totalErrors)
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	return nil
 }
@@ -1083,4 +1112,44 @@ func (r *Replicator) tryAutoSaveCheckpoint() {
 			log.Printf("  ⚠ 自动保存 checkpoint 失败: %v", err)
 		}
 	}
+}
+
+// writeRDBEntry 将 RDB entry 写入 Redis
+func (r *Replicator) writeRDBEntry(entry *RDBEntry) error {
+	switch entry.Type {
+	case RDB_TYPE_STRING:
+		return r.writeString(entry)
+
+	default:
+		return fmt.Errorf("暂不支持的 RDB 类型: %d", entry.Type)
+	}
+}
+
+// writeString 写入 String 类型的键值对
+func (r *Replicator) writeString(entry *RDBEntry) error {
+	// 1. 提取值
+	strVal, ok := entry.Value.(*StringValue)
+	if !ok {
+		return fmt.Errorf("String 类型值转换失败")
+	}
+
+	// 2. 写入键值
+	_, err := r.clusterClient.Do("SET", entry.Key, strVal.Value)
+	if err != nil {
+		return fmt.Errorf("SET 命令失败: %w", err)
+	}
+
+	// 3. 设置 TTL（如果有）
+	if entry.ExpireMs > 0 {
+		// 计算剩余 TTL（毫秒）
+		remainingMs := entry.ExpireMs - getCurrentTimeMillis()
+		if remainingMs > 0 {
+			_, err := r.clusterClient.Do("PEXPIRE", entry.Key, fmt.Sprintf("%d", remainingMs))
+			if err != nil {
+				return fmt.Errorf("PEXPIRE 命令失败: %w", err)
+			}
+		}
+	}
+
+	return nil
 }
