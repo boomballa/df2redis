@@ -60,6 +60,12 @@ Unlike traditional approaches that rely on proxy-based dual-write mechanisms, df
   - Redis Cluster with automatic slot routing
   - MOVED/ASK error handling
 
+- ✅ **Data Validation**
+  - Integrated with [redis-full-check](https://github.com/alibaba/RedisFullCheck)
+  - Three validation modes: full/outline/length comparison
+  - Detailed inconsistency reports with JSON output
+  - Performance controls (QPS limiting, parallel tuning)
+
 ---
 
 ## 🚀 Quick Start
@@ -167,6 +173,23 @@ The tool outputs detailed progress information:
   → 延迟: 2.3ms
 ```
 
+#### 4. Validate Data Consistency
+
+After replication, validate data consistency using the integrated check command:
+
+```bash
+# Quick validation (key outline mode - recommended)
+./bin/df2redis check --config config.yaml --mode outline
+
+# Full validation (complete value comparison)
+./bin/df2redis check --config config.yaml --mode full --qps 200
+
+# View detailed results
+cat ./check-results/check_*.json | jq '.'
+```
+
+See [Data Validation Guide](docs/data-validation.md) for detailed usage.
+
 ---
 
 ## 🏗️ Architecture
@@ -225,6 +248,7 @@ df2redis/
 │   │   ├── rdb_complex.go  # Complex type parsers (Hash/List/Set/ZSet)
 │   │   ├── journal.go      # Journal stream processor
 │   │   └── checkpoint.go   # LSN persistence
+│   ├── checker/            # Data validation (redis-full-check wrapper)
 │   ├── config/             # Configuration management
 │   ├── redisx/             # Redis client (RESP protocol)
 │   └── util/               # Utilities
@@ -243,6 +267,7 @@ df2redis/
 - [Phase 3: Incremental Sync Implementation](docs/Phase-3.md)
 - [Phase 4: LSN Persistence and Checkpointing](docs/Phase-4.md)
 - [Phase 5: RDB Complex Type Parsing](docs/phase5-rdb-complex-types.md)
+- [Data Validation Guide](docs/data-validation.md)
 - [Architecture Overview](docs/architecture.md)
 
 ### Configuration Reference

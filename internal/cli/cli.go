@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"df2redis/internal/checker"
 	"df2redis/internal/config"
 	"df2redis/internal/pipeline"
 	"df2redis/internal/replica"
@@ -37,6 +38,8 @@ func Execute(args []string) int {
 		return runMigrate(args[1:])
 	case "replicate":
 		return runReplicate(args[1:])
+	case "check":
+		return runCheck(args[1:])
 	case "status":
 		return runStatus(args[1:])
 	case "rollback":
@@ -368,6 +371,92 @@ func runReplicate(args []string) int {
 	}
 }
 
+func runCheck(args []string) int {
+	fs := flag.NewFlagSet("check", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	var (
+		configPath string
+		mode       string
+		qps        int
+		parallel   int
+		resultDir  string
+		binary     string
+	)
+	fs.StringVar(&configPath, "config", "", "配置文件路径 (YAML)")
+	fs.StringVar(&configPath, "c", "", "配置文件路径 (YAML)")
+	fs.StringVar(&mode, "mode", "outline", "校验模式: full(全量值对比)/outline(键轮廓对比)/length(值长度对比)")
+	fs.IntVar(&qps, "qps", 500, "QPS 限制")
+	fs.IntVar(&parallel, "parallel", 4, "并发度")
+	fs.StringVar(&resultDir, "result-dir", "./check-results", "结果输出目录")
+	fs.StringVar(&binary, "binary", "redis-full-check", "redis-full-check 二进制文件路径")
+
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		log.Printf("解析参数失败: %v", err)
+		return 1
+	}
+	if configPath == "" {
+		log.Println("必须提供 --config")
+		fs.Usage()
+		return 2
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		log.Printf("配置加载失败: %v", err)
+		return 2
+	}
+
+	// 构建 checker 配置
+	checkerMode := checker.ModeKeyOutline
+	switch mode {
+	case "full":
+		checkerMode = checker.ModeFullValue
+	case "outline":
+		checkerMode = checker.ModeKeyOutline
+	case "length":
+		checkerMode = checker.ModeValueLength
+	default:
+		log.Printf("未知的校验模式: %s", mode)
+		return 2
+	}
+
+	checkerCfg := checker.Config{
+		SourceAddr:     cfg.Source.Addr,
+		SourcePassword: cfg.Source.Password,
+		TargetAddr:     cfg.Target.Seed,
+		TargetPassword: cfg.Target.Password,
+		Mode:           checkerMode,
+		QPS:            qps,
+		Parallel:       parallel,
+		ResultDir:      resultDir,
+		BinaryPath:     binary,
+	}
+
+	// 创建 checker
+	c := checker.NewChecker(checkerCfg)
+
+	// 执行校验
+	ctx := context.Background()
+	result, err := c.Run(ctx)
+	if err != nil {
+		log.Printf("校验执行失败: %v", err)
+		return 1
+	}
+
+	// 打印结果
+	c.PrintResult(result)
+
+	// 如果有不一致的 key，返回非零退出码
+	if result.InconsistentKeys > 0 {
+		return 1
+	}
+
+	return 0
+}
+
 func printUsage() {
 	binary := filepath.Base(os.Args[0])
 	fmt.Printf(`df2redis - Dragonfly → Redis 迁移工具 (原型)
@@ -379,6 +468,7 @@ func printUsage() {
   prepare    预先检查环境、依赖与配置
   migrate    执行迁移流程 (支持 --dry-run)
   replicate  启动 Dragonfly 复制器（测试握手）
+  check      数据一致性校验（基于 redis-full-check）
   status     查看当前迁移状态
   rollback   执行回滚到 Dragonfly 的流程
   dashboard  启动独立仪表盘
@@ -388,5 +478,6 @@ func printUsage() {
 示例:
   %[1]s migrate --config examples/migrate.sample.yaml --dry-run
   %[1]s replicate --config examples/migrate.sample.yaml
+  %[1]s check --config examples/migrate.sample.yaml --mode outline
 `, binary)
 }
