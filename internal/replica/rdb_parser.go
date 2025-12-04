@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
 	"time"
 )
 
@@ -101,6 +102,16 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 				return nil, fmt.Errorf("读取 db 索引失败: %w", err)
 			}
 			p.currentDB = int(dbIndex)
+			continue
+
+		case RDB_OPCODE_JOURNAL_OFFSET:
+			// Dragonfly 特有：JOURNAL_OFFSET 标记
+			// 读取并丢弃 8 字节 offset（对于空 FLOW，这是第一个 opcode）
+			offset := make([]byte, 8)
+			if _, err := io.ReadFull(p.reader, offset); err != nil {
+				return nil, fmt.Errorf("读取 JOURNAL_OFFSET 失败: %w", err)
+			}
+			// 继续读取下一个 opcode
 			continue
 
 		case RDB_OPCODE_FULLSYNC_END:
