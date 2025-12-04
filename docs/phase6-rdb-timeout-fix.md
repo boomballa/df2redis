@@ -254,9 +254,120 @@ git commit -m "fix(replica): remove configurable RDB timeout and use fixed 60s w
 
 三层机制互补，确保可靠性。
 
+## Phase 6.2: EOF Token 读取修复
+
+### 用户测试发现的新问题
+
+在应用 Phase 6.1 的超时修复后,用户测试发现:
+
+**现象:**
+- ✅ 数据成功同步到目标端(12 个键)
+- ❌ 60 秒后仍然出现超时错误
+- ❌ 新增键未触发增量同步
+- ❌ 程序卡在全量同步阶段,未进入 stable sync
+
+**用户反馈:**
+> "那证明我们的程序卡在全量阶段了,并没有进入stable sync阶段,所以并没有触发增量同步。"
+
+### 根本原因分析
+
+通过分析 `internal/replica/replicator.go:545-548` 发现:
+
+```go
+if err == io.EOF {
+    log.Printf("  [FLOW-%d] ✓ RDB 解析完成...")
+    return  // ❌ goroutine 立即退出,未读取 EOF Token!
+}
+```
+
+**问题链:**
+1. RDB 解析完成,返回 `io.EOF`
+2. Goroutine 立即 `return`,退出
+3. 40 字节 EOF Token 仍留在 socket 缓冲区
+4. 连接变为空闲
+5. 60 秒读取超时触发
+6. 从未发送 `DFLY STARTSTABLE`
+7. 从未进入 Journal 接收模式
+
+### 数据流时序确认
+
+根据用户提供的 Dragonfly 源码分析,数据流顺序为:
+
+```
+[RDB data]
+[RDB_OPCODE_JOURNAL_OFFSET (0xD3) + offset]
+[RDB_OPCODE_FULLSYNC_END (0xC8) + 8 zero bytes]
+[RDB_OPCODE_EOF (0xFF) + 8 byte checksum]  ← RDB Parser 在此返回 io.EOF
+[40-byte EOF Token]  ← 紧接着发送,中间无间隔
+[Journal data stream...]  ← 持续流式传输
+```
+
+**关键发现:**
+- EOF Token 在 RDB_OPCODE_EOF 之后**立即发送**
+- 中间没有其他数据或元数据块
+- Journal 流在 STARTSTABLE 之前就已开始传输
+
+### 最终解决方案
+
+在 `receiveSnapshotAndVerifyEOF()` 的 goroutine 中修改:
+
+```go
+if err == io.EOF {
+    log.Printf("  [FLOW-%d] ✓ RDB 解析完成（成功=%d, 跳过=%d, 失败=%d）",
+        flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount)
+
+    // RDB 解析完成后，立即读取 EOF Token (40 字节)
+    // 根据 Dragonfly 源码，EOF Token 紧跟在 RDB_OPCODE_EOF + checksum 之后
+    expectedToken := r.flows[flowID].EOFToken
+    eofTokenBuf := make([]byte, len(expectedToken))
+    log.Printf("  [FLOW-%d] → 正在读取 EOF Token (%d 字节)...", flowID, len(expectedToken))
+
+    if _, err := io.ReadFull(flowConn, eofTokenBuf); err != nil {
+        errChan <- fmt.Errorf("FLOW-%d: 读取 EOF Token 失败: %w", flowID, err)
+        return
+    }
+
+    // 验证 EOF Token
+    actualToken := string(eofTokenBuf)
+    if actualToken != expectedToken {
+        errChan <- fmt.Errorf("FLOW-%d: EOF Token 不匹配 (期望前8字节=%s..., 实际前8字节=%s...)",
+            flowID, expectedToken[:8], actualToken[:8])
+        return
+    }
+    log.Printf("  [FLOW-%d] ✓ EOF Token 验证成功", flowID)
+    return
+}
+```
+
+### 正确的执行流程
+
+```
+Replica 侧(我们的代码):
+1. 解析 RDB 数据(直到 RDB_OPCODE_EOF)
+2. 读取并验证 EOF Token(40 字节)  ← 新增
+3. 保存剩余缓冲区(可能包含 journal 数据)
+4. 等待所有 FLOW 完成以上步骤
+5. 发送 DFLY STARTSTABLE
+6. 切换到 Journal 流接收模式
+7. 开始增量同步 ✓
+```
+
+### 代码修改
+
+**文件:** `internal/replica/replicator.go`
+**位置:** 行 545-568
+**修改:** 在 io.EOF 处理中添加 EOF Token 读取和验证逻辑
+
+### Git 提交
+
+```bash
+git commit -m "fix(replica): read and verify EOF Token immediately after RDB parsing"
+```
+
 ## 下一步工作
 
+- [ ] **用户实际测试**: 在真实 Dragonfly 环境中验证修复
 - [ ] 测试不同数据量下的传输稳定性
 - [ ] 监控实际传输中的数据块间隔时间
+- [ ] 验证增量同步是否正常工作
 - [ ] 考虑添加传输速率统计（每秒 MB 数）
-- [ ] 完善错误处理和重试机制
