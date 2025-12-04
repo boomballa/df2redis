@@ -375,20 +375,32 @@ func runCheck(args []string) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
 	var (
-		configPath string
-		mode       string
-		qps        int
-		parallel   int
-		resultDir  string
-		binary     string
+		configPath      string
+		mode            string
+		qps             int
+		parallel        int
+		resultDir       string
+		binary          string
+		filterList      string
+		compareTimes    int
+		interval        int
+		bigKeyThreshold int
+		logFile         string
+		logLevel        string
 	)
 	fs.StringVar(&configPath, "config", "", "配置文件路径 (YAML)")
 	fs.StringVar(&configPath, "c", "", "配置文件路径 (YAML)")
-	fs.StringVar(&mode, "mode", "outline", "校验模式: full(全量值对比)/outline(键轮廓对比)/length(值长度对比)")
+	fs.StringVar(&mode, "mode", "outline", "校验模式: full/length/outline/smart")
 	fs.IntVar(&qps, "qps", 500, "QPS 限制")
 	fs.IntVar(&parallel, "parallel", 4, "并发度")
 	fs.StringVar(&resultDir, "result-dir", "./check-results", "结果输出目录")
 	fs.StringVar(&binary, "binary", "redis-full-check", "redis-full-check 二进制文件路径")
+	fs.StringVar(&filterList, "filter", "", "Key 过滤列表，支持前缀匹配 (例如: 'user:*|session:*')")
+	fs.IntVar(&compareTimes, "compare-times", 3, "对比轮次")
+	fs.IntVar(&interval, "interval", 5, "每轮对比间隔(秒)")
+	fs.IntVar(&bigKeyThreshold, "big-key-threshold", 524288, "大key阈值(字节)，仅smart模式生效")
+	fs.StringVar(&logFile, "log-file", "", "日志文件路径")
+	fs.StringVar(&logLevel, "log-level", "info", "日志级别: debug/info/warn/error")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -414,25 +426,33 @@ func runCheck(args []string) int {
 	switch mode {
 	case "full":
 		checkerMode = checker.ModeFullValue
-	case "outline":
-		checkerMode = checker.ModeKeyOutline
 	case "length":
 		checkerMode = checker.ModeValueLength
+	case "outline":
+		checkerMode = checker.ModeKeyOutline
+	case "smart":
+		checkerMode = checker.ModeSmartBigKey
 	default:
 		log.Printf("未知的校验模式: %s", mode)
 		return 2
 	}
 
 	checkerCfg := checker.Config{
-		SourceAddr:     cfg.Source.Addr,
-		SourcePassword: cfg.Source.Password,
-		TargetAddr:     cfg.Target.Seed,
-		TargetPassword: cfg.Target.Password,
-		Mode:           checkerMode,
-		QPS:            qps,
-		Parallel:       parallel,
-		ResultDir:      resultDir,
-		BinaryPath:     binary,
+		SourceAddr:      cfg.Source.Addr,
+		SourcePassword:  cfg.Source.Password,
+		TargetAddr:      cfg.Target.Seed,
+		TargetPassword:  cfg.Target.Password,
+		Mode:            checkerMode,
+		QPS:             qps,
+		Parallel:        parallel,
+		ResultDir:       resultDir,
+		BinaryPath:      binary,
+		FilterList:      filterList,
+		CompareTimes:    compareTimes,
+		Interval:        interval,
+		BigKeyThreshold: bigKeyThreshold,
+		LogFile:         logFile,
+		LogLevel:        logLevel,
 	}
 
 	// 创建 checker

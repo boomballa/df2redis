@@ -24,6 +24,8 @@ const (
 	ModeKeyOutline CheckMode = "outline"
 	// ModeValueLength 值长度对比（只对比值的长度）
 	ModeValueLength CheckMode = "length"
+	// ModeSmartBigKey 智能对比（遇到大 key 时只对比长度，否则全量对比）
+	ModeSmartBigKey CheckMode = "smart"
 )
 
 // Config 校验配置
@@ -50,6 +52,18 @@ type Config struct {
 	BatchSize int
 	// 超时时间（秒）
 	Timeout int
+	// Key 过滤列表（支持前缀匹配，例如："user:*|session:*|cache:product:*"）
+	FilterList string
+	// 对比轮次（默认 3 轮，多轮对比可减少误报）
+	CompareTimes int
+	// 每轮对比的时间间隔（秒）
+	Interval int
+	// 大 key 阈值（字节数，仅在 smart 模式下生效）
+	BigKeyThreshold int
+	// 日志文件路径
+	LogFile string
+	// 日志级别（debug/info/warn/error）
+	LogLevel string
 }
 
 // Result 校验结果
@@ -96,10 +110,22 @@ func NewChecker(config Config) *Checker {
 		config.BinaryPath = "redis-full-check"
 	}
 	if config.BatchSize <= 0 {
-		config.BatchSize = 100
+		config.BatchSize = 256 // redis-full-check 默认值
 	}
 	if config.Timeout <= 0 {
 		config.Timeout = 3600 // 默认 1 小时
+	}
+	if config.CompareTimes <= 0 {
+		config.CompareTimes = 3 // 默认 3 轮对比
+	}
+	if config.Interval <= 0 {
+		config.Interval = 5 // 默认间隔 5 秒
+	}
+	if config.BigKeyThreshold <= 0 {
+		config.BigKeyThreshold = 524288 // 默认 512KB
+	}
+	if config.LogLevel == "" {
+		config.LogLevel = "info"
 	}
 
 	return &Checker{config: config}
@@ -188,8 +214,11 @@ func (c *Checker) buildArgs(resultFile string) []string {
 		"-m", c.getCompareMode(),
 		"--qps", fmt.Sprintf("%d", c.config.QPS),
 		"--parallel", fmt.Sprintf("%d", c.config.Parallel),
-		"--batch", fmt.Sprintf("%d", c.config.BatchSize),
+		"--batchcount", fmt.Sprintf("%d", c.config.BatchSize), // 正确的参数名
 		"--result", resultFile,
+		"--comparetimes", fmt.Sprintf("%d", c.config.CompareTimes),
+		"--interval", fmt.Sprintf("%d", c.config.Interval),
+		"--loglevel", c.config.LogLevel,
 	}
 
 	// 添加源端密码
@@ -197,9 +226,24 @@ func (c *Checker) buildArgs(resultFile string) []string {
 		args = append(args, "-p", c.config.SourcePassword)
 	}
 
-	// 添加目标端密码
+	// 添加目标端密码（使用正确的参数名）
 	if c.config.TargetPassword != "" {
-		args = append(args, "-P", c.config.TargetPassword)
+		args = append(args, "-a", c.config.TargetPassword) // 正确：使用 -a
+	}
+
+	// 添加 key 过滤列表
+	if c.config.FilterList != "" {
+		args = append(args, "-f", c.config.FilterList)
+	}
+
+	// 添加大 key 阈值（仅在 smart 模式下）
+	if c.config.Mode == ModeSmartBigKey && c.config.BigKeyThreshold > 0 {
+		args = append(args, "--bigkeythreshold", fmt.Sprintf("%d", c.config.BigKeyThreshold))
+	}
+
+	// 添加日志文件
+	if c.config.LogFile != "" {
+		args = append(args, "--log", c.config.LogFile)
 	}
 
 	return args
@@ -210,12 +254,14 @@ func (c *Checker) getCompareMode() string {
 	switch c.config.Mode {
 	case ModeFullValue:
 		return "1" // 全量值对比
-	case ModeKeyOutline:
-		return "2" // 键轮廓对比
 	case ModeValueLength:
-		return "3" // 值长度对比
+		return "2" // 值长度对比
+	case ModeKeyOutline:
+		return "3" // 键轮廓对比
+	case ModeSmartBigKey:
+		return "4" // 智能对比（遇到大 key 只对比长度）
 	default:
-		return "2"
+		return "3" // 默认使用 outline 模式
 	}
 }
 
@@ -224,10 +270,12 @@ func (c *Checker) getModeDescription() string {
 	switch c.config.Mode {
 	case ModeFullValue:
 		return "全量值对比 (完整对比)"
-	case ModeKeyOutline:
-		return "键轮廓对比 (元信息对比)"
 	case ModeValueLength:
 		return "值长度对比 (快速对比)"
+	case ModeKeyOutline:
+		return "键轮廓对比 (元信息对比)"
+	case ModeSmartBigKey:
+		return fmt.Sprintf("智能对比 (大key阈值: %dKB)", c.config.BigKeyThreshold/1024)
 	default:
 		return string(c.config.Mode)
 	}
