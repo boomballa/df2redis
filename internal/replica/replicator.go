@@ -397,7 +397,7 @@ func (r *Replicator) establishFlows() error {
 			return fmt.Errorf("FLOW-%d PING 失败: %w", i, err)
 		}
 
-		// 3. 发送 DFLY FLOW 命令注册此 FLOW
+		// 4. 发送 DFLY FLOW 命令注册此 FLOW
 		// 命令格式: DFLY FLOW <master_id> <sync_id> <flow_id>
 		resp, err := flowConn.Do("DFLY", "FLOW", r.masterInfo.ReplID, r.masterInfo.SyncID, strconv.Itoa(i))
 		if err != nil {

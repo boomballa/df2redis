@@ -32,6 +32,9 @@ type Client struct {
 	reader   *bufio.Reader
 	timeout  time.Duration
 
+	// RDB 读取超时（可配置，默认 60 秒）
+	rdbTimeout time.Duration
+
 	mu     sync.Mutex
 	closed bool
 }
@@ -50,12 +53,23 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("redisx: dial %s failed: %w", cfg.Addr, err)
 	}
 
+	// 启用 TCP Keepalive（与 Dragonfly 的 30 秒超时检测协调）
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		if err := tcpConn.SetKeepAlive(true); err != nil {
+			// 不影响连接建立，只打印警告
+			fmt.Fprintf(os.Stderr, "警告: 无法启用 TCP KeepAlive: %v\n", err)
+		} else if err := tcpConn.SetKeepAlivePeriod(30 * time.Second); err != nil {
+			fmt.Fprintf(os.Stderr, "警告: 无法设置 KeepAlive 周期: %v\n", err)
+		}
+	}
+
 	client := &Client{
-		addr:     cfg.Addr,
-		password: cfg.Password,
-		conn:     conn,
-		reader:   bufio.NewReader(conn),
-		timeout:  defaultTimeout,
+		addr:       cfg.Addr,
+		password:   cfg.Password,
+		conn:       conn,
+		reader:     bufio.NewReader(conn),
+		timeout:    defaultTimeout,
+		rdbTimeout: 60 * time.Second, // 固定 60 秒，适用于所有场景
 	}
 
 	if cfg.Password != "" {
@@ -89,15 +103,17 @@ func (c *Client) Ping() error {
 }
 
 // RawRead 直接从底层连接读取原始数据（用于 RDB 快照和 Journal 流）
-// 使用较长的超时时间（60秒），适配 Dragonfly 的 30 秒超时机制
+// 使用可配置的超时时间，默认 60 秒
 func (c *Client) RawRead(buf []byte) (int, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	timeout := c.rdbTimeout
+	c.mu.Unlock()
+
 	if c.closed {
 		return 0, errors.New("redisx: client closed")
 	}
-	// 设置 60 秒读取超时，略长于 Dragonfly 的 30 秒写入超时
-	if err := c.conn.SetReadDeadline(time.Now().Add(60 * time.Second)); err != nil {
+	// 设置读取超时
+	if err := c.conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 		return 0, err
 	}
 	return c.conn.Read(buf)
