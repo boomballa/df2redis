@@ -4,10 +4,11 @@ df2redis 集成了 [redis-full-check](https://github.com/alibaba/RedisFullCheck)
 
 ## 功能特性
 
-- ✅ **3 种校验模式**
+- ✅ **4 种校验模式**
   - **全量值对比（full）**: 完整对比所有字段和值（最严格）
   - **键轮廓对比（outline）**: 对比 key 存在性、类型、TTL、长度等元信息（推荐）
   - **值长度对比（length）**: 只对比值的长度（最快速）
+  - **智能对比（smart）**: 遇到大 key 时只对比长度，否则全量对比（平衡性能与准确性）
 
 - ✅ **性能控制**
   - QPS 限制：避免对生产环境造成影响
@@ -68,12 +69,29 @@ redis-full-check --version
 ./bin/df2redis check --config config.yaml --mode full      # 全量值对比
 ./bin/df2redis check --config config.yaml --mode outline   # 键轮廓对比（默认）
 ./bin/df2redis check --config config.yaml --mode length    # 值长度对比
+./bin/df2redis check --config config.yaml --mode smart     # 智能对比
 
 # 自定义性能参数
 ./bin/df2redis check --config config.yaml \
   --mode outline \
   --qps 1000 \
   --parallel 8
+
+# 使用 key 过滤（解决大数据集校验时间过长问题）
+./bin/df2redis check --config config.yaml \
+  --mode outline \
+  --filter "user:*|session:*|cache:product:*"
+
+# 使用智能模式（大 key 只对比长度）
+./bin/df2redis check --config config.yaml \
+  --mode smart \
+  --big-key-threshold 524288  # 512KB
+
+# 多轮对比（减少误报）
+./bin/df2redis check --config config.yaml \
+  --mode outline \
+  --compare-times 3 \
+  --interval 5
 ```
 
 ### 命令行参数
@@ -81,11 +99,17 @@ redis-full-check --version
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `--config, -c` | 配置文件路径（必需） | - |
-| `--mode` | 校验模式：full/outline/length | `outline` |
+| `--mode` | 校验模式：full/outline/length/smart | `outline` |
 | `--qps` | QPS 限制（0 表示不限制） | `500` |
 | `--parallel` | 并发度 | `4` |
 | `--result-dir` | 结果输出目录 | `./check-results` |
 | `--binary` | redis-full-check 二进制文件路径 | `redis-full-check` |
+| `--filter` | Key 过滤列表，支持前缀匹配（例如：`user:*\|session:*`） | - |
+| `--compare-times` | 对比轮次（多轮对比减少误报） | `3` |
+| `--interval` | 每轮对比间隔（秒） | `5` |
+| `--big-key-threshold` | 大 key 阈值（字节），仅 smart 模式生效 | `524288` (512KB) |
+| `--log-file` | 日志文件路径 | - |
+| `--log-level` | 日志级别：debug/info/warn/error | `info` |
 
 ### 配置文件示例
 
@@ -103,6 +127,78 @@ target:
   password: "your-password"       # 可选
   tls: false
 ```
+
+## Key 过滤功能
+
+### 为什么需要 Key 过滤？
+
+当源端和目标端的 key 数量很多时，全量校验会导致：
+- ⏱ 校验时间过长，难以控制
+- 💰 资源消耗过大，影响生产环境
+- 🎯 无法针对性校验关键数据
+
+**解决方案**：使用 `--filter` 参数，只校验特定前缀的 key。
+
+### 过滤语法
+
+使用管道符 `|` 分隔多个前缀模式，支持通配符 `*`：
+
+```bash
+# 单个前缀
+--filter "user:*"
+
+# 多个前缀（用管道符分隔）
+--filter "user:*|session:*|cache:product:*"
+
+# 精确匹配（不使用通配符）
+--filter "specific:key:name"
+```
+
+### 使用示例
+
+```bash
+# 只校验用户数据
+./bin/df2redis check --config config.yaml --filter "user:*"
+
+# 校验多个业务模块
+./bin/df2redis check --config config.yaml \
+  --mode outline \
+  --filter "order:*|payment:*|inventory:*" \
+  --qps 1000
+
+# 校验关键缓存数据
+./bin/df2redis check --config config.yaml \
+  --mode full \
+  --filter "cache:critical:*" \
+  --qps 200
+```
+
+### 最佳实践
+
+1. **分批校验**：将大数据集拆分成多个批次
+   ```bash
+   ./bin/df2redis check --config config.yaml --filter "user:a*|user:b*|user:c*"
+   ./bin/df2redis check --config config.yaml --filter "user:d*|user:e*|user:f*"
+   ```
+
+2. **优先校验关键数据**：先校验核心业务数据
+   ```bash
+   # 第一步：快速校验所有数据（length 模式）
+   ./bin/df2redis check --config config.yaml --mode length
+
+   # 第二步：全量校验关键数据（full 模式 + 过滤）
+   ./bin/df2redis check --config config.yaml \
+     --mode full \
+     --filter "order:*|payment:*"
+   ```
+
+3. **结合 smart 模式**：处理包含大 key 的场景
+   ```bash
+   ./bin/df2redis check --config config.yaml \
+     --mode smart \
+     --filter "session:*|cache:*" \
+     --big-key-threshold 1048576  # 1MB
+   ```
 
 ## 校验模式对比
 
@@ -159,6 +255,49 @@ target:
 **建议**：
 - 用于快速预检
 - 发现问题后再用 outline 或 full 模式详细检查
+
+### 智能对比（smart，新增）
+
+**适用场景**：
+- 数据集中包含大 key（如大型 Hash、List、Set）
+- 需要平衡性能和准确性
+- 生产环境的定期校验
+
+**特点**：
+- ✓ 根据 key 大小自动选择对比策略
+- ✓ 大 key 只对比长度（避免性能问题）
+- ✓ 小 key 全量对比（保证准确性）
+- ✓ 可配置大 key 阈值
+
+**工作原理**：
+```
+if key_size > big_key_threshold:
+    compare_length_only()  # 只对比长度
+else:
+    compare_full_value()   # 全量对比
+```
+
+**使用示例**：
+```bash
+# 使用默认阈值（512KB）
+./bin/df2redis check --config config.yaml --mode smart
+
+# 自定义阈值为 1MB
+./bin/df2redis check --config config.yaml \
+  --mode smart \
+  --big-key-threshold 1048576
+
+# 结合 key 过滤
+./bin/df2redis check --config config.yaml \
+  --mode smart \
+  --filter "session:*|cache:*" \
+  --big-key-threshold 524288
+```
+
+**建议**：
+- 推荐作为日常校验模式
+- 大 key 阈值根据实际数据分布调整
+- 初次使用时可以先用 length 模式了解数据规模
 
 ## 结果解读
 
