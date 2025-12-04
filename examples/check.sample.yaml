@@ -1,0 +1,65 @@
+# df2redis 数据一致性校验配置示例
+# 使用方法: ./bin/df2redis check --config examples/check.sample.yaml
+
+# 源端 Dragonfly 配置
+source:
+  type: dragonfly
+  addr: 10.46.128.12:7380       # Dragonfly 地址（请修改为实际地址）
+  password: ""                  # Dragonfly 密码（如果有）
+  tls: false
+
+# 目标端 Redis 配置
+target:
+  type: redis-cluster           # redis-standalone 或 redis-cluster
+  seed: 10.180.50.231:6379      # Redis 地址（cluster 模式填写任意节点）
+  password: "pwd4dba"           # Redis 密码
+  tls: false
+
+# 以下参数用于兼容性（check 命令实际不使用这些配置）
+stateDir: ./out
+statusFile: ./out/status.json
+migrate:
+  snapshotPath: /tmp/placeholder.rdb
+  shakeBinary: /tmp/placeholder
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 使用示例
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# 1. 基本校验（outline 模式，默认）
+#    ./bin/df2redis check --config examples/check.sample.yaml
+#
+# 2. 全量值对比（最严格）
+#    ./bin/df2redis check --config examples/check.sample.yaml --mode full
+#
+# 3. 智能对比（大 key 只对比长度）
+#    ./bin/df2redis check --config examples/check.sample.yaml --mode smart
+#
+# 4. 只校验特定 key（解决大数据集时间过长问题）
+#    ./bin/df2redis check --config examples/check.sample.yaml \
+#      --filter "user:*|session:*|cache:*"
+#
+# 5. 高级用法：智能模式 + key 过滤 + 多轮对比
+#    ./bin/df2redis check --config examples/check.sample.yaml \
+#      --mode smart \
+#      --filter "order:*|payment:*" \
+#      --compare-times 3 \
+#      --interval 5 \
+#      --qps 1000 \
+#      --parallel 8
+#
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 命令行参数说明
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# --mode              校验模式: full/outline/length/smart (默认: outline)
+# --filter            Key 过滤列表: "user:*|session:*" (支持通配符)
+# --qps               QPS 限制 (默认: 500)
+# --parallel          并发度 (默认: 4)
+# --compare-times     对比轮次 (默认: 3)
+# --interval          每轮间隔秒数 (默认: 5)
+# --big-key-threshold 大 key 阈值，字节 (默认: 524288 = 512KB)
+# --result-dir        结果输出目录 (默认: ./check-results)
+# --log-file          日志文件路径
+# --log-level         日志级别: debug/info/warn/error (默认: info)
+#
