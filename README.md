@@ -292,6 +292,7 @@ df2redis/
 - [Phase 3: Incremental Sync Implementation](docs/Phase-3.md)
 - [Phase 4: LSN Persistence and Checkpointing](docs/Phase-4.md)
 - [Phase 5: RDB Complex Type Parsing](docs/phase5-rdb-complex-types.md)
+- [Phase 6: RDB Timeout Fix](docs/phase6-rdb-timeout-fix.md)
 - [Data Validation Guide](docs/data-validation.md)
 - [Architecture Overview](docs/architecture.md)
 
