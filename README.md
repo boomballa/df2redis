@@ -80,20 +80,45 @@ Unlike traditional approaches that rely on proxy-based dual-write mechanisms, df
 
 #### Option 1: Build from Source
 
+**On Linux (CentOS 7 / Debian 11 / Ubuntu):**
+
 ```bash
 # Clone the repository
 git clone https://github.com/yourusername/df2redis.git
 cd df2redis
 
-# Build for Linux (amd64)
+# Build for Linux (amd64) - native compilation
+go build -o bin/df2redis ./cmd/df2redis
+
+# Or specify explicitly
 GOOS=linux GOARCH=amd64 go build -o bin/df2redis ./cmd/df2redis
 
-# Build for macOS (ARM64)
+# Verify the binary
+./bin/df2redis version
+```
+
+**On macOS (for Linux deployment):**
+
+```bash
+# Cross-compile for Linux from macOS
+GOOS=linux GOARCH=amd64 go build -o bin/df2redis ./cmd/df2redis
+
+# Build for macOS (ARM64 - M1/M2/M3)
 GOOS=darwin GOARCH=arm64 go build -o bin/df2redis-mac ./cmd/df2redis
 
-# Build for macOS (AMD64)
+# Build for macOS (Intel)
 GOOS=darwin GOARCH=amd64 go build -o bin/df2redis-mac ./cmd/df2redis
 ```
+
+**Platform-Specific Notes:**
+
+| Platform | Command | Output Binary | Notes |
+|----------|---------|---------------|-------|
+| **CentOS 7** | `go build -o bin/df2redis ./cmd/df2redis` | `bin/df2redis` | Statically linked, no external dependencies |
+| **Debian 11** | `go build -o bin/df2redis ./cmd/df2redis` | `bin/df2redis` | Same binary works on Ubuntu/Debian |
+| **Ubuntu 20.04+** | `go build -o bin/df2redis ./cmd/df2redis` | `bin/df2redis` | Compatible with CentOS/Debian builds |
+| **macOS (M1+)** | `GOOS=darwin GOARCH=arm64 go build` | `bin/df2redis-mac` | For local testing |
+| **macOS (Intel)** | `GOOS=darwin GOARCH=amd64 go build` | `bin/df2redis-mac` | For local testing |
 
 #### Option 2: Download Pre-built Binary
 
