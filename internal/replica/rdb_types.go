@@ -13,7 +13,8 @@ const (
 	RDB_OPCODE_EOF = 0xFF // EOF + 8 字节 checksum
 
 	// Dragonfly 特有 opcodes
-	RDB_OPCODE_FULLSYNC_END = 0xC8 // Dragonfly FULLSYNC_END 标记
+	RDB_OPCODE_JOURNAL_OFFSET = 0xD3 // Dragonfly JOURNAL_OFFSET 标记
+	RDB_OPCODE_FULLSYNC_END   = 0xC8 // Dragonfly FULLSYNC_END 标记
 
 	// AUX 字段
 	RDB_OPCODE_AUX = 0xFA // AUX field
