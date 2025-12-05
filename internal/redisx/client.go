@@ -127,8 +127,9 @@ func (c *Client) Read(buf []byte) (int, error) {
 	if c.closed {
 		return 0, errors.New("redisx: client closed")
 	}
-	// 设置 60 秒读取超时，略长于 Dragonfly 的 30 秒写入超时
-	if err := c.conn.SetReadDeadline(time.Now().Add(60 * time.Second)); err != nil {
+	// Journal 流是长连接，禁用读取超时（设置为 24 小时 ≈ 无限等待）
+	// 依赖 TCP KeepAlive（30 秒）来检测连接断开
+	if err := c.conn.SetReadDeadline(time.Now().Add(24 * time.Hour)); err != nil {
 		return 0, err
 	}
 	// 从 bufio.Reader 读取，它会自动处理缓冲区和底层连接
