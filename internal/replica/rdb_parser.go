@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log"
 	"time"
 )
 
@@ -121,7 +120,6 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			if _, err := io.ReadFull(p.reader, zeros); err != nil {
 				return nil, fmt.Errorf("读取 FULLSYNC_END 后缀失败: %w", err)
 			}
-			log.Printf("  [RDB Parser] FULLSYNC_END 后的 8 字节: %v", zeros)
 
 			// FULLSYNC_END 表示全量同步阶段结束
 			// 返回 io.EOF 让上层代码继续处理（如验证 EOF Token、发送 STARTSTABLE）
