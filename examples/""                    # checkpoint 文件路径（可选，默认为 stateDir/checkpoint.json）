@@ -1,0 +1,10 @@
+{
+  "replication_id": "16c2763d0e4cb8f214ded18e6d4e178b00775674",
+  "session_id": "SYNC58",
+  "num_flows": 8,
+  "flow_lsns": {
+    "6": 234117
+  },
+  "updated_at": "2025-12-05T11:15:50.738156+08:00",
+  "version": 1
+}
