@@ -15,6 +15,7 @@ import (
 
 	"df2redis/internal/checker"
 	"df2redis/internal/config"
+	"df2redis/internal/logger"
 	"df2redis/internal/pipeline"
 	"df2redis/internal/replica"
 	"df2redis/internal/state"
@@ -340,6 +341,19 @@ func runReplicate(args []string) int {
 		return errorToExitCode(err)
 	}
 
+	// 初始化日志系统
+	if err := initLogger(cfg, "replicate"); err != nil {
+		log.Printf("初始化日志系统失败: %v", err)
+		return 1
+	}
+	defer logger.Close()
+
+	logger.Console("🚀 df2redis 复制工具启动")
+	logger.Console("📋 配置文件: %s", cfg.ConfigDir())
+	logger.Console("📂 日志目录: %s", cfg.Log.Dir)
+	logger.Console("📝 日志级别: %s", cfg.Log.Level)
+	logger.Console("📄 日志文件: %s", logger.GetLogFilePath())
+
 	// 创建复制器
 	replicator := replica.NewReplicator(cfg)
 
@@ -500,4 +514,66 @@ func printUsage() {
   %[1]s replicate --config examples/migrate.sample.yaml
   %[1]s check --config examples/migrate.sample.yaml --mode outline
 `, binary)
+}
+
+// initLogger 初始化日志系统
+// mode: 命令模式，例如 "replicate", "migrate", "check" 等
+func initLogger(cfg *config.Config, mode string) error {
+	// 解析日志级别
+	level := parseLogLevel(cfg.Log.Level)
+
+	// 解析日志目录路径（支持相对路径）
+	logDir := cfg.ResolvePath(cfg.Log.Dir)
+
+	// 生成日志文件前缀
+	logFilePrefix := buildLogFilePrefix(cfg, mode)
+
+	// 初始化日志器
+	if err := logger.Init(logDir, level, logFilePrefix); err != nil {
+		return fmt.Errorf("初始化日志器失败: %w", err)
+	}
+
+	return nil
+}
+
+// buildLogFilePrefix 构建日志文件前缀
+// 格式：
+// - 如果指定了 taskName: {taskName}_{mode}
+// - 否则: {sourceType}_{sourceIP}_{sourcePort}_{mode}
+func buildLogFilePrefix(cfg *config.Config, mode string) string {
+	// 如果配置了任务名，使用任务名作为前缀
+	if cfg.TaskName != "" {
+		return fmt.Sprintf("%s_%s", cfg.TaskName, mode)
+	}
+
+	// 否则使用源端地址构建前缀
+	// 从 source.addr 中提取 IP 和端口
+	// 例如: "10.46.128.12:7380" -> "dragonfly_10.46.128.12_7380"
+	sourceType := cfg.Source.Type
+	if sourceType == "" {
+		sourceType = "dragonfly"
+	}
+
+	addr := cfg.Source.Addr
+	// 替换冒号为下划线，替换点为下划线
+	addr = strings.ReplaceAll(addr, ":", "_")
+	addr = strings.ReplaceAll(addr, ".", "_")
+
+	return fmt.Sprintf("%s_%s_%s", sourceType, addr, mode)
+}
+
+// parseLogLevel 解析日志级别字符串
+func parseLogLevel(levelStr string) logger.Level {
+	switch strings.ToLower(strings.TrimSpace(levelStr)) {
+	case "debug":
+		return logger.DEBUG
+	case "info":
+		return logger.INFO
+	case "warn", "warning":
+		return logger.WARN
+	case "error":
+		return logger.ERROR
+	default:
+		return logger.INFO
+	}
 }

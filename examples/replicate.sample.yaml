@@ -1,6 +1,11 @@
 # Dragonfly 复制配置示例
 # 用于测试握手和复制功能
 
+# 可选：任务名（用于日志文件命名）
+# 如果未指定，日志文件名将使用源端类型+地址+端口+模式组合
+# 例如：dragonfly_10_46_128_12_7380_replicate.log
+# taskName: "df2redis-test"
+
 source:
   type: dragonfly
   addr: 10.46.128.12:7380       # Dragonfly 地址（请修改为实际地址）
@@ -21,6 +26,12 @@ checkpoint:
   enabled: true               # 是否启用 checkpoint（默认 false）
   intervalSeconds: 10         # 自动保存间隔（秒，默认 10）
   path: ""                    # checkpoint 文件路径（可选，默认为 stateDir/checkpoint.json）
+
+# 日志配置
+log:
+  dir: "logs"                 # 日志目录（默认：logs）
+  level: "info"               # 日志级别：debug/info/warn/error（默认：info）
+  consoleEnabled: true        # 是否在控制台显示关键信息（默认：true）
 
 # 注意：replicate 命令目前仅测试握手流程
 # 以下参数仅为通过配置校验，实际不使用
