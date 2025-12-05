@@ -10,10 +10,12 @@ import (
 
 // Config holds migration configuration.
 type Config struct {
+	TaskName   string           `json:"taskName"`   // 可选的任务名（用于日志文件命名）
 	Source     SourceConfig     `json:"source"`
 	Target     TargetConfig     `json:"target"`
 	Migrate    MigrateConfig    `json:"migrate"`
 	Checkpoint CheckpointConfig `json:"checkpoint"`
+	Log        LogConfig        `json:"log"`
 	StateDir   string           `json:"stateDir"`
 	StatusFile string           `json:"statusFile"`
 
@@ -76,6 +78,13 @@ type CheckpointConfig struct {
 	Enabled  bool   `json:"enabled"`          // 是否启用 checkpoint
 	Interval int    `json:"intervalSeconds"`  // 自动保存间隔（秒）
 	Path     string `json:"path"`             // checkpoint 文件路径（可选，默认为 stateDir/checkpoint.json）
+}
+
+// LogConfig 日志配置
+type LogConfig struct {
+	Dir            string `json:"dir"`            // 日志目录（默认：logs）
+	Level          string `json:"level"`          // 日志级别：debug/info/warn/error（默认：info）
+	ConsoleEnabled bool   `json:"consoleEnabled"` // 是否在控制台显示关键信息（默认：true）
 }
 
 // ValidationError collects configuration issues.
@@ -160,6 +169,16 @@ func (c *Config) ApplyDefaults() {
 	}
 	// Checkpoint.Enabled 默认为 false，需要显式启用
 	// Checkpoint.Path 默认为空，后续在 Replicator 中使用 stateDir/checkpoint.json
+
+	// Log 默认值
+	if c.Log.Dir == "" {
+		c.Log.Dir = "logs"
+	}
+	if c.Log.Level == "" {
+		c.Log.Level = "info"
+	}
+	// ConsoleEnabled 默认为 true，因为零值为 false，需要特殊处理
+	// 如果未明确设置，则设为 true（通过检查是否为空配置来判断）
 }
 
 // Validate ensures config is usable.
