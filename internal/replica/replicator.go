@@ -119,15 +119,20 @@ func (r *Replicator) Start() error {
 		return fmt.Errorf("发送 DFLY SYNC 失败: %w", err)
 	}
 
-	// 接收 RDB 快照并验证 EOF Token（并行）
+	// 接收 RDB 快照（并行）
 	r.state = StateFullSync
-	if err := r.receiveSnapshotAndVerifyEOF(); err != nil {
+	if err := r.receiveSnapshot(); err != nil {
 		return fmt.Errorf("接收快照失败: %w", err)
 	}
 
 	// 发送 STARTSTABLE 切换到稳定同步模式
 	if err := r.sendStartStable(); err != nil {
 		return fmt.Errorf("切换稳定同步失败: %w", err)
+	}
+
+	// 验证所有 FLOW 的 EOF Token
+	if err := r.verifyEofTokens(); err != nil {
+		return fmt.Errorf("验证 EOF Token 失败: %w", err)
 	}
 
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -480,9 +485,10 @@ func (r *Replicator) expectOK(resp interface{}) error {
 	return nil
 }
 
-// receiveSnapshotAndVerifyEOF 并行接收和解析所有 FLOW 的 RDB 快照，并验证 EOF Token
-// 流程：使用 RDB 解析器解析数据，写入目标 Redis，然后验证 EOF Token
-func (r *Replicator) receiveSnapshotAndVerifyEOF() error {
+// receiveSnapshot 并行接收和解析所有 FLOW 的 RDB 快照
+// 流程：使用 RDB 解析器解析数据，写入目标 Redis
+// EOF Token 将在发送 STARTSTABLE 后单独验证
+func (r *Replicator) receiveSnapshot() error {
 	log.Println("")
 	log.Println("📦 开始并行接收和解析 RDB 快照...")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -545,26 +551,8 @@ func (r *Replicator) receiveSnapshotAndVerifyEOF() error {
 					if err == io.EOF {
 						log.Printf("  [FLOW-%d] ✓ RDB 解析完成（成功=%d, 跳过=%d, 失败=%d）",
 							flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount)
-
-						// RDB 解析完成后，立即读取 EOF Token (40 字节)
-						// 根据 Dragonfly 源码，EOF Token 紧跟在 RDB_OPCODE_EOF + checksum 之后
-						expectedToken := r.flows[flowID].EOFToken
-						eofTokenBuf := make([]byte, len(expectedToken))
-						log.Printf("  [FLOW-%d] → 正在读取 EOF Token (%d 字节)...", flowID, len(expectedToken))
-
-						if _, err := io.ReadFull(flowConn, eofTokenBuf); err != nil {
-							errChan <- fmt.Errorf("FLOW-%d: 读取 EOF Token 失败: %w", flowID, err)
-							return
-						}
-
-						// 验证 EOF Token
-						actualToken := string(eofTokenBuf)
-						if actualToken != expectedToken {
-							errChan <- fmt.Errorf("FLOW-%d: EOF Token 不匹配 (期望前8字节=%s..., 实际前8字节=%s...)",
-								flowID, expectedToken[:8], actualToken[:8])
-							return
-						}
-						log.Printf("  [FLOW-%d] ✓ EOF Token 验证成功", flowID)
+						// FULLSYNC_END 已接收，RDB 解析完成
+						// EOF Token 将在发送 STARTSTABLE 后读取
 						return
 					}
 					errChan <- fmt.Errorf("FLOW-%d: 解析失败: %w", flowID, err)
