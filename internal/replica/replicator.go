@@ -125,16 +125,6 @@ func (r *Replicator) Start() error {
 		return fmt.Errorf("接收快照失败: %w", err)
 	}
 
-	// 发送 STARTSTABLE 切换到稳定同步模式
-	if err := r.sendStartStable(); err != nil {
-		return fmt.Errorf("切换稳定同步失败: %w", err)
-	}
-
-	// 验证所有 FLOW 的 EOF Token
-	if err := r.verifyEofTokens(); err != nil {
-		return fmt.Errorf("验证 EOF Token 失败: %w", err)
-	}
-
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	log.Println("🎯 复制器启动成功！")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -606,12 +596,21 @@ func (r *Replicator) receiveSnapshot() error {
 		totalKeys += stats.KeyCount
 		totalSkipped += stats.SkippedCount
 		totalErrors += stats.ErrorCount
-		log.Printf("  [FLOW-%d] 统计: 成功=%d, 跳过=%d, 失败=%d",
-			flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount)
+	log.Printf("  [FLOW-%d] 统计: 成功=%d, 跳过=%d, 失败=%d",
+		flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount)
 	}
 
 	log.Printf("  ✓ RDB 全量导入完成: 总计 %d 个键, 跳过 %d 个（已过期）, 失败 %d 个",
 		totalKeys, totalSkipped, totalErrors)
+
+	// Dragonfly 只会在收到 STARTSTABLE 之后发送 EOF Token；如果提前读取会导致 60s 超时。
+	if err := r.sendStartStable(); err != nil {
+		return fmt.Errorf("切换稳定同步失败: %w", err)
+	}
+
+	if err := r.verifyEofTokens(); err != nil {
+		return fmt.Errorf("验证 EOF Token 失败: %w", err)
+	}
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	return nil
 }
@@ -655,6 +654,12 @@ func (r *Replicator) verifyEofTokens() error {
 			defer wg.Done()
 			flowConn := r.flowConns[flowID]
 			expectedToken := r.flows[flowID].EOFToken
+			tokenLen := len(expectedToken)
+			if tokenLen == 0 {
+				errChan <- fmt.Errorf("FLOW-%d: 未获取到 EOF Token", flowID)
+				return
+			}
+			log.Printf("  [FLOW-%d] → 正在读取 EOF Token (%d 字节)...", flowID, tokenLen)
 
 			// 1. 跳过元数据块（0xD3 + 8 字节）
 			// Dragonfly 在 EOF 之前发送一个元数据块
