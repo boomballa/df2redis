@@ -166,12 +166,13 @@
         const updated = info.UpdatedAt || info.updatedAt || '';
         const message = info.Message || info.message || '';
         const badgeClass = getBadgeClass(status);
+        const englishMessage = translateMessage(message);
         return `
         <tr class="stage-row">
           <td><strong>${name}</strong></td>
           <td><span class="badge ${badgeClass}">${status}</span></td>
           <td>${formatTime(updated)}</td>
-          <td>${escapeHTML(message)}</td>
+          <td>${escapeHTML(englishMessage)}</td>
         </tr>`;
       }).join('');
   }
@@ -186,17 +187,55 @@
     container.innerHTML = events
       .map(ev => {
         const type = ev.Type || ev.type || '';
+        const message = ev.Message || ev.message || '';
         const badgeClass = getBadgeClass(type);
+        const englishMessage = translateMessage(message);
         return `
         <div class="event-item">
-          <div>
-            <div class="badge ${badgeClass}">${escapeHTML(type)}</div>
-            <div style="margin-top:6px;">${escapeHTML(ev.Message || ev.message || '')}</div>
+          <div class="event-content">
+            <span class="badge ${badgeClass}">${escapeHTML(type)}</span>
+            <span class="event-separator">•</span>
+            <span class="event-message">${escapeHTML(englishMessage)}</span>
           </div>
           <time>${formatTime(ev.Timestamp || ev.timestamp)}</time>
         </div>`;
       })
       .join('');
+  }
+
+  function translateMessage(msg) {
+    const translations = {
+      '准备启动复制器': 'Preparing replicator',
+      '正在连接 Dragonfly': 'Connecting to Dragonfly',
+      '接收 RDB 快照': 'Receiving RDB snapshot',
+      'Journal 增量重放': 'Replaying journal incrementally',
+      '复制器已停止': 'Replicator stopped',
+      '监听 Journal 流': 'Listening to journal stream',
+      '成功': 'success',
+      '跳过': 'skipped',
+      '失败': 'failed'
+    };
+
+    // Handle special patterns
+    const patterns = [
+      { regex: /成功=(\d+)\s+跳过=(\d+)\s+失败=(\d+)/, template: 'success=$1 skipped=$2 failed=$3' },
+      { regex: /监听\s+Journal\s+流/, template: 'Listening to journal stream' },
+      { regex: /Journal\s+流监听/, template: 'Journal stream listening' }
+    ];
+
+    for (const { regex, template } of patterns) {
+      if (regex.test(msg)) {
+        return msg.replace(regex, template);
+      }
+    }
+
+    // Simple replacements
+    let result = msg;
+    for (const [cn, en] of Object.entries(translations)) {
+      result = result.replace(new RegExp(cn, 'g'), en);
+    }
+
+    return result;
   }
 
   function getBadgeClass(text) {
@@ -259,14 +298,9 @@
       return type.includes('incremental') || type.includes('journal') || msg.includes('journal');
     });
 
-    const hasStopped = events.some(e => {
-      const type = (e.Type || e.type || '').toLowerCase();
-      return type.includes('stopped') || type.includes('completed');
-    });
-
     // Get flow steps
     const flowSteps = document.querySelectorAll('.flow-step');
-    if (flowSteps.length !== 4) return;
+    if (flowSteps.length !== 3) return;
 
     // Update status based on events
     if (hasHandshake) {
@@ -282,17 +316,10 @@
       flowSteps[2].setAttribute('data-status', 'active');
     }
 
-    if (hasStopped) {
-      flowSteps[2].setAttribute('data-status', 'completed');
-      flowSteps[3].setAttribute('data-status', 'completed');
-    }
-
     // Update current stage text
     const currentStageEl = document.getElementById('current-stage');
     if (currentStageEl) {
-      if (hasStopped) {
-        currentStageEl.textContent = 'completed';
-      } else if (hasIncremental) {
+      if (hasIncremental) {
         currentStageEl.textContent = 'incremental';
       } else if (hasFullSync) {
         currentStageEl.textContent = 'full_sync';
