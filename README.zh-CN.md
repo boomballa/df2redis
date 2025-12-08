@@ -166,7 +166,12 @@ checkpoint:
 
 # View real-time logs
 tail -f logs/df2redis.log
+
+# 冷态一次性导入 RDB（使用 redis-shake）
+./bin/df2redis cold-import --config config.yaml --rdb ../tmp/latest.rdb
 ```
+
+> `cold-import` 会直接调用 redis-shake，复用配置中的 `migrate.*` 字段（或 `--rdb` 覆盖）把 RDB 文件灌入目标 Redis，不会启动增量同步。
 
 #### 3. Monitor Progress
 
