@@ -138,18 +138,70 @@
   function renderMetricsGrid(metrics) {
     const container = document.getElementById('metrics-list');
     if (!container) return;
-    const entries = Object.entries(metrics);
-    if (!entries.length) {
+
+    if (!Object.keys(metrics).length) {
       container.innerHTML = '<p class="muted">No metrics yet.</p>';
       return;
     }
-    container.innerHTML = entries
-      .map(([key, value]) => `
-        <div class="metric-item">
-          <div class="label">${key}</div>
-          <div class="value">${formatNumber(value)}</div>
-        </div>`)
-      .join('');
+
+    // Categorize metrics
+    const categories = {
+      'Source': [],
+      'Target': [],
+      'Sync Progress': [],
+      'Operations': [],
+      'Incremental Sync': [],
+      'Checkpoint': [],
+      'Flow Stats': []
+    };
+
+    Object.entries(metrics).forEach(([key, value]) => {
+      if (key.startsWith('source.')) {
+        categories['Source'].push([key, value]);
+      } else if (key.startsWith('target.')) {
+        categories['Target'].push([key, value]);
+      } else if (key === 'sync.keys.applied') {
+        categories['Sync Progress'].push([key, value]);
+      } else if (key.startsWith('sync.incremental.ops.')) {
+        categories['Operations'].push([key, value]);
+      } else if (key.startsWith('sync.incremental.')) {
+        categories['Incremental Sync'].push([key, value]);
+      } else if (key.startsWith('checkpoint.')) {
+        categories['Checkpoint'].push([key, value]);
+      } else if (key.startsWith('flow.')) {
+        categories['Flow Stats'].push([key, value]);
+      }
+    });
+
+    let html = '';
+    Object.entries(categories).forEach(([category, items]) => {
+      if (items.length === 0) return;
+
+      html += `<div class="metric-category">
+        <div class="metric-category-title">${category}</div>
+        <div class="metric-category-items">`;
+
+      items.forEach(([key, value]) => {
+        const displayKey = key.replace(/^(source|target|sync|checkpoint|flow)\./, '');
+        let displayValue = formatNumber(value);
+
+        // Special formatting for checkpoint timestamp
+        if (key === 'checkpoint.last_saved_unix' && value > 0) {
+          const date = new Date(value * 1000);
+          displayValue = date.toLocaleString();
+        }
+
+        html += `
+          <div class="metric-item">
+            <div class="label">${displayKey}</div>
+            <div class="value">${displayValue}</div>
+          </div>`;
+      });
+
+      html += `</div></div>`;
+    });
+
+    container.innerHTML = html;
   }
 
   function renderStageTable(stages) {

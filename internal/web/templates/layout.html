@@ -257,10 +257,43 @@
 
         /* Metrics grid */
         .metrics-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            margin-top: 0;
+        }
+
+        .metric-category {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .metric-category-title {
+            font-size: 0.875rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .metric-category-title::before {
+            content: '';
+            width: 4px;
+            height: 1rem;
+            background: var(--accent);
+            border-radius: 2px;
+        }
+
+        .metric-category-items {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 1rem;
-            margin-top: 1.5rem;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 0.75rem;
         }
 
         .metric-item {
@@ -269,7 +302,7 @@
             border-radius: 0.75rem;
             padding: 1rem;
             transition: all 0.3s ease;
-            min-height: 80px;
+            min-height: 70px;
             display: flex;
             flex-direction: column;
             justify-content: space-between;
@@ -294,7 +327,7 @@
         }
 
         .metric-item .value {
-            font-size: 1.5rem;
+            font-size: 1.35rem;
             font-weight: 700;
             color: var(--text-primary);
             font-variant-numeric: tabular-nums;
