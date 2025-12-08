@@ -15,6 +15,7 @@ import (
 
 	"df2redis/internal/checker"
 	"df2redis/internal/config"
+	"df2redis/internal/executor/shake"
 	"df2redis/internal/logger"
 	"df2redis/internal/pipeline"
 	"df2redis/internal/replica"
@@ -37,6 +38,8 @@ func Execute(args []string) int {
 		return runPrepare(args[1:])
 	case "migrate":
 		return runMigrate(args[1:])
+	case "cold-import":
+		return runColdImport(args[1:])
 	case "replicate":
 		return runReplicate(args[1:])
 	case "check":
@@ -179,6 +182,111 @@ func runMigrate(args []string) int {
 	}
 
 	log.Println("迁移管线执行结束。")
+	return 0
+}
+
+func runColdImport(args []string) int {
+	fs := flag.NewFlagSet("cold-import", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	var configPath string
+	var rdbPath string
+	var shakeBinary string
+	var shakeConfig string
+	var shakeArgs string
+	fs.StringVar(&configPath, "config", "", "配置文件路径 (YAML)")
+	fs.StringVar(&configPath, "c", "", "配置文件路径 (YAML)")
+	fs.StringVar(&rdbPath, "rdb", "", "已有 RDB 文件路径（覆盖 migrate.snapshotPath）")
+	fs.StringVar(&shakeBinary, "shake-binary", "", "redis-shake 可执行文件路径（覆盖 migrate.shakeBinary）")
+	fs.StringVar(&shakeConfig, "shake-conf", "", "redis-shake 配置文件路径（覆盖 migrate.shakeConfigFile）")
+	fs.StringVar(&shakeArgs, "shake-args", "", "redis-shake 启动参数（覆盖 migrate.shakeArgs）")
+
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		log.Printf("解析参数失败: %v", err)
+		return 1
+	}
+	if configPath == "" {
+		fs.Usage()
+		return 2
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return errorToExitCode(err)
+	}
+	if rdbPath != "" {
+		cfg.Migrate.SnapshotPath = rdbPath
+	}
+	if shakeBinary != "" {
+		cfg.Migrate.ShakeBinary = shakeBinary
+	}
+	if shakeConfig != "" {
+		cfg.Migrate.ShakeConfigFile = shakeConfig
+	}
+	if shakeArgs != "" {
+		cfg.Migrate.ShakeArgs = shakeArgs
+	}
+
+	if err := cfg.EnsureStateDir(); err != nil {
+		log.Printf("创建 state 目录失败: %v", err)
+		return 1
+	}
+
+	migrateCfg := cfg.ResolvedMigrateConfig()
+	cfg.Migrate = migrateCfg
+
+	if cfg.Migrate.SnapshotPath == "" {
+		log.Println("migrate.snapshotPath 未配置")
+		return 2
+	}
+	if cfg.Migrate.ShakeBinary == "" {
+		log.Println("migrate.shakeBinary 未配置")
+		return 2
+	}
+
+	if err := initLogger(cfg, "cold-import"); err != nil {
+		log.Printf("初始化日志系统失败: %v", err)
+		return 1
+	}
+	defer logger.Close()
+
+	if _, err := os.Stat(cfg.Migrate.SnapshotPath); err != nil {
+		logger.Error("RDB 文件不可用: %v", err)
+		return 1
+	}
+	if _, err := os.Stat(cfg.Migrate.ShakeBinary); err != nil {
+		logger.Error("redis-shake 可执行文件不可用: %v", err)
+		return 1
+	}
+
+	if strings.TrimSpace(cfg.Migrate.ShakeArgs) == "" && strings.TrimSpace(cfg.Migrate.ShakeConfigFile) == "" {
+		path, err := pipeline.GenerateShakeConfigFile(cfg, cfg.ResolveStateDir())
+		if err != nil {
+			logger.Error("生成 redis-shake 配置失败: %v", err)
+			return 1
+		}
+		logger.Console("🛠️ Generated redis-shake config: %s", path)
+	}
+
+	importer, err := shake.NewImporter(cfg.Migrate, cfg.Target)
+	if err != nil {
+		logger.Error("初始化 redis-shake 失败: %v", err)
+		return 1
+	}
+
+	logger.Console("❄️ Cold import started")
+	logger.Console("📦 RDB file: %s", cfg.Migrate.SnapshotPath)
+	logger.Console("🎯 Target: %s @ %s", cfg.Target.Type, cfg.Target.Seed)
+	logger.Console("⚙️ redis-shake: %s", cfg.Migrate.ShakeBinary)
+	logger.Console("⚠️ Existing data on the target may be overwritten")
+
+	if err := importer.Run(context.Background()); err != nil {
+		logger.Error("cold-import 失败: %v", err)
+		return 1
+	}
+	logger.Console("✅ Cold import completed")
 	return 0
 }
 
@@ -577,6 +685,7 @@ func printUsage() {
 可用命令:
   prepare    预先检查环境、依赖与配置
   migrate    执行迁移流程 (支持 --dry-run)
+  cold-import 一次性使用 redis-shake 将 RDB 导入目标 Redis
   replicate  启动 Dragonfly 复制器（测试握手）
   check      数据一致性校验（基于 redis-full-check）
   status     查看当前迁移状态

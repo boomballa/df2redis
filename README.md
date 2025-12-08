@@ -105,11 +105,14 @@ Key modules:
 | Command | Description |
 | --- | --- |
 | `df2redis replicate --config <file> [--dashboard-addr :8080] [--task-name foo]` | Run replication (auto-starts dashboard unless addr is empty) |
+| `df2redis cold-import --config <file> [--rdb path]` | One-off RDB restore via redis-shake (no incremental sync) |
 | `df2redis check --config <file> [flags]` | Launch data consistency check (wrapper around `redis-full-check`) |
 | `df2redis dashboard --config <file> [--addr :8080]` | Start the standalone dashboard service |
 | `df2redis migrate/prepare/...` | Legacy redis-shake based pipeline helpers |
 
 The CLI uses a shared logger (`internal/logger`) that truncates `<log.dir>/<task>_<command>.log` on each run. Detailed replication steps are written there, while the console only shows highlights (set `log.consoleEnabled: false` to silence it). Customize level/dir via the `log` block in the config file.
+
+`cold-import` reuses the `migrate.*` configuration block (RDB path + redis-shake binary/args) to perform a one-time load without starting the Dragonfly replicator.
 
 The embedded dashboard listens on `config.dashboard.addr` (default `:8080`). Override it in the YAML or pass `--dashboard-addr` to `replicate`/`--addr` to `dashboard`.
 

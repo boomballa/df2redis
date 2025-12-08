@@ -47,16 +47,86 @@
     if (!ctx || !window.Chart) return;
     const labels = Object.keys(metrics);
     const values = labels.map(key => toNumber(metrics[key]));
+
     if (!chart) {
       chart = new Chart(ctx, {
         type: 'bar',
-        data: { labels, datasets: [{ label: 'metrics', data: values }] }
+        data: {
+          labels,
+          datasets: [{
+            label: 'Metrics',
+            data: values,
+            backgroundColor: 'rgba(59, 130, 246, 0.6)',
+            borderColor: 'rgba(59, 130, 246, 1)',
+            borderWidth: 2,
+            borderRadius: 8,
+            borderSkipped: false,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              display: false
+            },
+            tooltip: {
+              backgroundColor: 'rgba(30, 41, 59, 0.95)',
+              titleColor: '#f1f5f9',
+              bodyColor: '#94a3b8',
+              borderColor: '#334155',
+              borderWidth: 1,
+              padding: 12,
+              displayColors: false,
+              callbacks: {
+                label: function(context) {
+                  return formatNumber(context.parsed.y);
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              grid: {
+                display: false,
+                drawBorder: false
+              },
+              ticks: {
+                color: '#64748b',
+                font: {
+                  size: 11
+                }
+              }
+            },
+            y: {
+              grid: {
+                color: 'rgba(51, 65, 85, 0.5)',
+                drawBorder: false
+              },
+              ticks: {
+                color: '#64748b',
+                font: {
+                  size: 11
+                },
+                callback: function(value) {
+                  if (value >= 1000000) {
+                    return (value / 1000000).toFixed(1) + 'M';
+                  }
+                  if (value >= 1000) {
+                    return (value / 1000).toFixed(1) + 'K';
+                  }
+                  return value;
+                }
+              }
+            }
+          }
+        }
       });
       return;
     }
     chart.data.labels = labels;
     chart.data.datasets[0].data = values;
-    chart.update();
+    chart.update('none');
   }
 
   function renderMetricsGrid(metrics) {
@@ -90,10 +160,11 @@
         const status = info.Status || info.status || '';
         const updated = info.UpdatedAt || info.updatedAt || '';
         const message = info.Message || info.message || '';
+        const badgeClass = getBadgeClass(status);
         return `
         <tr class="stage-row">
-          <td>${name}</td>
-          <td><span class="badge">${status}</span></td>
+          <td><strong>${name}</strong></td>
+          <td><span class="badge ${badgeClass}">${status}</span></td>
           <td>${formatTime(updated)}</td>
           <td>${escapeHTML(message)}</td>
         </tr>`;
@@ -108,15 +179,29 @@
       return;
     }
     container.innerHTML = events
-      .map(ev => `
+      .map(ev => {
+        const type = ev.Type || ev.type || '';
+        const badgeClass = getBadgeClass(type);
+        return `
         <div class="event-item">
           <div>
-            <div class="badge" style="background:rgba(99,102,241,0.16);color:var(--accent);">${escapeHTML(ev.Type || ev.type)}</div>
+            <div class="badge ${badgeClass}">${escapeHTML(type)}</div>
             <div style="margin-top:6px;">${escapeHTML(ev.Message || ev.message || '')}</div>
           </div>
           <time>${formatTime(ev.Timestamp || ev.timestamp)}</time>
-        </div>`)
+        </div>`;
+      })
       .join('');
+  }
+
+  function getBadgeClass(text) {
+    const lower = text.toLowerCase();
+    if (lower.includes('journal') || lower.includes('incremental')) return 'badge-journal';
+    if (lower.includes('established') || lower.includes('success')) return 'badge-established';
+    if (lower.includes('rdb_done') || lower.includes('completed')) return 'badge-completed';
+    if (lower.includes('starting') || lower.includes('handshake') || lower.includes('full_sync')) return 'badge-starting';
+    if (lower.includes('stopped') || lower.includes('failed')) return 'badge-stopped';
+    return '';
   }
 
   function formatTime(ts) {

@@ -2,17 +2,31 @@
 <div class="hero">
     <div>
         <h1>df2redis Live Dashboard</h1>
-        <p class="muted">Track Dragonfly → Redis synchronization at a glance.</p>
+        <p class="subtitle">Track Dragonfly → Redis synchronization at a glance.</p>
     </div>
-    <div class="meta" style="margin-top:18px;">
-        <div class="meta-item">🗄️ Source: <strong>{{ .Source.Type }} @ {{ .Source.Addr }}</strong></div>
-        <div class="meta-item">🎯 Target: <strong>{{ .Target.Type }} @ {{ .Target.Seed }}</strong></div>
-        <div class="meta-item">🧊 Snapshot: <strong>{{ .Snapshot }}</strong></div>
+    <div class="meta-row">
+        <div class="meta-pill">
+            <span class="icon">🗄️</span>
+            <span>Source: <strong>{{ .Source.Type }} @ {{ .Source.Addr }}</strong></span>
+        </div>
+        <div class="meta-pill">
+            <span class="icon">🎯</span>
+            <span>Target: <strong>{{ .Target.Type }} @ {{ .Target.Seed }}</strong></span>
+        </div>
     </div>
-    <div class="meta" style="margin-top:12px;">
-        <div class="meta-item">🗂️ State dir: <strong>{{ .StateDir }}</strong></div>
-        <div class="meta-item">📝 Status file: <strong>{{ .StatusFile }}</strong></div>
-        <div class="meta-item">⏱️ Generated at: <strong>{{ .GeneratedAt }}</strong></div>
+    <div class="meta-row">
+        <div class="meta-pill">
+            <span class="icon">🗂️</span>
+            <span>State dir: <strong>{{ .StateDir }}</strong></span>
+        </div>
+        <div class="meta-pill">
+            <span class="icon">📝</span>
+            <span>Status file: <strong>{{ .StatusFile }}</strong></span>
+        </div>
+        <div class="meta-pill">
+            <span class="icon">⏱️</span>
+            <span>Generated at: <strong>{{ .GeneratedAt }}</strong></span>
+        </div>
     </div>
 </div>
 
