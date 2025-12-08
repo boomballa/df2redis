@@ -6,17 +6,17 @@ import (
 	"strings"
 )
 
-// JournalOpcode 表示 Journal 操作码
+// JournalOpcode enumerates Dragonfly journal opcodes
 type JournalOpcode uint8
 
 const (
 	OpNoop    JournalOpcode = 0  // NOOP
-	OpSelect  JournalOpcode = 6  // SELECT 数据库
-	OpExpired JournalOpcode = 9  // 过期键
-	OpCommand JournalOpcode = 10 // 普通命令
-	OpPing    JournalOpcode = 13 // PING 心跳
-	OpLSN     JournalOpcode = 15 // LSN 标记
-	OpFin     JournalOpcode = 99 // 流结束标记（自定义）
+	OpSelect  JournalOpcode = 6  // SELECT database
+	OpExpired JournalOpcode = 9  // expired key
+	OpCommand JournalOpcode = 10 // regular command
+	OpPing    JournalOpcode = 13 // heartbeat
+	OpLSN     JournalOpcode = 15 // LSN marker
+	OpFin     JournalOpcode = 99 // synthetic end-of-stream marker
 )
 
 func (op JournalOpcode) String() string {
@@ -40,19 +40,19 @@ func (op JournalOpcode) String() string {
 	}
 }
 
-// JournalEntry 表示一条 Journal 条目
+// JournalEntry captures a parsed journal record
 type JournalEntry struct {
 	Opcode    JournalOpcode
-	DbIndex   uint64   // SELECT 操作时的数据库索引
-	TxID      uint64   // 事务 ID
-	ShardCnt  uint64   // Shard 计数
-	LSN       uint64   // 日志序列号
-	Command   string   // 命令名
-	Args      []string // 命令参数
-	RawData   []byte   // 原始数据（用于调试）
+	DbIndex   uint64   // database index for SELECT
+	TxID      uint64   // transaction ID
+	ShardCnt  uint64   // shard count
+	LSN       uint64   // log sequence number
+	Command   string   // command name
+	Args      []string // command arguments
+	RawData   []byte   // raw payload (for debugging)
 }
 
-// String 返回 Entry 的可读表示
+// String pretty-prints the entry
 func (e *JournalEntry) String() string {
 	switch e.Opcode {
 	case OpSelect:
@@ -79,21 +79,21 @@ func (e *JournalEntry) String() string {
 	}
 }
 
-// JournalReader 读取并解析 Journal 流
+// JournalReader decodes journal frames
 type JournalReader struct {
 	reader io.Reader
 }
 
-// NewJournalReader 创建 Journal 读取器
+// NewJournalReader builds a reader over an io.Reader
 func NewJournalReader(r io.Reader) *JournalReader {
 	return &JournalReader{reader: r}
 }
 
-// ReadEntry 读取一条 Journal Entry
+// ReadEntry parses the next entry
 func (jr *JournalReader) ReadEntry() (*JournalEntry, error) {
 	entry := &JournalEntry{}
 
-	// 1. 读取 Opcode (1字节)
+	// 1. Opcode (1 byte)
 	opcodeBuf := make([]byte, 1)
 	if _, err := io.ReadFull(jr.reader, opcodeBuf); err != nil {
 		if err == io.EOF {
@@ -103,10 +103,10 @@ func (jr *JournalReader) ReadEntry() (*JournalEntry, error) {
 	}
 	entry.Opcode = JournalOpcode(opcodeBuf[0])
 
-	// 2. 根据 Opcode 读取不同的字段
+	// 2. Dispatch per opcode
 	switch entry.Opcode {
 	case OpSelect:
-		// SELECT: 仅读取 dbid
+		// SELECT: only read dbid
 		dbid, err := ReadPackedUint(jr.reader)
 		if err != nil {
 			return nil, fmt.Errorf("读取 SELECT dbid 失败: %w", err)
@@ -115,7 +115,7 @@ func (jr *JournalReader) ReadEntry() (*JournalEntry, error) {
 		return entry, nil
 
 	case OpLSN:
-		// LSN: 仅读取 lsn
+		// LSN marker
 		lsn, err := ReadPackedUint(jr.reader)
 		if err != nil {
 			return nil, fmt.Errorf("读取 LSN 失败: %w", err)
@@ -124,11 +124,11 @@ func (jr *JournalReader) ReadEntry() (*JournalEntry, error) {
 		return entry, nil
 
 	case OpPing:
-		// PING: 无额外数据
+		// PING carries no payload
 		return entry, nil
 
 	case OpCommand, OpExpired:
-		// COMMAND/EXPIRED: txid + shard_cnt + payload
+		// COMMAND/EXPIRED: txid + shard count + payload
 		txid, err := ReadPackedUint(jr.reader)
 		if err != nil {
 			return nil, fmt.Errorf("读取 txid 失败: %w", err)
@@ -141,7 +141,7 @@ func (jr *JournalReader) ReadEntry() (*JournalEntry, error) {
 		}
 		entry.ShardCnt = shardCnt
 
-		// 读取 Payload
+		// Parse payload
 		if err := jr.readPayload(entry); err != nil {
 			return nil, fmt.Errorf("读取 payload 失败: %w", err)
 		}
@@ -153,39 +153,38 @@ func (jr *JournalReader) ReadEntry() (*JournalEntry, error) {
 	}
 }
 
-// readPayload 读取 Payload 部分
-// 格式：
-//   - 参数数量 (Packed Uint) = 1 + args.size()
-//   - 总命令大小 (Packed Uint)
-//   - 命令名 (Packed String)
-//   - 每个参数 (Packed String)
+// readPayload parses the payload layout:
+//   - number of elements (Packed Uint) = 1 + args
+//   - total command size (Packed Uint)
+//   - command name (Packed String)
+//   - arguments (Packed String × n)
 func (jr *JournalReader) readPayload(entry *JournalEntry) error {
-	// 1. 读取参数数量（包含命令名）
+	// 1. Element count (command + args)
 	numElems, err := ReadPackedUint(jr.reader)
 	if err != nil {
 		return fmt.Errorf("读取参数数量失败: %w", err)
 	}
 
 	if numElems == 0 {
-		// 空 payload
+		// Empty payload
 		return nil
 	}
 
-	// 2. 读取总命令大小（暂时读取但不使用，用于校验）
+	// 2. Total command size (unused placeholder for potential validation)
 	totalSize, err := ReadPackedUint(jr.reader)
 	if err != nil {
 		return fmt.Errorf("读取总命令大小失败: %w", err)
 	}
-	_ = totalSize // 暂不使用
+	_ = totalSize
 
-	// 3. 读取命令名
+	// 3. Command name
 	cmd, err := ReadPackedString(jr.reader)
 	if err != nil {
 		return fmt.Errorf("读取命令名失败: %w", err)
 	}
 	entry.Command = cmd
 
-	// 4. 读取参数（numElems - 1 个）
+	// 4. Arguments (numElems - 1)
 	if numElems > 1 {
 		entry.Args = make([]string, numElems-1)
 		for i := 0; i < int(numElems-1); i++ {

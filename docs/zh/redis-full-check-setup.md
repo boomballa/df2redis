@@ -1,5 +1,7 @@
 # redis-full-check 安装指南
 
+[English Version](en/redis-full-check-setup.md) | [中文版](redis-full-check-setup.md)
+
 ## 方式1：从源码编译（推荐）
 
 ```bash

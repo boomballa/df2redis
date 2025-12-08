@@ -7,11 +7,11 @@ import (
 	"strconv"
 )
 
-// readStringFull 读取 RDB 字符串（完整实现，覆盖 rdb_parser.go 中的简化版本）
-// 支持：
-// 1. 普通字符串
-// 2. 整数编码（INT8, INT16, INT32）
-// 3. LZF 压缩字符串
+// readStringFull implements full RDB string decoding (see readString stub in rdb_parser.go).
+// Supports:
+// 1. Plain strings
+// 2. Integer encodings (INT8/INT16/INT32)
+// 3. LZF-compressed strings
 func (p *RDBParser) readStringFull() (string, error) {
 	length, special, err := p.readLength()
 	if err != nil {
@@ -19,11 +19,11 @@ func (p *RDBParser) readStringFull() (string, error) {
 	}
 
 	if special {
-		// 特殊编码
+		// Special encodings
 		return p.readStringEncoded(length)
 	}
 
-	// 普通字符串
+	// Plain string
 	if length == 0 {
 		return "", nil
 	}
@@ -36,11 +36,11 @@ func (p *RDBParser) readStringFull() (string, error) {
 	return string(buf), nil
 }
 
-// readStringEncoded 读取特殊编码的字符串
+// readStringEncoded handles integer/LZF encodings
 func (p *RDBParser) readStringEncoded(encoding uint64) (string, error) {
 	switch encoding {
 	case RDB_ENC_INT8:
-		// 8 位整数
+		// 8-bit integer
 		val, err := p.readInt8()
 		if err != nil {
 			return "", err
@@ -48,7 +48,7 @@ func (p *RDBParser) readStringEncoded(encoding uint64) (string, error) {
 		return strconv.Itoa(int(val)), nil
 
 	case RDB_ENC_INT16:
-		// 16 位整数
+		// 16-bit integer
 		val, err := p.readInt16()
 		if err != nil {
 			return "", err
@@ -56,7 +56,7 @@ func (p *RDBParser) readStringEncoded(encoding uint64) (string, error) {
 		return strconv.Itoa(int(val)), nil
 
 	case RDB_ENC_INT32:
-		// 32 位整数
+		// 32-bit integer
 		val, err := p.readInt32()
 		if err != nil {
 			return "", err
@@ -64,7 +64,7 @@ func (p *RDBParser) readStringEncoded(encoding uint64) (string, error) {
 		return strconv.Itoa(int(val)), nil
 
 	case RDB_ENC_LZF:
-		// LZF 压缩字符串
+		// LZF-compressed string
 		return p.readLZFString()
 
 	default:
@@ -72,7 +72,7 @@ func (p *RDBParser) readStringEncoded(encoding uint64) (string, error) {
 	}
 }
 
-// readInt8 读取 8 位整数
+// readInt8 reads an 8-bit integer
 func (p *RDBParser) readInt8() (int8, error) {
 	buf := make([]byte, 1)
 	if _, err := io.ReadFull(p.reader, buf); err != nil {
@@ -81,7 +81,7 @@ func (p *RDBParser) readInt8() (int8, error) {
 	return int8(buf[0]), nil
 }
 
-// readInt16 读取 16 位整数（小端序）
+// readInt16 reads a little-endian 16-bit integer
 func (p *RDBParser) readInt16() (int16, error) {
 	buf := make([]byte, 2)
 	if _, err := io.ReadFull(p.reader, buf); err != nil {
@@ -90,30 +90,27 @@ func (p *RDBParser) readInt16() (int16, error) {
 	return int16(binary.LittleEndian.Uint16(buf)), nil
 }
 
-// readLZFString 读取 LZF 压缩字符串
-// 格式: [压缩后长度][原始长度][压缩数据]
+// readLZFString handles the LZF format: [compressed_len][original_len][payload]
 func (p *RDBParser) readLZFString() (string, error) {
-	// 1. 读取压缩后长度
+	// 1. Compressed length
 	compressedLen, _, err := p.readLength()
 	if err != nil {
 		return "", fmt.Errorf("读取压缩长度失败: %w", err)
 	}
 
-	// 2. 读取原始长度
+	// 2. Original length
 	originalLen, _, err := p.readLength()
 	if err != nil {
 		return "", fmt.Errorf("读取原始长度失败: %w", err)
 	}
 
-	// 3. 读取压缩数据
+	// 3. Compressed payload
 	compressedData := make([]byte, compressedLen)
 	if _, err := io.ReadFull(p.reader, compressedData); err != nil {
 		return "", fmt.Errorf("读取压缩数据失败: %w", err)
 	}
 
-	// 4. 解压缩
-	// 注意：这里需要 LZF 解压缩库
-	// 如果 Dragonfly 实际不使用 LZF 压缩，这段代码不会被执行到
+	// 4. Decompress (requires an LZF implementation; unused if Dragonfly avoids LZF)
 	decompressed, err := lzfDecompress(compressedData, int(originalLen))
 	if err != nil {
 		return "", fmt.Errorf("LZF 解压缩失败: %w (提示: 可能需要安装 LZF 库)", err)
@@ -122,9 +119,8 @@ func (p *RDBParser) readLZFString() (string, error) {
 	return string(decompressed), nil
 }
 
-// lzfDecompress LZF 解压缩实现
-// 这是 LZF 算法的 Go 实现（简化版）
-// 完整实现可以使用第三方库如 github.com/zhuyie/golzf
+// lzfDecompress provides a lightweight LZF decoder.
+// For production use consider github.com/zhuyie/golzf or similar.
 func lzfDecompress(src []byte, dstLen int) ([]byte, error) {
 	dst := make([]byte, dstLen)
 	srcIdx := 0
@@ -135,7 +131,7 @@ func lzfDecompress(src []byte, dstLen int) ([]byte, error) {
 		srcIdx++
 
 		if ctrl < 32 {
-			// 字面量（literal）
+			// Literal bytes
 			count := int(ctrl) + 1
 			if srcIdx+count > len(src) || dstIdx+count > dstLen {
 				return nil, fmt.Errorf("LZF 数据损坏")
@@ -144,7 +140,7 @@ func lzfDecompress(src []byte, dstLen int) ([]byte, error) {
 			srcIdx += count
 			dstIdx += count
 		} else {
-			// 反向引用（back reference）
+			// Back reference
 			length := int(ctrl >> 5)
 			if length == 7 {
 				if srcIdx >= len(src) {
@@ -166,7 +162,7 @@ func lzfDecompress(src []byte, dstLen int) ([]byte, error) {
 				return nil, fmt.Errorf("LZF 数据损坏")
 			}
 
-			// 复制数据
+			// Copy referenced bytes
 			for i := 0; i < length; i++ {
 				dst[dstIdx] = dst[dstIdx-offset]
 				dstIdx++
@@ -181,11 +177,11 @@ func lzfDecompress(src []byte, dstLen int) ([]byte, error) {
 	return dst, nil
 }
 
-// 更新 rdb_parser.go 中的 readString 方法，使其调用完整实现
+// readStringWithEncoding wires the full implementation into legacy callers
 func (p *RDBParser) readStringWithEncoding() string {
 	str, err := p.readStringFull()
 	if err != nil {
-		// 简化错误处理，实际应该返回错误
+		// Simplified handling; real errors bubble up elsewhere
 		return ""
 	}
 	return str

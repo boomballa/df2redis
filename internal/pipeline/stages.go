@@ -40,7 +40,7 @@ func NewPrecheckStage() Stage {
 					return Result{Status: StatusFailed, Message: fmt.Sprintf("redis-shake 配置文件不存在: %v", err)}
 				}
 			} else if strings.TrimSpace(ctx.Config.Migrate.ShakeArgs) == "" {
-				// 将由后续阶段自动生成 shake 配置文件
+				// Later stages will auto-generate a shake config
 			}
 			if err := ctx.SourceRedis.Ping(); err != nil {
 				return Result{Status: StatusFailed, Message: fmt.Sprintf("源库不可用: %v", err)}
@@ -62,7 +62,7 @@ func NewShakeConfigStage() Stage {
 			hasArgs := strings.TrimSpace(ctx.Config.Migrate.ShakeArgs) != ""
 			generatedPath := filepath.Join(ctx.StateDir, "shake.generated.toml")
 
-			// 如果用户提供了自定义配置，且不是自动生成路径，则跳过。
+			// Skip generation when user provided custom settings that are not auto paths
 			if hasArgs || (cfgPath != "" && cfgPath != generatedPath) {
 				return Result{Status: StatusSkipped, Message: "已提供 shakeConfigFile 或 shakeArgs，跳过生成"}
 			}

@@ -14,86 +14,90 @@ import (
 	"time"
 )
 
-// CheckMode 定义校验模式
+// CheckMode defines the validation mode
 type CheckMode string
 
 const (
-	// ModeFullValue 全量值对比（完整对比所有字段和值）
+	// ModeFullValue performs full value comparison (complete comparison of all fields and values)
 	ModeFullValue CheckMode = "full"
-	// ModeKeyOutline 键轮廓对比（对比 key 存在性、类型、TTL、长度等元信息）
+	// ModeKeyOutline performs key outline comparison (compares key existence, type, TTL, length, etc.)
 	ModeKeyOutline CheckMode = "outline"
-	// ModeValueLength 值长度对比（只对比值的长度）
+	// ModeValueLength performs value length comparison (only compares value length)
 	ModeValueLength CheckMode = "length"
-	// ModeSmartBigKey 智能对比（遇到大 key 时只对比长度，否则全量对比）
+	// ModeSmartBigKey performs smart comparison (length-only for big keys, full comparison otherwise)
 	ModeSmartBigKey CheckMode = "smart"
 )
 
-// Config 校验配置
+// Config holds validation configuration
 type Config struct {
-	// 源端 Redis 地址
+	// Source Redis address
 	SourceAddr string
-	// 源端 Redis 密码
+	// Source Redis password
 	SourcePassword string
-	// 目标端 Redis 地址
+	// Target Redis address
 	TargetAddr string
-	// 目标端 Redis 密码
+	// Target Redis password
 	TargetPassword string
-	// 校验模式
+	// Validation mode
 	Mode CheckMode
-	// QPS 限制（0 表示不限制）
+	// QPS limit (0 = unlimited)
 	QPS int
-	// 并发度
+	// Parallelism level
 	Parallel int
-	// 结果输出目录
+	// Result output directory
 	ResultDir string
-	// redis-full-check 二进制文件路径
+	// Path to redis-full-check binary
 	BinaryPath string
-	// 批量大小
+	// Batch size
 	BatchSize int
-	// 超时时间（秒）
+	// Timeout in seconds
 	Timeout int
-	// Key 过滤列表（支持前缀匹配，例如："user:*|session:*|cache:product:*"）
+	// Key filter list (supports prefix matching, e.g., "user:*|session:*|cache:product:*")
 	FilterList string
-	// 对比轮次（默认 3 轮，多轮对比可减少误报）
+	// Number of comparison rounds (default: 3, multiple rounds reduce false positives)
 	CompareTimes int
-	// 每轮对比的时间间隔（秒）
+	// Interval between comparison rounds in seconds
 	Interval int
-	// 大 key 阈值（字节数，仅在 smart 模式下生效）
+	// Big key threshold in bytes (only effective in smart mode)
 	BigKeyThreshold int
-	// 日志文件路径
+	// Log file path
 	LogFile string
-	// 日志级别（debug/info/warn/error）
+	// Log level (debug/info/warn/error)
 	LogLevel string
+	// Maximum number of keys to validate (0 = unlimited)
+	MaxKeys int
+	// Task name (used for result file naming)
+	TaskName string
 }
 
-// Result 校验结果
+// Result holds validation results
 type Result struct {
-	// 总 key 数量
+	// Total number of keys
 	TotalKeys int64
-	// 一致的 key 数量
+	// Number of consistent keys
 	ConsistentKeys int64
-	// 不一致的 key 数量
+	// Number of inconsistent keys
 	InconsistentKeys int64
-	// 源端独有的 key 数量
+	// Number of keys only present in source
 	SourceOnlyKeys int64
-	// 目标端独有的 key 数量
+	// Number of keys only present in target
 	TargetOnlyKeys int64
-	// 校验耗时
+	// Validation duration
 	Duration time.Duration
-	// 结果文件路径
+	// Result file path
 	ResultFile string
-	// 不一致的 key 列表（最多前 100 个）
+	// List of inconsistent keys (up to 100 samples)
 	InconsistentSamples []string
 }
 
-// Checker redis-full-check 封装
+// Checker wraps redis-full-check functionality
 type Checker struct {
 	config Config
 }
 
-// NewChecker 创建 Checker 实例
+// NewChecker creates a new Checker instance
 func NewChecker(config Config) *Checker {
-	// 设置默认值
+	// Set default values
 	if config.Mode == "" {
 		config.Mode = ModeKeyOutline
 	}
@@ -110,19 +114,19 @@ func NewChecker(config Config) *Checker {
 		config.BinaryPath = "redis-full-check"
 	}
 	if config.BatchSize <= 0 {
-		config.BatchSize = 256 // redis-full-check 默认值
+		config.BatchSize = 256 // redis-full-check default value
 	}
 	if config.Timeout <= 0 {
-		config.Timeout = 3600 // 默认 1 小时
+		config.Timeout = 3600 // default: 1 hour
 	}
 	if config.CompareTimes <= 0 {
-		config.CompareTimes = 3 // 默认 3 轮对比
+		config.CompareTimes = 3 // default: 3 rounds
 	}
 	if config.Interval <= 0 {
-		config.Interval = 5 // 默认间隔 5 秒
+		config.Interval = 5 // default: 5 seconds
 	}
 	if config.BigKeyThreshold <= 0 {
-		config.BigKeyThreshold = 524288 // 默认 512KB
+		config.BigKeyThreshold = 524288 // default: 512KB
 	}
 	if config.LogLevel == "" {
 		config.LogLevel = "info"
@@ -131,82 +135,90 @@ func NewChecker(config Config) *Checker {
 	return &Checker{config: config}
 }
 
-// Run 执行数据一致性校验
+// Run executes data consistency validation
 func (c *Checker) Run(ctx context.Context) (*Result, error) {
 	startTime := time.Now()
 
-	// 确保结果目录存在
+	// Ensure result directory exists
 	if err := os.MkdirAll(c.config.ResultDir, 0755); err != nil {
-		return nil, fmt.Errorf("创建结果目录失败: %w", err)
+		return nil, fmt.Errorf("failed to create result directory: %w", err)
 	}
 
-	// 生成结果文件路径
+	// Generate result file paths (smart naming)
 	timestamp := time.Now().Format("20060102_150405")
-	resultFile := filepath.Join(c.config.ResultDir, fmt.Sprintf("check_%s.json", timestamp))
+	filePrefix := c.generateFilePrefix()
+	resultFile := filepath.Join(c.config.ResultDir, fmt.Sprintf("%s_check_%s.json", filePrefix, timestamp))
+	summaryFile := filepath.Join(c.config.ResultDir, fmt.Sprintf("%s_check_%s_summary.txt", filePrefix, timestamp))
 
-	// 构建命令参数
+	// Build command arguments
 	args := c.buildArgs(resultFile)
 
-	// 打印执行信息
-	fmt.Printf("🔍 开始数据一致性校验\n")
+	// Print execution info
+	fmt.Printf("🔍 Starting Data Consistency Check\n")
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-	fmt.Printf("  • 校验模式: %s\n", c.getModeDescription())
-	fmt.Printf("  • 源端地址: %s\n", c.maskAddr(c.config.SourceAddr))
-	fmt.Printf("  • 目标地址: %s\n", c.maskAddr(c.config.TargetAddr))
-	fmt.Printf("  • QPS 限制: %d\n", c.config.QPS)
-	fmt.Printf("  • 并发度: %d\n", c.config.Parallel)
-	fmt.Printf("  • 结果文件: %s\n", resultFile)
+	fmt.Printf("  • Check Mode: %s\n", c.getModeDescription())
+	fmt.Printf("  • Source: %s\n", c.maskAddr(c.config.SourceAddr))
+	fmt.Printf("  • Target: %s\n", c.maskAddr(c.config.TargetAddr))
+	fmt.Printf("  • QPS Limit: %d\n", c.config.QPS)
+	fmt.Printf("  • Parallelism: %d\n", c.config.Parallel)
+	fmt.Printf("  • Result File: %s\n", resultFile)
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
 
-	// 创建带超时的 context
+	// Create context with timeout
 	cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(c.config.Timeout)*time.Second)
 	defer cancel()
 
-	// 执行 redis-full-check
+	// Execute redis-full-check
 	cmd := exec.CommandContext(cmdCtx, c.config.BinaryPath, args...)
 
-	// 捕获输出以显示进度
+	// Capture output to display progress
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("创建 stdout pipe 失败: %w", err)
+		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return nil, fmt.Errorf("创建 stderr pipe 失败: %w", err)
+		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
 
-	// 启动命令
+	// Start command
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("启动 redis-full-check 失败: %w", err)
+		return nil, fmt.Errorf("failed to start redis-full-check: %w", err)
 	}
 
-	// 实时显示输出
+	// Stream output in real-time
 	go c.streamOutput(stdout, "INFO")
 	go c.streamOutput(stderr, "ERROR")
 
-	// 等待命令完成
+	// Wait for command completion
 	if err := cmd.Wait(); err != nil {
-		return nil, fmt.Errorf("redis-full-check 执行失败: %w", err)
+		return nil, fmt.Errorf("redis-full-check execution failed: %w", err)
 	}
 
 	duration := time.Since(startTime)
 
-	fmt.Printf("\n✓ 校验完成，耗时: %s\n\n", duration.Round(time.Second))
+	fmt.Printf("\n✓ Check completed, duration: %s\n\n", duration.Round(time.Second))
 
-	// 解析结果文件
+	// Parse result file
 	result, err := c.parseResultFile(resultFile)
 	if err != nil {
-		return nil, fmt.Errorf("解析结果文件失败: %w", err)
+		return nil, fmt.Errorf("failed to parse result file: %w", err)
 	}
 
 	result.Duration = duration
 	result.ResultFile = resultFile
 
+	// Generate human-readable summary file
+	if err := c.writeSummaryFile(summaryFile, result); err != nil {
+		fmt.Printf("⚠️  Warning: Failed to generate summary file: %v\n", err)
+		// Does not affect overall result, continue
+	}
+
 	return result, nil
 }
 
-// buildArgs 构建 redis-full-check 命令行参数
+// buildArgs builds redis-full-check command line arguments
 func (c *Checker) buildArgs(resultFile string) []string {
 	args := []string{
 		"-s", c.config.SourceAddr,
@@ -214,76 +226,81 @@ func (c *Checker) buildArgs(resultFile string) []string {
 		"-m", c.getCompareMode(),
 		"--qps", fmt.Sprintf("%d", c.config.QPS),
 		"--parallel", fmt.Sprintf("%d", c.config.Parallel),
-		"--batchcount", fmt.Sprintf("%d", c.config.BatchSize), // 正确的参数名
+		"--batchcount", fmt.Sprintf("%d", c.config.BatchSize), // correct parameter name
 		"--result", resultFile,
 		"--comparetimes", fmt.Sprintf("%d", c.config.CompareTimes),
 		"--interval", fmt.Sprintf("%d", c.config.Interval),
 		"--loglevel", c.config.LogLevel,
 	}
 
-	// 添加源端密码
+	// Add source password
 	if c.config.SourcePassword != "" {
 		args = append(args, "-p", c.config.SourcePassword)
 	}
 
-	// 添加目标端密码（使用正确的参数名）
+	// Add target password (using correct parameter name)
 	if c.config.TargetPassword != "" {
-		args = append(args, "-a", c.config.TargetPassword) // 正确：使用 -a
+		args = append(args, "-a", c.config.TargetPassword) // correct: use -a
 	}
 
-	// 添加 key 过滤列表
+	// Add key filter list
 	if c.config.FilterList != "" {
 		args = append(args, "-f", c.config.FilterList)
 	}
 
-	// 添加大 key 阈值（仅在 smart 模式下）
+	// Add big key threshold (only in smart mode)
 	if c.config.Mode == ModeSmartBigKey && c.config.BigKeyThreshold > 0 {
 		args = append(args, "--bigkeythreshold", fmt.Sprintf("%d", c.config.BigKeyThreshold))
 	}
 
-	// 添加日志文件
+	// Add log file
 	if c.config.LogFile != "" {
 		args = append(args, "--log", c.config.LogFile)
+	}
+
+	// Add maximum key count limit
+	if c.config.MaxKeys > 0 {
+		args = append(args, "--maxkeys", fmt.Sprintf("%d", c.config.MaxKeys))
 	}
 
 	return args
 }
 
-// getCompareMode 获取 redis-full-check 的对比模式参数
+// getCompareMode returns redis-full-check comparison mode parameter
 func (c *Checker) getCompareMode() string {
 	switch c.config.Mode {
 	case ModeFullValue:
-		return "1" // 全量值对比
+		return "1" // full value comparison
 	case ModeValueLength:
-		return "2" // 值长度对比
+		return "2" // value length comparison
 	case ModeKeyOutline:
-		return "3" // 键轮廓对比
+		return "3" // key outline comparison
 	case ModeSmartBigKey:
-		return "4" // 智能对比（遇到大 key 只对比长度）
+		return "4" // smart comparison (length-only for big keys)
 	default:
-		return "3" // 默认使用 outline 模式
+		return "3" // default: outline mode
 	}
 }
 
-// getModeDescription 获取模式描述
+// getModeDescription returns mode description
 func (c *Checker) getModeDescription() string {
 	switch c.config.Mode {
 	case ModeFullValue:
-		return "全量值对比 (完整对比)"
+		return "Full Value (complete comparison)"
 	case ModeValueLength:
-		return "值长度对比 (快速对比)"
+		return "Value Length (fast comparison)"
 	case ModeKeyOutline:
-		return "键轮廓对比 (元信息对比)"
+		return "Key Outline (metadata comparison)"
 	case ModeSmartBigKey:
-		return fmt.Sprintf("智能对比 (大key阈值: %dKB)", c.config.BigKeyThreshold/1024)
+		return fmt.Sprintf("Smart (big key threshold: %dKB)", c.config.BigKeyThreshold/1024)
 	default:
 		return string(c.config.Mode)
 	}
 }
 
-// maskAddr 脱敏地址信息
+// maskAddr masks sensitive address information
 func (c *Checker) maskAddr(addr string) string {
-	// 保留 IP 地址的前两段和端口
+	// Preserve first two segments of IP and port
 	parts := strings.Split(addr, ":")
 	if len(parts) == 2 {
 		ipParts := strings.Split(parts[0], ".")
@@ -294,12 +311,12 @@ func (c *Checker) maskAddr(addr string) string {
 	return addr
 }
 
-// streamOutput 流式输出日志
+// streamOutput streams log output in real-time
 func (c *Checker) streamOutput(reader io.Reader, prefix string) {
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
 		line := scanner.Text()
-		// 过滤掉一些冗余的输出
+		// Filter out redundant output
 		if strings.Contains(line, "scan") ||
 			strings.Contains(line, "compare") ||
 			strings.Contains(line, "finish") {
@@ -308,14 +325,14 @@ func (c *Checker) streamOutput(reader io.Reader, prefix string) {
 	}
 }
 
-// parseResultFile 解析 redis-full-check 的结果文件
+// parseResultFile parses redis-full-check result file
 func (c *Checker) parseResultFile(resultFile string) (*Result, error) {
-	// redis-full-check 的结果是 JSON Lines 格式
-	// 每一行是一个不一致的 key 的详细信息
+	// redis-full-check outputs in JSON Lines format
+	// Each line contains details of an inconsistent key
 
 	file, err := os.Open(resultFile)
 	if err != nil {
-		return nil, fmt.Errorf("打开结果文件失败: %w", err)
+		return nil, fmt.Errorf("failed to open result file: %w", err)
 	}
 	defer file.Close()
 
@@ -330,18 +347,18 @@ func (c *Checker) parseResultFile(resultFile string) (*Result, error) {
 		lineCount++
 		line := scanner.Bytes()
 
-		// 跳过空行
+		// Skip empty lines
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
 
-		// 解析 JSON
+		// Parse JSON
 		var entry map[string]interface{}
 		if err := json.Unmarshal(line, &entry); err != nil {
-			continue // 跳过无法解析的行
+			continue // skip unparseable lines
 		}
 
-		// 提取 key
+		// Extract key
 		if key, ok := entry["key"].(string); ok && lineCount <= 100 {
 			result.InconsistentSamples = append(result.InconsistentSamples, key)
 		}
@@ -350,30 +367,30 @@ func (c *Checker) parseResultFile(resultFile string) (*Result, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("读取结果文件失败: %w", err)
+		return nil, fmt.Errorf("failed to read result file: %w", err)
 	}
 
 	return result, nil
 }
 
-// PrintResult 打印校验结果
+// PrintResult prints check results
 func (c *Checker) PrintResult(result *Result) {
-	fmt.Printf("📊 校验结果汇总\n")
+	fmt.Printf("📊 Check Result Summary\n")
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-	fmt.Printf("  • 校验耗时: %s\n", result.Duration.Round(time.Second))
-	fmt.Printf("  • 不一致 key 数量: %d\n", result.InconsistentKeys)
+	fmt.Printf("  • Duration: %s\n", result.Duration.Round(time.Second))
+	fmt.Printf("  • Inconsistent Keys: %d\n", result.InconsistentKeys)
 
 	if result.InconsistentKeys == 0 {
-		fmt.Printf("\n✓ 数据完全一致！\n")
+		fmt.Printf("\n✓ Data is fully consistent!\n")
 	} else {
-		fmt.Printf("\n⚠ 发现数据不一致\n")
-		fmt.Printf("  • 结果文件: %s\n", result.ResultFile)
+		fmt.Printf("\n⚠  Data inconsistency detected\n")
+		fmt.Printf("  • Result File: %s\n", result.ResultFile)
 
 		if len(result.InconsistentSamples) > 0 {
-			fmt.Printf("\n  不一致的 key 样本（前 %d 个）:\n", len(result.InconsistentSamples))
+			fmt.Printf("\n  Inconsistent Key Samples (first %d):\n", len(result.InconsistentSamples))
 			for i, key := range result.InconsistentSamples {
 				if i >= 10 {
-					fmt.Printf("    ... 更多 key 请查看结果文件\n")
+					fmt.Printf("    ... see result file for more keys\n")
 					break
 				}
 				fmt.Printf("    %d. %s\n", i+1, key)
@@ -382,4 +399,91 @@ func (c *Checker) PrintResult(result *Result) {
 	}
 
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+}
+
+// generateFilePrefix generates file name prefix
+func (c *Checker) generateFilePrefix() string {
+	// Use task name if specified
+	if c.config.TaskName != "" {
+		return c.config.TaskName
+	}
+
+	// Otherwise use source IP and port
+	addr := c.config.SourceAddr
+	// Replace ":" with "_" and "." with "_"
+	prefix := strings.ReplaceAll(addr, ":", "_")
+	prefix = strings.ReplaceAll(prefix, ".", "_")
+	return prefix
+}
+
+// writeSummaryFile generates human-readable summary file
+func (c *Checker) writeSummaryFile(summaryFile string, result *Result) error {
+	file, err := os.Create(summaryFile)
+	if err != nil {
+		return fmt.Errorf("failed to create summary file: %w", err)
+	}
+	defer file.Close()
+
+	// Write summary information
+	fmt.Fprintf(file, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Fprintf(file, "      Data Consistency Check Summary\n")
+	fmt.Fprintf(file, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+
+	fmt.Fprintf(file, "【Basic Information】\n")
+	fmt.Fprintf(file, "  • Check Time: %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(file, "  • Check Mode: %s\n", c.getModeDescription())
+	fmt.Fprintf(file, "  • Source: %s\n", c.config.SourceAddr)
+	fmt.Fprintf(file, "  • Target: %s\n", c.config.TargetAddr)
+	if c.config.MaxKeys > 0 {
+		fmt.Fprintf(file, "  • Max Keys: %d keys\n", c.config.MaxKeys)
+	}
+	fmt.Fprintf(file, "\n")
+
+	fmt.Fprintf(file, "【Check Configuration】\n")
+	fmt.Fprintf(file, "  • QPS Limit: %d\n", c.config.QPS)
+	fmt.Fprintf(file, "  • Parallelism: %d\n", c.config.Parallel)
+	fmt.Fprintf(file, "  • Compare Times: %d rounds\n", c.config.CompareTimes)
+	fmt.Fprintf(file, "  • Interval: %d seconds\n", c.config.Interval)
+	if c.config.FilterList != "" {
+		fmt.Fprintf(file, "  • Key Filter: %s\n", c.config.FilterList)
+	}
+	fmt.Fprintf(file, "\n")
+
+	fmt.Fprintf(file, "【Check Results】\n")
+	fmt.Fprintf(file, "  • Duration: %s\n", result.Duration.Round(time.Second))
+	fmt.Fprintf(file, "  • Inconsistent Keys: %d\n", result.InconsistentKeys)
+	fmt.Fprintf(file, "\n")
+
+	if result.InconsistentKeys == 0 {
+		fmt.Fprintf(file, "【Conclusion】\n")
+		fmt.Fprintf(file, "  ✓ Data is fully consistent!\n\n")
+	} else {
+		fmt.Fprintf(file, "【Inconsistent Samples】\n")
+		if len(result.InconsistentSamples) > 0 {
+			sampleCount := len(result.InconsistentSamples)
+			if sampleCount > 20 {
+				sampleCount = 20
+			}
+			fmt.Fprintf(file, "  First %d inconsistent keys:\n\n", sampleCount)
+			for i := 0; i < sampleCount; i++ {
+				fmt.Fprintf(file, "    %d. %s\n", i+1, result.InconsistentSamples[i])
+			}
+			if len(result.InconsistentSamples) > 20 {
+				fmt.Fprintf(file, "\n    ... see JSON result file for more keys\n")
+			}
+		}
+		fmt.Fprintf(file, "\n")
+
+		fmt.Fprintf(file, "【Conclusion】\n")
+		fmt.Fprintf(file, "  ⚠️  Data inconsistency detected, please check detailed result file\n\n")
+	}
+
+	fmt.Fprintf(file, "【Detailed Result Files】\n")
+	fmt.Fprintf(file, "  • JSON File: %s\n", result.ResultFile)
+	fmt.Fprintf(file, "  • Summary File: %s\n", summaryFile)
+	fmt.Fprintf(file, "\n")
+
+	fmt.Fprintf(file, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+
+	return nil
 }

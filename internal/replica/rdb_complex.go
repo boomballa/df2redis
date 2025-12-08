@@ -8,9 +8,9 @@ import (
 	"strconv"
 )
 
-// ============ Hash 类型解析 ============
+// ============ Hash parsing ============
 
-// parseHash 解析 Hash 类型
+// parseHash decodes the hash value based on encoding type
 func (p *RDBParser) parseHash(typeByte byte) (*HashValue, error) {
 	switch typeByte {
 	case RDB_TYPE_HASH:
@@ -22,9 +22,9 @@ func (p *RDBParser) parseHash(typeByte byte) (*HashValue, error) {
 	}
 }
 
-// parseHashStandard 解析标准 Hash (RDB_TYPE_HASH = 4)
+// parseHashStandard reads the plain hash encoding (RDB_TYPE_HASH = 4)
 func (p *RDBParser) parseHashStandard() (*HashValue, error) {
-	// 读取字段数量
+	// Read field count
 	size, _, err := p.readLength()
 	if err != nil {
 		return nil, err
@@ -40,18 +40,18 @@ func (p *RDBParser) parseHashStandard() (*HashValue, error) {
 	return &HashValue{Fields: fields}, nil
 }
 
-// parseHashZiplist 解析 Ziplist 编码的 Hash (RDB_TYPE_HASH_ZIPLIST = 13)
+// parseHashZiplist decodes the ziplist-encoded hash (RDB_TYPE_HASH_ZIPLIST = 13)
 func (p *RDBParser) parseHashZiplist() (*HashValue, error) {
-	// 读取 ziplist 字节数组
+	// Read ziplist bytes
 	ziplistBytes := p.readString()
 
-	// 解析 ziplist
+	// Decode ziplist
 	entries, err := parseZiplist([]byte(ziplistBytes))
 	if err != nil {
 		return nil, err
 	}
 
-	// Ziplist 中交替存储 field 和 value
+	// Fields and values alternate in the ziplist
 	fields := make(map[string]string)
 	for i := 0; i < len(entries); i += 2 {
 		if i+1 < len(entries) {
@@ -62,24 +62,24 @@ func (p *RDBParser) parseHashZiplist() (*HashValue, error) {
 	return &HashValue{Fields: fields}, nil
 }
 
-// ============ List 类型解析 ============
+// ============ List parsing ============
 
-// parseList 解析 List 类型
+// parseList decodes list values depending on encoding
 func (p *RDBParser) parseList(typeByte byte) (*ListValue, error) {
 	switch typeByte {
 	case RDB_TYPE_LIST_QUICKLIST, RDB_TYPE_LIST_QUICKLIST_2:
 		return p.parseListQuicklist2()
-	case 18: // Dragonfly 使用 18 (原 ZSET_LISTPACK) 编码短 List
+	case 18: // Dragonfly reuses type 18 (former ZSET_LISTPACK) for short lists
 		return p.parseListListpack()
 	default:
 		return nil, fmt.Errorf("不支持的 List 类型: %d", typeByte)
 	}
 }
 
-// parseListListpack 解析 Listpack 编码的 List (Dragonfly 使用类型 18)
-// 基于 Dragonfly 源码 rdb_load.cc ReadListQuicklist
+// parseListListpack handles the listpack encoding (Dragonfly-specific type 18).
+// Mirrors Dragonfly rdb_load.cc ReadListQuicklist.
 func (p *RDBParser) parseListListpack() (*ListValue, error) {
-	// 1. 读取节点数量
+	// 1. Read node count
 	nodeCount, _, err := p.readLength()
 	if err != nil {
 		return nil, fmt.Errorf("读取节点数量失败: %w", err)
@@ -87,29 +87,29 @@ func (p *RDBParser) parseListListpack() (*ListValue, error) {
 
 	var allElements []string
 
-	// 2. 遍历每个节点
+	// 2. Iterate nodes
 	for i := 0; i < int(nodeCount); i++ {
-		// 2.1 读取 container 类型 (RDB_TYPE_LIST_QUICKLIST_2 特有)
+		// 2.1 Container type (Quicklist 2 specific)
 		container, _, err := p.readLength()
 		if err != nil {
 			return nil, fmt.Errorf("读取 container 类型失败 (节点 %d): %w", i, err)
 		}
 
-		// container 应该是 QUICKLIST_NODE_CONTAINER_PACKED (1) 或 QUICKLIST_NODE_CONTAINER_PLAIN (2)
-		// 参考 quicklist.h:
+		// container must be QUICKLIST_NODE_CONTAINER_PACKED (1) or QUICKLIST_NODE_CONTAINER_PLAIN (2)
+		// per quicklist.h:
 		// #define QUICKLIST_NODE_CONTAINER_PACKED 1
 		// #define QUICKLIST_NODE_CONTAINER_PLAIN 2
 		if container != 1 && container != 2 {
 			return nil, fmt.Errorf("无效的 container 类型: %d (节点 %d)", container, i)
 		}
 
-		// 2.2 读取 listpack 字节数组
+		// 2.2 Read listpack bytes
 		listpackBytes := p.readString()
 		if len(listpackBytes) == 0 {
 			return nil, fmt.Errorf("listpack 数据为空 (节点 %d)", i)
 		}
 
-		// 2.3 解析 listpack
+		// 2.3 Decode listpack
 		entries, err := parseListpack([]byte(listpackBytes))
 		if err != nil {
 			return nil, fmt.Errorf("解析 listpack 失败 (节点 %d): %w", i, err)
@@ -121,9 +121,9 @@ func (p *RDBParser) parseListListpack() (*ListValue, error) {
 	return &ListValue{Elements: allElements}, nil
 }
 
-// parseListQuicklist2 解析 Quicklist 2.0 (RDB_TYPE_LIST_QUICKLIST_2 = 17)
+// parseListQuicklist2 handles Quicklist 2.0 (RDB_TYPE_LIST_QUICKLIST_2 = 17)
 func (p *RDBParser) parseListQuicklist2() (*ListValue, error) {
-	// 读取 quicklist 节点数量
+	// Number of quicklist nodes
 	size, _, err := p.readLength()
 	if err != nil {
 		return nil, err
@@ -131,14 +131,14 @@ func (p *RDBParser) parseListQuicklist2() (*ListValue, error) {
 
 	var elements []string
 	for i := uint64(0); i < size; i++ {
-		// 读取容器类型 (1=plain, 2=packed/listpack)
+		// Container type (1=plain, 2=packed/listpack)
 		container, _, err := p.readLength()
 		if err != nil {
 			return nil, err
 		}
 
 		if container == QUICKLIST_NODE_CONTAINER_PACKED {
-			// Packed 容器 (Listpack)
+			// Packed container (listpack)
 			listpackBytes := p.readString()
 			entries, err := parseListpack([]byte(listpackBytes))
 			if err != nil {
@@ -146,7 +146,7 @@ func (p *RDBParser) parseListQuicklist2() (*ListValue, error) {
 			}
 			elements = append(elements, entries...)
 		} else {
-			// Plain 容器
+			// Plain container
 			value := p.readString()
 			elements = append(elements, value)
 		}
@@ -155,9 +155,9 @@ func (p *RDBParser) parseListQuicklist2() (*ListValue, error) {
 	return &ListValue{Elements: elements}, nil
 }
 
-// ============ Set 类型解析 ============
+// ============ Set parsing ============
 
-// parseSet 解析 Set 类型
+// parseSet decodes set encodings
 func (p *RDBParser) parseSet(typeByte byte) (*SetValue, error) {
 	switch typeByte {
 	case RDB_TYPE_SET:
@@ -169,9 +169,9 @@ func (p *RDBParser) parseSet(typeByte byte) (*SetValue, error) {
 	}
 }
 
-// parseSetStandard 解析标准 Set (RDB_TYPE_SET = 2)
+// parseSetStandard reads the plain set encoding (RDB_TYPE_SET = 2)
 func (p *RDBParser) parseSetStandard() (*SetValue, error) {
-	// 读取成员数量
+	// Member count
 	size, _, err := p.readLength()
 	if err != nil {
 		return nil, err
@@ -185,12 +185,12 @@ func (p *RDBParser) parseSetStandard() (*SetValue, error) {
 	return &SetValue{Members: members}, nil
 }
 
-// parseSetIntset 解析 Intset 编码的 Set (RDB_TYPE_SET_INTSET = 11)
+// parseSetIntset handles the intset encoding (RDB_TYPE_SET_INTSET = 11)
 func (p *RDBParser) parseSetIntset() (*SetValue, error) {
-	// 读取 intset 字节数组
+	// Read intset bytes
 	intsetBytes := p.readString()
 
-	// 解析 intset
+	// Decode intset contents
 	members, err := parseIntset([]byte(intsetBytes))
 	if err != nil {
 		return nil, err
@@ -199,9 +199,9 @@ func (p *RDBParser) parseSetIntset() (*SetValue, error) {
 	return &SetValue{Members: members}, nil
 }
 
-// ============ ZSet 类型解析 ============
+// ============ ZSet parsing ============
 
-// parseZSet 解析 ZSet 类型
+// parseZSet decodes sorted sets
 func (p *RDBParser) parseZSet(typeByte byte) (*ZSetValue, error) {
 	switch typeByte {
 	case RDB_TYPE_ZSET_2:
@@ -213,9 +213,9 @@ func (p *RDBParser) parseZSet(typeByte byte) (*ZSetValue, error) {
 	}
 }
 
-// parseZSetStandard 解析标准 ZSet (RDB_TYPE_ZSET_2 = 5)
+// parseZSetStandard reads the standard encoding (RDB_TYPE_ZSET_2 = 5)
 func (p *RDBParser) parseZSetStandard() (*ZSetValue, error) {
-	// 读取成员数量
+	// Member count
 	size, _, err := p.readLength()
 	if err != nil {
 		return nil, err
@@ -234,18 +234,18 @@ func (p *RDBParser) parseZSetStandard() (*ZSetValue, error) {
 	return &ZSetValue{Members: members}, nil
 }
 
-// parseZSetZiplist 解析 Ziplist 编码的 ZSet (RDB_TYPE_ZSET_ZIPLIST = 12)
+// parseZSetZiplist handles the ziplist encoding (RDB_TYPE_ZSET_ZIPLIST = 12)
 func (p *RDBParser) parseZSetZiplist() (*ZSetValue, error) {
-	// 读取 ziplist 字节数组
+	// Read ziplist payload
 	ziplistBytes := p.readString()
 
-	// 解析 ziplist
+	// Decode ziplist
 	entries, err := parseZiplist([]byte(ziplistBytes))
 	if err != nil {
 		return nil, err
 	}
 
-	// Ziplist 中交替存储 member 和 score
+	// Entries alternate between member and score
 	var members []ZSetMember
 	for i := 0; i < len(entries); i += 2 {
 		if i+1 < len(entries) {
@@ -258,9 +258,9 @@ func (p *RDBParser) parseZSetZiplist() (*ZSetValue, error) {
 	return &ZSetValue{Members: members}, nil
 }
 
-// ============ 辅助函数：读取 double ============
+// ============ Helper: double reader ============
 
-// readDouble 读取双精度浮点数
+// readDouble reads an 8-byte little-endian float64
 func (p *RDBParser) readDouble() (float64, error) {
 	buf := make([]byte, 8)
 	if _, err := io.ReadFull(p.reader, buf); err != nil {
@@ -270,26 +270,25 @@ func (p *RDBParser) readDouble() (float64, error) {
 	return math.Float64frombits(bits), nil
 }
 
-// ============ Ziplist 解析 ============
+// ============ Ziplist parsing ============
 
-// parseZiplist 解析 Ziplist 结构
-// Ziplist 格式: [zlbytes][zltail][zllen][entry1][entry2]...[zlend=0xFF]
+// parseZiplist parses the layout [zlbytes][zltail][zllen][entries...][zlend=0xFF]
 func parseZiplist(data []byte) ([]string, error) {
 	if len(data) < 10 {
 		return nil, fmt.Errorf("ziplist 数据太短")
 	}
 
-	// 跳过头部 (zlbytes=4, zltail=4, zllen=2)
+	// Skip header (4+4+2 bytes)
 	offset := 10
 	var entries []string
 
 	for offset < len(data) {
 		if data[offset] == 0xFF {
-			// zlend 标记
+			// zlend marker
 			break
 		}
 
-		// 读取 entry
+		// Read entry
 		entry, n, err := readZiplistEntry(data[offset:])
 		if err != nil {
 			return nil, err
@@ -301,7 +300,7 @@ func parseZiplist(data []byte) ([]string, error) {
 	return entries, nil
 }
 
-// readZiplistEntry 读取单个 ziplist entry
+// readZiplistEntry decodes a single ziplist entry
 func readZiplistEntry(data []byte) (string, int, error) {
 	if len(data) < 1 {
 		return "", 0, fmt.Errorf("ziplist entry 数据不足")
@@ -309,7 +308,7 @@ func readZiplistEntry(data []byte) (string, int, error) {
 
 	offset := 0
 
-	// 1. 跳过 prevlen (1 或 5 字节)
+	// 1. Skip prevlen (1 or 5 bytes)
 	if data[offset] < 254 {
 		offset++
 	} else {
@@ -320,11 +319,11 @@ func readZiplistEntry(data []byte) (string, int, error) {
 		return "", 0, fmt.Errorf("ziplist entry 数据不足")
 	}
 
-	// 2. 读取 encoding
+	// 2. Encoding byte
 	encoding := data[offset]
 	offset++
 
-	// 3. 根据 encoding 读取数据
+	// 3. Interpret payload per encoding
 	if (encoding & 0xC0) == 0 {
 		// |00pppppp| - 6-bit length string
 		length := int(encoding & 0x3F)
@@ -358,7 +357,7 @@ func readZiplistEntry(data []byte) (string, int, error) {
 		// |11110000| - 3-byte int
 		val := int(data[offset]) | int(data[offset+1])<<8 | int(data[offset+2])<<16
 		if val&0x800000 != 0 {
-			val |= -1 << 24 // 符号扩展
+			val |= -1 << 24 // sign extension
 		}
 		return strconv.Itoa(val), offset + 3, nil
 	} else if encoding == 0xFE {
@@ -373,16 +372,15 @@ func readZiplistEntry(data []byte) (string, int, error) {
 	return "", 0, fmt.Errorf("不支持的 ziplist encoding: 0x%02X", encoding)
 }
 
-// ============ Listpack 解析 ============
+// ============ Listpack parsing ============
 
-// parseListpack 解析 Listpack 结构
-// Listpack 格式: [total_bytes:4][num_elements:2][entries...][lpend:0xFF]
+// parseListpack handles [total_bytes:4][num_elements:2][entries...][lpend:0xFF]
 func parseListpack(data []byte) ([]string, error) {
 	if len(data) < 7 {
 		return nil, fmt.Errorf("listpack 数据太短: %d 字节", len(data))
 	}
 
-	// 读取头部
+	// Parse header
 	totalBytes := binary.LittleEndian.Uint32(data[0:4])
 	numElements := binary.LittleEndian.Uint16(data[4:6])
 
@@ -390,7 +388,7 @@ func parseListpack(data []byte) ([]string, error) {
 		return nil, fmt.Errorf("listpack 大小不匹配: 期望 %d 字节，实际 %d 字节", totalBytes, len(data))
 	}
 
-	// 跳过头部，开始解析 entries
+	// Skip header and process entries
 	offset := 6
 	var entries []string
 
@@ -403,7 +401,7 @@ func parseListpack(data []byte) ([]string, error) {
 			return nil, fmt.Errorf("listpack entry %d: 意外的 EOF 标记", i)
 		}
 
-		// 读取 entry
+		// Read entry
 		entry, entrySize, err := readListpackEntry(data[offset:])
 		if err != nil {
 			return nil, fmt.Errorf("listpack entry %d: %w", i, err)
@@ -413,7 +411,7 @@ func parseListpack(data []byte) ([]string, error) {
 		offset += entrySize
 	}
 
-	// 验证 EOF 标记
+	// Validate trailing EOF marker
 	if offset >= len(data) || data[offset] != 0xFF {
 		return nil, fmt.Errorf("listpack 缺少 EOF 标记")
 	}
@@ -421,8 +419,7 @@ func parseListpack(data []byte) ([]string, error) {
 	return entries, nil
 }
 
-// readListpackEntry 读取单个 listpack entry
-// 返回：(字符串值, entry总大小包括backlen, error)
+// readListpackEntry decodes one listpack entry and returns (value, total size incl. backlen).
 func readListpackEntry(data []byte) (string, int, error) {
 	if len(data) < 2 {
 		return "", 0, fmt.Errorf("数据不足: 至少需要 2 字节")
@@ -430,15 +427,15 @@ func readListpackEntry(data []byte) (string, int, error) {
 
 	encoding := data[0]
 	var value string
-	var dataSize int // encoding + data 的大小（不包括 backlen）
+	var dataSize int // encoding + payload size (excluding backlen)
 
-	// 根据 encoding 解析
+	// Dispatch on encoding
 	if (encoding & 0x80) == 0 {
-		// 0xxxxxxx - 7位无符号整数 (0-127)
+		// 0xxxxxxx - 7-bit unsigned integer (0-127)
 		value = strconv.Itoa(int(encoding))
 		dataSize = 1
 	} else if (encoding & 0xC0) == 0x80 {
-		// 10xxxxxx - 6位字符串长度 (0-63 字节)
+		// 10xxxxxx - 6-bit string length (0-63 bytes)
 		length := int(encoding & 0x3F)
 		if 1+length > len(data) {
 			return "", 0, fmt.Errorf("6位字符串数据不足: 需要 %d 字节", 1+length)
@@ -446,12 +443,12 @@ func readListpackEntry(data []byte) (string, int, error) {
 		value = string(data[1 : 1+length])
 		dataSize = 1 + length
 	} else if (encoding & 0xE0) == 0xC0 {
-		// 110xxxxx - 13位有符号整数
+		// 110xxxxx - 13-bit signed integer
 		if len(data) < 2 {
 			return "", 0, fmt.Errorf("13位整数数据不足")
 		}
 		uval := uint64((encoding&0x1F)<<8) | uint64(data[1])
-		// 转换为有符号数（两补数）
+		// Convert to signed integer (two's complement)
 		if uval >= (1 << 12) {
 			uval = (1<<13) - 1 - uval
 			value = strconv.FormatInt(-int64(uval)-1, 10)
@@ -460,7 +457,7 @@ func readListpackEntry(data []byte) (string, int, error) {
 		}
 		dataSize = 2
 	} else if (encoding & 0xF0) == 0xE0 {
-		// 1110xxxx - 12位字符串长度 (0-4095 字节)
+		// 1110xxxx - 12-bit string length (0-4095 bytes)
 		if len(data) < 2 {
 			return "", 0, fmt.Errorf("12位字符串长度字节不足")
 		}
@@ -471,7 +468,7 @@ func readListpackEntry(data []byte) (string, int, error) {
 		value = string(data[2 : 2+length])
 		dataSize = 2 + length
 	} else if encoding == 0xF0 {
-		// 32位字符串长度
+		// 32-bit string length
 		if len(data) < 5 {
 			return "", 0, fmt.Errorf("32位字符串长度字节不足")
 		}
@@ -482,7 +479,7 @@ func readListpackEntry(data []byte) (string, int, error) {
 		value = string(data[5 : 5+length])
 		dataSize = 5 + length
 	} else if encoding == 0xF1 {
-		// 16位有符号整数
+		// 16-bit signed integer
 		if len(data) < 3 {
 			return "", 0, fmt.Errorf("16位整数数据不足")
 		}
@@ -490,12 +487,12 @@ func readListpackEntry(data []byte) (string, int, error) {
 		value = strconv.Itoa(int(val))
 		dataSize = 3
 	} else if encoding == 0xF2 {
-		// 24位有符号整数
+		// 24-bit signed integer
 		if len(data) < 4 {
 			return "", 0, fmt.Errorf("24位整数数据不足")
 		}
 		uval := uint64(data[1]) | uint64(data[2])<<8 | uint64(data[3])<<16
-		// 转换为有符号数
+		// Convert to signed integer
 		if uval >= (1 << 23) {
 			uval = (1<<24) - 1 - uval
 			value = strconv.FormatInt(-int64(uval)-1, 10)
@@ -504,7 +501,7 @@ func readListpackEntry(data []byte) (string, int, error) {
 		}
 		dataSize = 4
 	} else if encoding == 0xF3 {
-		// 32位有符号整数
+		// 32-bit signed integer
 		if len(data) < 5 {
 			return "", 0, fmt.Errorf("32位整数数据不足")
 		}
@@ -512,7 +509,7 @@ func readListpackEntry(data []byte) (string, int, error) {
 		value = strconv.Itoa(int(val))
 		dataSize = 5
 	} else if encoding == 0xF4 {
-		// 64位有符号整数
+		// 64-bit signed integer
 		if len(data) < 9 {
 			return "", 0, fmt.Errorf("64位整数数据不足")
 		}
@@ -523,7 +520,7 @@ func readListpackEntry(data []byte) (string, int, error) {
 		return "", 0, fmt.Errorf("不支持的 encoding: 0x%02X", encoding)
 	}
 
-	// 计算 backlen 大小
+	// Calculate backlen size
 	backlenSize := lpEncodeBacklenSize(dataSize)
 	totalSize := dataSize + backlenSize
 
@@ -534,8 +531,7 @@ func readListpackEntry(data []byte) (string, int, error) {
 	return value, totalSize, nil
 }
 
-// lpEncodeBacklenSize 计算 backlen 编码所需的字节数
-// 基于 Dragonfly/Redis 源码: listpack.c lpEncodeBacklen()
+// lpEncodeBacklenSize follows the Dragonfly/Redis listpack.c lpEncodeBacklen() rule
 func lpEncodeBacklenSize(l int) int {
 	if l <= 127 {
 		return 1
@@ -549,10 +545,9 @@ func lpEncodeBacklenSize(l int) int {
 	return 5
 }
 
-// ============ Intset 解析 ============
+// ============ Intset parsing ============
 
-// parseIntset 解析 Intset 结构
-// Intset 格式: [encoding:4][length:4][contents...]
+// parseIntset decodes [encoding:4][length:4][contents...]
 func parseIntset(data []byte) ([]string, error) {
 	if len(data) < 8 {
 		return nil, fmt.Errorf("intset 数据太短")

@@ -1,5 +1,7 @@
 # Phase 6: RDB 读取超时问题修复
 
+[English Version](en/Phase-6.md) | [中文版](Phase-6.md)
+
 ## 问题背景
 
 在 Phase 5 完成 RDB 复杂类型解析后，测试 FLOW RDB 快照传输时遇到读取超时问题：

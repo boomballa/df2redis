@@ -1,5 +1,7 @@
 # 数据一致性校验
 
+[English Version](en/data-validation.md) | [中文版](data-validation.md)
+
 df2redis 集成了 [redis-full-check](https://github.com/alibaba/RedisFullCheck) 来提供生产级的数据一致性校验功能。
 
 ## 功能特性

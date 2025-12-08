@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// parseClusterNodes 解析 CLUSTER NODES 命令的输出
-// 格式示例：
+// parseClusterNodes parses the CLUSTER NODES output.
+// Example:
 // 07c37dfeb235213a872192d90877d0cd55635b91 127.0.0.1:30004@31004 slave e7d1eecce10fd6bb5eb35b9f99a514335d9ba9ca 0 1426238317239 4 connected
 // 67ed2db8d677e59ec4a4cefb06858cf2a1a89fa1 127.0.0.1:30002@31002 master - 0 1426238316232 2 connected 5461-10922
 func parseClusterNodes(output string) ([]*NodeInfo, error) {
@@ -32,11 +32,11 @@ func parseClusterNodes(output string) ([]*NodeInfo, error) {
 			Master: fields[3],
 		}
 
-		// 解析 slot 范围（从第 8 个字段开始）
+		// Parse slot ranges starting from field #8
 		for i := 8; i < len(fields); i++ {
 			slotField := fields[i]
 
-			// 跳过 importing/migrating 标记
+			// Ignore importing/migrating markers
 			if strings.HasPrefix(slotField, "[") {
 				continue
 			}
@@ -55,8 +55,8 @@ func parseClusterNodes(output string) ([]*NodeInfo, error) {
 	return nodes, nil
 }
 
-// normalizeAddr 规范化地址（去掉 @bus-port）
-// 例如：127.0.0.1:30002@31002 -> 127.0.0.1:30002
+// normalizeAddr strips the @bus-port suffix.
+// Example: 127.0.0.1:30002@31002 -> 127.0.0.1:30002
 func normalizeAddr(addr string) string {
 	if idx := strings.Index(addr, "@"); idx != -1 {
 		return addr[:idx]
@@ -64,15 +64,15 @@ func normalizeAddr(addr string) string {
 	return addr
 }
 
-// parseSlotRange 解析 slot 范围
-// 支持格式：
-//   - 单个 slot: "5461"
-//   - slot 范围: "5461-10922"
+// parseSlotRange parses a slot specification.
+// Supported formats:
+//   - single slot: "5461"
+//   - slot range: "5461-10922"
 func parseSlotRange(s string) ([2]int, error) {
 	parts := strings.Split(s, "-")
 
 	if len(parts) == 1 {
-		// 单个 slot
+		// Single slot
 		slot, err := strconv.Atoi(parts[0])
 		if err != nil {
 			return [2]int{}, err
@@ -81,7 +81,7 @@ func parseSlotRange(s string) ([2]int, error) {
 	}
 
 	if len(parts) == 2 {
-		// slot 范围
+		// Slot range
 		start, err := strconv.Atoi(parts[0])
 		if err != nil {
 			return [2]int{}, err

@@ -1,5 +1,7 @@
 # Phase 4: LSN 持久化与 Checkpoint 机制
 
+[English Version](en/Phase-4.md) | [中文版](Phase-4.md)
+
 ## 概述
 
 Phase 4 实现了 LSN (Log Sequence Number) 持久化与 Checkpoint 机制,为 Dragonfly 复制流程提供断点续传能力。通过定期保存每个 FLOW 的 LSN 到磁盘,当复制中断后可以从上次的位置继续,避免重新全量同步。

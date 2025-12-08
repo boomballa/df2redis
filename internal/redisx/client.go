@@ -32,7 +32,7 @@ type Client struct {
 	reader   *bufio.Reader
 	timeout  time.Duration
 
-	// RDB 读取超时（可配置，默认 60 秒）
+	// RDB read timeout (configurable, default 60 seconds)
 	rdbTimeout time.Duration
 
 	mu     sync.Mutex
@@ -53,10 +53,10 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("redisx: dial %s failed: %w", cfg.Addr, err)
 	}
 
-	// 启用 TCP Keepalive（与 Dragonfly 的 30 秒超时检测协调）
+	// Enable TCP keepalive to align with Dragonfly's 30-second timeout detection
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
 		if err := tcpConn.SetKeepAlive(true); err != nil {
-			// 不影响连接建立，只打印警告
+			// Non-fatal; log a warning and continue
 			fmt.Fprintf(os.Stderr, "警告: 无法启用 TCP KeepAlive: %v\n", err)
 		} else if err := tcpConn.SetKeepAlivePeriod(30 * time.Second); err != nil {
 			fmt.Fprintf(os.Stderr, "警告: 无法设置 KeepAlive 周期: %v\n", err)
@@ -69,7 +69,7 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 		conn:       conn,
 		reader:     bufio.NewReader(conn),
 		timeout:    defaultTimeout,
-		rdbTimeout: 60 * time.Second, // 固定 60 秒，适用于所有场景
+		rdbTimeout: 60 * time.Second, // fixed 60s for snapshot/journal reads
 	}
 
 	if cfg.Password != "" {
@@ -102,8 +102,8 @@ func (c *Client) Ping() error {
 	return err
 }
 
-// RawRead 直接从底层连接读取原始数据（用于 RDB 快照和 Journal 流）
-// 使用可配置的超时时间，默认 60 秒
+// RawRead reads directly from the underlying connection (RDB snapshot/journal)
+// honoring the configured timeout (default 60s).
 func (c *Client) RawRead(buf []byte) (int, error) {
 	c.mu.Lock()
 	timeout := c.rdbTimeout
@@ -112,27 +112,27 @@ func (c *Client) RawRead(buf []byte) (int, error) {
 	if c.closed {
 		return 0, errors.New("redisx: client closed")
 	}
-	// 设置读取超时
+	// Apply read deadline
 	if err := c.conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 		return 0, err
 	}
 	return c.conn.Read(buf)
 }
 
-// Read 实现 io.Reader 接口，用于 Journal 流解析
-// 从 bufio.Reader 读取，确保不会跳过已缓冲的数据
+// Read implements io.Reader for journal processing.
+// It reads via bufio.Reader to avoid skipping buffered bytes.
 func (c *Client) Read(buf []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
 		return 0, errors.New("redisx: client closed")
 	}
-	// Journal 流是长连接，禁用读取超时（设置为 24 小时 ≈ 无限等待）
-	// 依赖 TCP KeepAlive（30 秒）来检测连接断开
+	// Journal streams are long-lived; relax the read deadline (~24h)
+	// and rely on TCP keepalive (30s) for liveness.
 	if err := c.conn.SetReadDeadline(time.Now().Add(24 * time.Hour)); err != nil {
 		return 0, err
 	}
-	// 从 bufio.Reader 读取，它会自动处理缓冲区和底层连接
+	// bufio.Reader manages buffering vs. the underlying conn
 	return c.reader.Read(buf)
 }
 

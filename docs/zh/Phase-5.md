@@ -1,5 +1,7 @@
 # Phase 5: RDB 复杂类型解析实现
 
+[English Version](en/Phase-5.md) | [中文版](Phase-5.md)
+
 **实现日期**: 2025-12-03
 **实施阶段**: Phase 5B + 5C
 **功能状态**: ✅ 已完成

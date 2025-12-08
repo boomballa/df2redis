@@ -4,7 +4,7 @@ import (
 	"fmt"
 )
 
-// DflyVersion 表示 Dragonfly 协议版本
+// DflyVersion identifies the Dragonfly replication protocol version
 type DflyVersion int
 
 const (
@@ -19,17 +19,17 @@ func (v DflyVersion) String() string {
 	return fmt.Sprintf("VER%d", v)
 }
 
-// ReplicaState 表示复制状态
+// ReplicaState enumerates replication states
 type ReplicaState int
 
 const (
-	StateDisconnected ReplicaState = iota // 未连接
-	StateConnecting                       // 连接中
-	StateHandshaking                      // 握手中
-	StatePreparation                      // 准备阶段
-	StateFullSync                         // 全量同步
-	StateStableSync                       // 增量同步
-	StateStopped                          // 已停止
+	StateDisconnected ReplicaState = iota // not connected
+	StateConnecting                       // establishing connection
+	StateHandshaking                      // performing handshake
+	StatePreparation                      // preparing flow connections
+	StateFullSync                         // full sync in progress
+	StateStableSync                       // stable/incremental sync
+	StateStopped                          // replication stopped
 )
 
 func (s ReplicaState) String() string {
@@ -53,19 +53,19 @@ func (s ReplicaState) String() string {
 	}
 }
 
-// MasterInfo 保存主库信息
+// MasterInfo describes the remote Dragonfly master
 type MasterInfo struct {
-	Version  DflyVersion // Dragonfly 版本
-	NumFlows int         // Shard 数量
-	ReplID   string      // 复制 ID (master_id)
-	SyncID   string      // 同步会话 ID (如 "SYNC11")
-	Offset   int64       // 复制偏移量
+	Version  DflyVersion // Dragonfly version
+	NumFlows int         // number of shards/flows
+	ReplID   string      // replication ID (master_id)
+	SyncID   string      // sync session ID (e.g. "SYNC11")
+	Offset   int64       // replication offset
 }
 
-// FlowInfo 保存单个 Flow 的信息
+// FlowInfo carries per-flow metadata
 type FlowInfo struct {
-	FlowID   int    // Flow ID（对应 shard ID）
-	State    string // Flow 状态
-	EOFToken string // EOF 标记（用于标识 RDB 快照结束）
-	SyncType string // 同步类型（FULL 或 PARTIAL）
+	FlowID   int    // flow ID (aligned with shard ID)
+	State    string // textual flow state
+	EOFToken string // EOF marker from DFLY FLOW
+	SyncType string // "FULL" or "PARTIAL"
 }

@@ -341,7 +341,7 @@ func runReplicate(args []string) int {
 		return errorToExitCode(err)
 	}
 
-	// 初始化日志系统
+	// Initialize logging
 	if err := initLogger(cfg, "replicate"); err != nil {
 		log.Printf("初始化日志系统失败: %v", err)
 		return 1
@@ -354,26 +354,26 @@ func runReplicate(args []string) int {
 	logger.Console("📝 日志级别: %s", cfg.Log.Level)
 	logger.Console("📄 日志文件: %s", logger.GetLogFilePath())
 
-	// 创建复制器
+	// Build replicator
 	replicator := replica.NewReplicator(cfg)
 
-	// 设置信号处理
+	// Configure signal handling
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// 启动复制器
+	// Start replicator
 	errCh := make(chan error, 1)
 	go func() {
 		if err := replicator.Start(); err != nil {
 			errCh <- err
 			return
 		}
-		// 握手成功后，保持运行等待信号
+		// Keep running after handshake until interrupted
 		log.Println("\n⌨️  按 Ctrl+C 停止复制器")
 		select {}
 	}()
 
-	// 等待错误或信号
+	// Wait for error or signal
 	select {
 	case err := <-errCh:
 		log.Printf("❌ 复制器启动失败: %v", err)
@@ -401,6 +401,7 @@ func runCheck(args []string) int {
 		bigKeyThreshold int
 		logFile         string
 		logLevel        string
+		maxKeys         int
 	)
 	fs.StringVar(&configPath, "config", "", "配置文件路径 (YAML)")
 	fs.StringVar(&configPath, "c", "", "配置文件路径 (YAML)")
@@ -415,6 +416,7 @@ func runCheck(args []string) int {
 	fs.IntVar(&bigKeyThreshold, "big-key-threshold", 524288, "大key阈值(字节)，仅smart模式生效")
 	fs.StringVar(&logFile, "log-file", "", "日志文件路径")
 	fs.StringVar(&logLevel, "log-level", "info", "日志级别: debug/info/warn/error")
+	fs.IntVar(&maxKeys, "max-keys", 0, "最大校验key数量 (0表示不限制)")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -435,7 +437,7 @@ func runCheck(args []string) int {
 		return 2
 	}
 
-	// 构建 checker 配置
+	// Build checker configuration
 	checkerMode := checker.ModeKeyOutline
 	switch mode {
 	case "full":
@@ -467,12 +469,14 @@ func runCheck(args []string) int {
 		BigKeyThreshold: bigKeyThreshold,
 		LogFile:         logFile,
 		LogLevel:        logLevel,
+		MaxKeys:         maxKeys,
+		TaskName:        cfg.TaskName,
 	}
 
-	// 创建 checker
+	// Instantiate checker
 	c := checker.NewChecker(checkerCfg)
 
-	// 执行校验
+	// Run comparison
 	ctx := context.Background()
 	result, err := c.Run(ctx)
 	if err != nil {
@@ -480,10 +484,10 @@ func runCheck(args []string) int {
 		return 1
 	}
 
-	// 打印结果
+	// Print summary
 	c.PrintResult(result)
 
-	// 如果有不一致的 key，返回非零退出码
+	// Non-zero exit code on inconsistency
 	if result.InconsistentKeys > 0 {
 		return 1
 	}
@@ -516,19 +520,19 @@ func printUsage() {
 `, binary)
 }
 
-// initLogger 初始化日志系统
-// mode: 命令模式，例如 "replicate", "migrate", "check" 等
+// initLogger configures project logging
+// mode is the command name, e.g. replicate/migrate/check.
 func initLogger(cfg *config.Config, mode string) error {
-	// 解析日志级别
+	// Parse log level
 	level := parseLogLevel(cfg.Log.Level)
 
-	// 解析日志目录路径（支持相对路径）
+	// Resolve log directory
 	logDir := cfg.ResolvePath(cfg.Log.Dir)
 
-	// 生成日志文件前缀
+	// Build file prefix
 	logFilePrefix := buildLogFilePrefix(cfg, mode)
 
-	// 初始化日志器
+	// Initialize logger
 	if err := logger.Init(logDir, level, logFilePrefix); err != nil {
 		return fmt.Errorf("初始化日志器失败: %w", err)
 	}
@@ -536,33 +540,32 @@ func initLogger(cfg *config.Config, mode string) error {
 	return nil
 }
 
-// buildLogFilePrefix 构建日志文件前缀
-// 格式：
-// - 如果指定了 taskName: {taskName}_{mode}
-// - 否则: {sourceType}_{sourceIP}_{sourcePort}_{mode}
+// buildLogFilePrefix returns a log file prefix.
+// Format:
+// - taskName provided: {taskName}_{mode}
+// - otherwise: {sourceType}_{sourceIP}_{sourcePort}_{mode}
 func buildLogFilePrefix(cfg *config.Config, mode string) string {
-	// 如果配置了任务名，使用任务名作为前缀
+	// Use task name when supplied
 	if cfg.TaskName != "" {
 		return fmt.Sprintf("%s_%s", cfg.TaskName, mode)
 	}
 
-	// 否则使用源端地址构建前缀
-	// 从 source.addr 中提取 IP 和端口
-	// 例如: "10.46.128.12:7380" -> "dragonfly_10.46.128.12_7380"
+	// Otherwise derive from source address
+	// Example: "10.46.128.12:7380" -> "dragonfly_10.46.128.12_7380"
 	sourceType := cfg.Source.Type
 	if sourceType == "" {
 		sourceType = "dragonfly"
 	}
 
 	addr := cfg.Source.Addr
-	// 替换冒号为下划线，替换点为下划线
+	// Replace ":" and "." with "_"
 	addr = strings.ReplaceAll(addr, ":", "_")
 	addr = strings.ReplaceAll(addr, ".", "_")
 
 	return fmt.Sprintf("%s_%s_%s", sourceType, addr, mode)
 }
 
-// parseLogLevel 解析日志级别字符串
+// parseLogLevel normalizes log level text
 func parseLogLevel(levelStr string) logger.Level {
 	switch strings.ToLower(strings.TrimSpace(levelStr)) {
 	case "debug":

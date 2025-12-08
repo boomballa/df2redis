@@ -1,5 +1,7 @@
 # Phase 3: Journal 流接收、解析与命令重放
 
+[English Version](en/Phase-3.md) | [中文版](Phase-3.md)
+
 ## 概述
 
 Phase 3 实现了完整的 Journal 流处理流程，包括持续接收 Journal Entry、解析命令、重放到 Redis Cluster、以及 Redis Cluster 路由处理。这是实现 Dragonfly → Redis 增量数据同步的核心环节。
