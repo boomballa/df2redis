@@ -15,6 +15,7 @@ type Config struct {
 	Target     TargetConfig     `json:"target"`
 	Migrate    MigrateConfig    `json:"migrate"`
 	Checkpoint CheckpointConfig `json:"checkpoint"`
+	Conflict   ConflictConfig   `json:"conflict"`
 	Log        LogConfig        `json:"log"`
 	StateDir   string           `json:"stateDir"`
 	StatusFile string           `json:"statusFile"`
@@ -85,6 +86,11 @@ type LogConfig struct {
 	Dir            string `json:"dir"`            // 日志目录（默认：logs）
 	Level          string `json:"level"`          // 日志级别：debug/info/warn/error（默认：info）
 	ConsoleEnabled bool   `json:"consoleEnabled"` // 是否在控制台显示关键信息（默认：true）
+}
+
+// ConflictConfig 键冲突处理配置
+type ConflictConfig struct {
+	Policy string `json:"policy"` // 冲突处理策略：overwrite（默认，覆盖）| panic（检测到重复键立即停止）| skip（跳过重复键）
 }
 
 // ValidationError collects configuration issues.
@@ -179,6 +185,11 @@ func (c *Config) ApplyDefaults() {
 	}
 	// ConsoleEnabled 默认为 true，因为零值为 false，需要特殊处理
 	// 如果未明确设置，则设为 true（通过检查是否为空配置来判断）
+
+	// Conflict 默认值
+	if c.Conflict.Policy == "" {
+		c.Conflict.Policy = "overwrite" // 默认覆盖模式
+	}
 }
 
 // Validate ensures config is usable.

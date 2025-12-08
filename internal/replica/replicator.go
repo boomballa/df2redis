@@ -1122,8 +1122,53 @@ func (r *Replicator) tryAutoSaveCheckpoint() {
 	}
 }
 
+// checkKeyConflict 检查键冲突并根据策略决定是否写入
+// 返回值: shouldWrite (是否应该写入), error (错误信息)
+func (r *Replicator) checkKeyConflict(key string) (bool, error) {
+	policy := r.cfg.Conflict.Policy
+
+	// overwrite 模式：直接写入，不检查
+	if policy == "overwrite" {
+		return true, nil
+	}
+
+	// panic 和 skip 模式：需要检查键是否存在
+	reply, err := r.clusterClient.Do("EXISTS", key)
+	if err != nil {
+		return false, fmt.Errorf("检查键存在性失败: %w", err)
+	}
+
+	exists, ok := reply.(int64)
+	if !ok {
+		return false, fmt.Errorf("EXISTS 命令返回类型错误")
+	}
+
+	if exists == 0 {
+		return true, nil // 键不存在，可以写入
+	}
+
+	// 键已存在
+	if policy == "panic" {
+		log.Printf("  ⚠️ 检测到重复键: %s (policy=panic，程序终止)", key)
+		return false, fmt.Errorf("检测到重复键: %s", key)
+	}
+
+	// policy == "skip"
+	log.Printf("  ⚠️ 跳过重复键: %s (policy=skip)", key)
+	return false, nil
+}
+
 // writeRDBEntry 将 RDB entry 写入 Redis
 func (r *Replicator) writeRDBEntry(entry *RDBEntry) error {
+	// 检查键冲突
+	shouldWrite, err := r.checkKeyConflict(entry.Key)
+	if err != nil {
+		return err // panic 模式会返回错误
+	}
+	if !shouldWrite {
+		return nil // skip 模式跳过写入
+	}
+
 	switch entry.Type {
 	case RDB_TYPE_STRING:
 		return r.writeString(entry)
