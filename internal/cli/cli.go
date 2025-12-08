@@ -149,12 +149,12 @@ func runMigrate(args []string) int {
 				Store: store,
 			})
 			if err != nil {
-				log.Printf("⚠️ 仪表盘初始化失败: %v", err)
+				log.Printf("⚠️ Failed to initialize dashboard: %v", err)
 				return
 			}
-			log.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📺 自动仪表盘已启动\n   🔊 监听 : %s\n   🌐 访问 : %s\n   ⌨️ 提示 : 按 Ctrl+C 结束仪表盘服务\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", dashboardAddr, formatDashboardURL(dashboardAddr))
+			log.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📺 Auto dashboard ready\n   🔊 Listen : %s\n   🌐 Visit : %s\n   ⌨️ Hint  : press Ctrl+C to stop the dashboard service\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", dashboardAddr, formatDashboardURL(dashboardAddr))
 			if err := server.Start(nil); err != nil {
-				log.Printf("dashboard 停止: %v", err)
+				log.Printf("dashboard stopped: %v", err)
 			}
 		}()
 	}
@@ -273,12 +273,12 @@ func runDashboard(args []string) int {
 		return 1
 	}
 
-	log.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📺 仪表盘已就绪\n   🔊 监听 : %s\n   🌐 访问 : %s\n   ⌨️ 提示 : 按 Ctrl+C 结束仪表盘服务\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", addr, formatDashboardURL(addr))
+	log.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📺 Dashboard ready\n   🔊 Listen : %s\n   🌐 Visit : %s\n   ⌨️ Hint  : press Ctrl+C to stop the dashboard service\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", addr, formatDashboardURL(addr))
 	if err := server.Start(nil); err != nil {
 		if strings.Contains(err.Error(), "address already in use") {
-			log.Printf("dashboard 启动失败: 端口 %s 已占用，请在配置文件 dashboard.addr 或 --addr 中修改", addr)
+			log.Printf("dashboard failed: port %s already in use, change dashboard.addr or pass --addr", addr)
 		} else {
-			log.Printf("dashboard 停止: %v", err)
+			log.Printf("dashboard stopped: %v", err)
 		}
 		return 1
 	}
@@ -295,7 +295,7 @@ func formatDashboardURL(addr string) string {
 	}
 	if strings.HasPrefix(clean, ":") {
 		port := strings.TrimPrefix(clean, ":")
-		return fmt.Sprintf("http://127.0.0.1:%s (或 http://<服务器IP>:%s)", port, port)
+		return fmt.Sprintf("http://127.0.0.1:%s (or http://<server-ip>:%s)", port, port)
 	}
 	host, port, err := net.SplitHostPort(clean)
 	if err != nil {
@@ -303,7 +303,7 @@ func formatDashboardURL(addr string) string {
 	}
 	switch host {
 	case "", "0.0.0.0", "::", "[::]":
-		return fmt.Sprintf("http://<服务器IP>:%s (监听 %s:%s)", port, host, port)
+		return fmt.Sprintf("http://<server-ip>:%s (listening on %s:%s)", port, host, port)
 	default:
 		return fmt.Sprintf("http://%s:%s", host, port)
 	}
@@ -385,11 +385,11 @@ func runReplicate(args []string) int {
 	}
 	defer logger.Close()
 
-	logger.Console("🚀 df2redis 复制工具启动")
-	logger.Console("📋 配置文件: %s", cfg.ConfigDir())
-	logger.Console("📂 日志目录: %s", cfg.Log.Dir)
-	logger.Console("📝 日志级别: %s", cfg.Log.Level)
-	logger.Console("📄 日志文件: %s", logger.GetLogFilePath())
+	logger.Console("🚀 df2redis replicator starting")
+	logger.Console("📋 Config dir: %s", cfg.ConfigDir())
+	logger.Console("📂 Log dir: %s", cfg.Log.Dir)
+	logger.Console("📝 Log level: %s", cfg.Log.Level)
+	logger.Console("📄 Log file: %s", logger.GetLogFilePath())
 
 	// Build replicator
 	replicator := replica.NewReplicator(cfg)
@@ -402,7 +402,7 @@ func runReplicate(args []string) int {
 			Store: store,
 		})
 		if err != nil {
-			logger.Error("初始化内置仪表盘失败: %v", err)
+			logger.Error("Failed to initialize embedded dashboard: %v", err)
 			return 1
 		}
 		dashErr := make(chan error, 1)
@@ -413,17 +413,17 @@ func runReplicate(args []string) int {
 		select {
 		case err := <-dashErr:
 			if err != nil && strings.Contains(err.Error(), "address already in use") {
-				logger.Error("内置仪表盘启动失败: 端口 %s 已占用，请在 config.dashboard.addr 或 --dashboard-addr 中修改", dashboardAddr)
+				logger.Error("Embedded dashboard failed: port %s already in use (override via config.dashboard.addr or --dashboard-addr)", dashboardAddr)
 			} else if err != nil {
-				logger.Error("内置仪表盘启动失败: %v", err)
+				logger.Error("Embedded dashboard failed: %v", err)
 			}
 			return 1
 		case actual := <-ready:
-			logger.Console("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 内置仪表盘已启动\n   🔊 监听 : %s\n   🌐 访问 : %s\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+			logger.Console("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 Embedded dashboard ready\n   🔊 Listen : %s\n   🌐 Visit : %s\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
 				actual, formatDashboardURL(actual))
 			go func() {
 				if err := <-dashErr; err != nil {
-					logger.Warn("内置仪表盘停止: %v", err)
+					logger.Warn("Embedded dashboard stopped: %v", err)
 				}
 			}()
 		}
@@ -441,17 +441,17 @@ func runReplicate(args []string) int {
 			return
 		}
 		// Keep running after handshake until interrupted
-		logger.Console("\n⌨️  按 Ctrl+C 停止复制器")
+		logger.Console("\n⌨️  Press Ctrl+C to stop the replicator")
 		select {}
 	}()
 
 	// Wait for error or signal
 	select {
 	case err := <-errCh:
-		logger.Error("❌ 复制器启动失败: %v", err)
+		logger.Error("❌ Replicator failed to start: %v", err)
 		return 1
 	case sig := <-sigCh:
-		logger.Console("\n📡 收到信号 %v，正在停止...", sig)
+		logger.Console("\n📡 Signal %v received, shutting down...", sig)
 		replicator.Stop()
 		return 0
 	}

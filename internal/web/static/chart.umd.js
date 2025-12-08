@@ -17,7 +17,7 @@
     if (!labels.length) {
       ctx.fillStyle = '#94a3b8';
       ctx.font = '14px Inter, sans-serif';
-      ctx.fillText('暂无数据', 12, height / 2);
+      ctx.fillText('No data', 12, height / 2);
       return;
     }
     const max = Math.max.apply(null, values.map(Math.abs)) || 1;

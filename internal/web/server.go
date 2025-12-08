@@ -109,7 +109,7 @@ func (s *DashboardServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	ctx["Snapshot"] = s.snapshot
 	s.snapshotMu.RUnlock()
 
-	if err := s.tmpl.ExecuteTemplate(w, "index.html", ctx); err != nil {
+	if err := s.tmpl.ExecuteTemplate(w, "layout.html", ctx); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
