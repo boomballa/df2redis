@@ -12,11 +12,11 @@ import (
 
 // NodeInfo describes a Redis Cluster node
 type NodeInfo struct {
-	ID      string
-	Addr    string
-	Flags   []string
-	Master  string
-	Slots   [][2]int // slot ranges [start, end]
+	ID     string
+	Addr   string
+	Flags  []string
+	Master string
+	Slots  [][2]int // slot ranges [start, end]
 }
 
 // IsMaster reports whether this node is a primary
@@ -31,19 +31,19 @@ func (n *NodeInfo) IsMaster() bool {
 
 // ClusterClient routes commands in Cluster mode with a Standalone fallback
 type ClusterClient struct {
-	seedAddr  string
-	password  string
-	useTLS    bool
+	seedAddr string
+	password string
+	useTLS   bool
 
 	// Topology cache
 	mu       sync.RWMutex
-	slotMap  map[int]string   // slot -> node addr
+	slotMap  map[int]string            // slot -> node addr
 	nodes    map[string]*redisx.Client // addr -> client
 	topology []*NodeInfo
 
 	// Configuration
-	dialTimeout   time.Duration
-	isCluster     bool             // true when cluster mode detected
+	dialTimeout      time.Duration
+	isCluster        bool           // true when cluster mode detected
 	standaloneClient *redisx.Client // standalone client when not cluster
 }
 
@@ -73,7 +73,7 @@ func (c *ClusterClient) Connect() error {
 		// Fallback: determine if server runs standalone
 		errStr := fmt.Sprintf("%v", err)
 		if strings.Contains(errStr, "cluster support disabled") ||
-		   strings.Contains(errStr, "ERR This instance has cluster support disabled") {
+			strings.Contains(errStr, "ERR This instance has cluster support disabled") {
 			// Standalone mode detected
 			c.mu.Lock()
 			c.isCluster = false
@@ -237,4 +237,40 @@ func (c *ClusterClient) GetTopology() []*NodeInfo {
 	result := make([]*NodeInfo, len(c.topology))
 	copy(result, c.topology)
 	return result
+}
+
+// ForEachMaster invokes fn for each master node (or standalone instance).
+func (c *ClusterClient) ForEachMaster(fn func(addr string, client *redisx.Client) error) error {
+	c.mu.RLock()
+	isCluster := c.isCluster
+	standaloneClient := c.standaloneClient
+	seedAddr := c.seedAddr
+	topology := make([]*NodeInfo, len(c.topology))
+	copy(topology, c.topology)
+	nodeClients := make(map[string]*redisx.Client, len(c.nodes))
+	for addr, client := range c.nodes {
+		nodeClients[addr] = client
+	}
+	c.mu.RUnlock()
+
+	if !isCluster {
+		if standaloneClient == nil {
+			return fmt.Errorf("standalone client not initialized")
+		}
+		return fn(seedAddr, standaloneClient)
+	}
+
+	for _, node := range topology {
+		if node == nil || !node.IsMaster() {
+			continue
+		}
+		client := nodeClients[node.Addr]
+		if client == nil {
+			continue
+		}
+		if err := fn(node.Addr, client); err != nil {
+			return err
+		}
+	}
+	return nil
 }

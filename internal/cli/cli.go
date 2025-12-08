@@ -340,6 +340,8 @@ func runReplicate(args []string) int {
 	if err != nil {
 		return errorToExitCode(err)
 	}
+	store := state.NewStore(cfg.StatusFilePath())
+	_ = store.SetPipelineStatus("starting", "准备启动复制器")
 
 	// Initialize logging
 	if err := initLogger(cfg, "replicate"); err != nil {
@@ -356,6 +358,7 @@ func runReplicate(args []string) int {
 
 	// Build replicator
 	replicator := replica.NewReplicator(cfg)
+	replicator.AttachStateStore(store)
 
 	// Configure signal handling
 	sigCh := make(chan os.Signal, 1)

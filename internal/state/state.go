@@ -28,7 +28,29 @@ type Snapshot struct {
 	Stages         map[string]StageSnapshot `json:"stages"`
 	Metrics        map[string]float64       `json:"metrics"`
 	Events         []Event                  `json:"events"`
+	Check          *CheckResult             `json:"check,omitempty"`
 	UpdatedAt      time.Time                `json:"updatedAt"`
+}
+
+// CheckSample captures an inconsistent key found during validation.
+type CheckSample struct {
+	Key    string `json:"key"`
+	Source string `json:"source,omitempty"`
+	Target string `json:"target,omitempty"`
+}
+
+// CheckResult stores latest redis-full-check run details.
+type CheckResult struct {
+	Status           string        `json:"status"`
+	Mode             string        `json:"mode,omitempty"`
+	Message          string        `json:"message,omitempty"`
+	StartedAt        time.Time     `json:"startedAt,omitempty"`
+	FinishedAt       time.Time     `json:"finishedAt,omitempty"`
+	DurationSeconds  float64       `json:"durationSeconds,omitempty"`
+	InconsistentKeys int           `json:"inconsistentKeys,omitempty"`
+	Samples          []CheckSample `json:"samples,omitempty"`
+	ResultFile       string        `json:"resultFile,omitempty"`
+	SummaryFile      string        `json:"summaryFile,omitempty"`
 }
 
 // Store persists snapshot to disk.
@@ -131,5 +153,33 @@ func (s *Store) RecordMetric(name string, value float64) error {
 		snap.Metrics = map[string]float64{}
 	}
 	snap.Metrics[name] = value
+	return s.Write(snap)
+}
+
+// UpdateMetrics merges a batch of metric values into the snapshot.
+func (s *Store) UpdateMetrics(updates map[string]float64) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	snap, err := s.Load()
+	if err != nil {
+		return err
+	}
+	if snap.Metrics == nil {
+		snap.Metrics = map[string]float64{}
+	}
+	for k, v := range updates {
+		snap.Metrics[k] = v
+	}
+	return s.Write(snap)
+}
+
+// SaveCheckResult records the latest data validation result.
+func (s *Store) SaveCheckResult(res CheckResult) error {
+	snap, err := s.Load()
+	if err != nil {
+		return err
+	}
+	snap.Check = &res
 	return s.Write(snap)
 }

@@ -117,7 +117,8 @@ The CLI shares logging helpers (`internal/logger`) that output both to the conso
 
 - [Chinese technical docs](docs/) – deep dives for each replication phase, environment setup guides, etc.
 - [English README (this file)](README.md) – concise overview.
-- The docs tree will soon contain `docs/en/` with translated guides; contributions welcome!
+- [Dashboard API reference](docs/api/dashboard-api.md) – JSON endpoints consumed by the upcoming React UI.
+- [前端设计草案（ZH）](docs/zh/dashboard.md) – Material UI + Chart.js layout plan (English version WIP).
 
 ---
 
