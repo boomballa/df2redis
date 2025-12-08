@@ -14,6 +14,7 @@ import (
 	"df2redis/internal/cluster"
 	"df2redis/internal/config"
 	"df2redis/internal/redisx"
+	"df2redis/internal/state"
 )
 
 // Replicator establishes the replication relationship with Dragonfly
@@ -52,6 +53,15 @@ type Replicator struct {
 
 	// Channel used to wait for Start() to finish
 	done chan struct{}
+
+	// State/metrics reporting
+	store             *state.Store
+	metrics           *metricsRecorder
+	metricsMu         sync.Mutex
+	flowKeyCounts     []int64
+	flowLSNs          []uint64
+	totalSyncedKeys   int64
+	initialTargetKeys float64
 }
 
 // NewReplicator creates a new replicator
@@ -76,23 +86,40 @@ func NewReplicator(cfg *config.Config) *Replicator {
 	}
 }
 
+// AttachStateStore wires a state store for dashboard metrics.
+func (r *Replicator) AttachStateStore(store *state.Store) {
+	r.store = store
+	if store != nil && r.metrics == nil {
+		r.metrics = newMetricsRecorder(store)
+	}
+}
+
 // Start launches the replication workflow
 func (r *Replicator) Start() error {
 	defer close(r.done) // ensure Stop() gets notified when exiting
+	if r.metrics != nil {
+		defer r.metrics.Close()
+	}
 
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	log.Println("🚀 启动 Dragonfly 复制器")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	r.recordPipelineStatus("handshake", "正在连接 Dragonfly")
+	r.recordStage("replicator", "starting", "启动复制器")
 
 	// Connect to Dragonfly
 	if err := r.connect(); err != nil {
+		r.recordPipelineStatus("error", fmt.Sprintf("连接失败: %v", err))
 		return fmt.Errorf("连接失败: %w", err)
 	}
 
 	// Perform handshake
 	if err := r.handshake(); err != nil {
+		r.recordPipelineStatus("error", fmt.Sprintf("握手失败: %v", err))
 		return fmt.Errorf("握手失败: %w", err)
 	}
+	r.recordPipelineStatus("full_sync", "接收 RDB 快照")
+	r.estimateSourceKeys()
 
 	// Initialize Redis client (auto-detects cluster/standalone)
 	log.Println("")
@@ -103,8 +130,10 @@ func (r *Replicator) Start() error {
 		r.cfg.Target.TLS,
 	)
 	if err := r.clusterClient.Connect(); err != nil {
+		r.recordPipelineStatus("error", fmt.Sprintf("连接目标 Redis 失败: %v", err))
 		return fmt.Errorf("连接目标 Redis 失败: %w", err)
 	}
+	r.estimateTargetKeys()
 
 	// Detect topology
 	topology := r.clusterClient.GetTopology()
@@ -116,23 +145,29 @@ func (r *Replicator) Start() error {
 
 	// Send DFLY SYNC to trigger the RDB transfer
 	if err := r.sendDflySync(); err != nil {
+		r.recordPipelineStatus("error", fmt.Sprintf("发送 DFLY SYNC 失败: %v", err))
 		return fmt.Errorf("发送 DFLY SYNC 失败: %w", err)
 	}
 
 	// Receive snapshot in parallel
 	r.state = StateFullSync
 	if err := r.receiveSnapshot(); err != nil {
+		r.recordPipelineStatus("error", fmt.Sprintf("接收快照失败: %v", err))
 		return fmt.Errorf("接收快照失败: %w", err)
 	}
 
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	log.Println("🎯 复制器启动成功！")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	r.recordPipelineStatus("incremental", "Journal 增量重放")
+	r.recordStage("replicator", "journal", "Journal 流监听")
 
 	// Receive and parse the journal stream
 	if err := r.receiveJournal(); err != nil {
+		r.recordPipelineStatus("error", fmt.Sprintf("接收 Journal 流失败: %v", err))
 		return fmt.Errorf("接收 Journal 流失败: %w", err)
 	}
+	r.recordPipelineStatus("completed", "Journal 流结束")
 
 	return nil
 }
@@ -160,6 +195,7 @@ func (r *Replicator) Stop() {
 	<-r.done
 
 	r.state = StateStopped
+	r.recordPipelineStatus("stopped", "复制器已停止")
 	log.Println("✓ 复制器已停止")
 }
 
@@ -362,10 +398,12 @@ func (r *Replicator) establishFlows() error {
 
 	r.flows = make([]FlowInfo, numFlows)
 	r.flowConns = make([]*redisx.Client, numFlows)
+	r.initFlowTracking(numFlows)
 
 	// Create independent TCP connections for each FLOW
 	for i := 0; i < numFlows; i++ {
 		log.Printf("    • 建立 FLOW-%d 独立连接...", i)
+		r.recordFlowStage(i, "connecting", "建立 FLOW 连接")
 
 		// 1. Create a new TCP connection
 		dialCtx, cancel := context.WithTimeout(r.ctx, 10*time.Second)
@@ -425,6 +463,7 @@ func (r *Replicator) establishFlows() error {
 		}
 
 		log.Printf("    ✓ FLOW-%d 连接和注册完成", i)
+		r.recordFlowStage(i, "established", fmt.Sprintf("%s FLOW 已建立", r.flows[i].SyncType))
 	}
 
 	log.Printf("    ✓ 所有 %d 个 FLOW 连接已建立", numFlows)
@@ -437,6 +476,13 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func (r *Replicator) initFlowTracking(num int) {
+	r.metricsMu.Lock()
+	defer r.metricsMu.Unlock()
+	r.flowKeyCounts = make([]int64, num)
+	r.flowLSNs = make([]uint64, num)
 }
 
 // sendDflySync issues DFLY SYNC to trigger the RDB transfer.
@@ -512,6 +558,7 @@ func (r *Replicator) receiveSnapshot() error {
 
 			flowConn := r.flowConns[flowID]
 			stats := statsMap[flowID]
+			r.recordFlowStage(flowID, "rdb", "接收 RDB 快照")
 
 			log.Printf("  [FLOW-%d] 开始解析 RDB 数据...", flowID)
 
@@ -521,6 +568,7 @@ func (r *Replicator) receiveSnapshot() error {
 			// 1. Parse header
 			if err := parser.ParseHeader(); err != nil {
 				errChan <- fmt.Errorf("FLOW-%d: 解析 RDB 头部失败: %w", flowID, err)
+				r.recordFlowStage(flowID, "error", fmt.Sprintf("解析头部失败: %v", err))
 				return
 			}
 			log.Printf("  [FLOW-%d] ✓ RDB 头部解析成功", flowID)
@@ -541,11 +589,14 @@ func (r *Replicator) receiveSnapshot() error {
 					if err == io.EOF {
 						log.Printf("  [FLOW-%d] ✓ RDB 解析完成（成功=%d, 跳过=%d, 失败=%d）",
 							flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount)
+						r.recordFlowStage(flowID, "rdb_done",
+							fmt.Sprintf("成功=%d 跳过=%d 失败=%d", stats.KeyCount, stats.SkippedCount, stats.ErrorCount))
 						// FULLSYNC_END received, snapshot done.
 						// EOF tokens are read after STARTSTABLE.
 						return
 					}
 					errChan <- fmt.Errorf("FLOW-%d: 解析失败: %w", flowID, err)
+					r.recordFlowStage(flowID, "error", fmt.Sprintf("解析失败: %v", err))
 					return
 				}
 
@@ -563,10 +614,12 @@ func (r *Replicator) receiveSnapshot() error {
 					statsMu.Lock()
 					stats.ErrorCount++
 					statsMu.Unlock()
+					r.recordFlowStage(flowID, "error", fmt.Sprintf("写入失败 key=%s", entry.Key))
 				} else {
 					statsMu.Lock()
 					stats.KeyCount++
 					statsMu.Unlock()
+					r.onSnapshotKey(flowID)
 
 					// Log progress every 100 keys
 					if stats.KeyCount%100 == 0 {
@@ -596,8 +649,8 @@ func (r *Replicator) receiveSnapshot() error {
 		totalKeys += stats.KeyCount
 		totalSkipped += stats.SkippedCount
 		totalErrors += stats.ErrorCount
-	log.Printf("  [FLOW-%d] 统计: 成功=%d, 跳过=%d, 失败=%d",
-		flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount)
+		log.Printf("  [FLOW-%d] 统计: 成功=%d, 跳过=%d, 失败=%d",
+			flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount)
 	}
 
 	log.Printf("  ✓ RDB 全量导入完成: 总计 %d 个键, 跳过 %d 个（已过期）, 失败 %d 个",
@@ -636,9 +689,9 @@ func (r *Replicator) sendStartStable() error {
 
 // verifyEofTokens validates EOF tokens emitted by each FLOW after STARTSTABLE.
 // After STARTSTABLE each FLOW sends:
-//   1. EOF opcode (0xFF) - 1 byte
-//   2. Checksum - 8 bytes
-//   3. EOF token - 40 bytes
+//  1. EOF opcode (0xFF) - 1 byte
+//  2. Checksum - 8 bytes
+//  3. EOF token - 40 bytes
 func (r *Replicator) verifyEofTokens() error {
 	log.Println("")
 	log.Println("🔐 验证 EOF Token...")
@@ -829,6 +882,7 @@ func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg
 
 	reader := NewJournalReader(r.flowConns[flowID])
 	log.Printf("  [FLOW-%d] 开始接收 Journal 流", flowID)
+	r.recordFlowStage(flowID, "journal", "监听 Journal 流")
 
 	for {
 		// Observe cancellation
@@ -844,6 +898,7 @@ func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg
 		if err != nil {
 			if err == io.EOF {
 				log.Printf("  [FLOW-%d] Journal 流结束（EOF）", flowID)
+				r.recordFlowStage(flowID, "journal_done", "Journal 流结束")
 				return
 			}
 			// Send error to channel
@@ -851,6 +906,7 @@ func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg
 				FlowID: flowID,
 				Error:  fmt.Errorf("读取失败: %w", err),
 			}
+			r.recordFlowStage(flowID, "error", fmt.Sprintf("Journal 读取失败: %v", err))
 			return
 		}
 
@@ -993,6 +1049,7 @@ func (r *Replicator) replayCommand(flowID int, entry *JournalEntry) error {
 		}
 		r.replayStats.FlowLSNs[flowID] = entry.LSN
 		r.replayStats.mu.Unlock()
+		r.recordFlowLSN(flowID, entry.LSN)
 		return nil
 
 	case OpExpired:
@@ -1103,6 +1160,9 @@ func (r *Replicator) saveCheckpoint() error {
 	}
 
 	r.lastCheckpointTime = time.Now()
+	if r.metrics != nil {
+		r.metrics.Set(state.MetricCheckpointSavedAtUnix, float64(r.lastCheckpointTime.Unix()))
+	}
 	return nil
 }
 
@@ -1369,4 +1429,152 @@ func (r *Replicator) writeZSet(entry *RDBEntry) error {
 	}
 
 	return nil
+}
+
+func (r *Replicator) recordPipelineStatus(status, message string) {
+	if r.store == nil {
+		return
+	}
+	if err := r.store.SetPipelineStatus(status, message); err != nil {
+		log.Printf("[state] 设置 Pipeline 状态失败: %v", err)
+	}
+}
+
+func (r *Replicator) recordStage(name, status, message string) {
+	if r.store == nil {
+		return
+	}
+	if err := r.store.UpdateStage(name, status, message); err != nil {
+		log.Printf("[state] 更新阶段 %s 失败: %v", name, err)
+	}
+}
+
+func (r *Replicator) recordFlowStage(flowID int, status, message string) {
+	r.recordStage(fmt.Sprintf("flow:%d", flowID), status, message)
+}
+
+func (r *Replicator) estimateSourceKeys() {
+	if r.metrics == nil || r.mainConn == nil {
+		return
+	}
+	reply, err := r.mainConn.Do("INFO", "keyspace")
+	if err != nil {
+		log.Printf("[state] 获取源端 key 数量失败: %v", err)
+		return
+	}
+	info, err := redisx.ToString(reply)
+	if err != nil {
+		log.Printf("[state] 解析源端 keyspace 失败: %v", err)
+		return
+	}
+	total := parseKeyspaceInfo(info)
+	if total >= 0 {
+		r.metrics.Set(state.MetricSourceKeysEstimated, total)
+	}
+}
+
+func parseKeyspaceInfo(info string) float64 {
+	var total float64
+	lines := strings.Split(info, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || !(strings.HasPrefix(line, "db") || strings.HasPrefix(line, "DB")) {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		stats := strings.Split(parts[1], ",")
+		for _, stat := range stats {
+			stat = strings.TrimSpace(stat)
+			if strings.HasPrefix(stat, "keys=") {
+				val := strings.TrimPrefix(stat, "keys=")
+				if n, err := strconv.ParseFloat(val, 64); err == nil {
+					total += n
+				}
+				break
+			}
+		}
+	}
+	return total
+}
+
+func (r *Replicator) estimateTargetKeys() {
+	if r.metrics == nil {
+		return
+	}
+	if r.clusterClient == nil {
+		return
+	}
+	var total float64
+	err := r.clusterClient.ForEachMaster(func(_ string, client *redisx.Client) error {
+		reply, err := client.Do("DBSIZE")
+		if err != nil {
+			return err
+		}
+		count, err := redisx.ToInt64(reply)
+		if err != nil {
+			return err
+		}
+		total += float64(count)
+		return nil
+	})
+	if err != nil {
+		log.Printf("[state] 获取目标端 key 数量失败: %v", err)
+		return
+	}
+	r.metricsMu.Lock()
+	r.initialTargetKeys = total
+	r.totalSyncedKeys = 0
+	r.metricsMu.Unlock()
+	r.metrics.Set(state.MetricTargetKeysInitial, total)
+	r.metrics.Set(state.MetricTargetKeysCurrent, total)
+}
+
+func (r *Replicator) onSnapshotKey(flowID int) {
+	if r.metrics == nil {
+		return
+	}
+	r.metricsMu.Lock()
+	if flowID >= len(r.flowKeyCounts) {
+		r.metricsMu.Unlock()
+		return
+	}
+	r.flowKeyCounts[flowID]++
+	flowCount := r.flowKeyCounts[flowID]
+	r.totalSyncedKeys++
+	total := r.totalSyncedKeys
+	base := r.initialTargetKeys
+	r.metricsMu.Unlock()
+
+	if flowCount%500 == 0 {
+		r.metrics.SetFlowImported(flowID, float64(flowCount))
+	}
+	if total%500 == 0 {
+		r.metrics.Set(state.MetricSyncedKeys, float64(total))
+		r.metrics.Set(state.MetricTargetKeysCurrent, base+float64(total))
+	}
+}
+
+func (r *Replicator) recordFlowLSN(flowID int, lsn uint64) {
+	if r.metrics == nil {
+		return
+	}
+	r.metricsMu.Lock()
+	if flowID >= len(r.flowLSNs) {
+		r.metricsMu.Unlock()
+		return
+	}
+	r.flowLSNs[flowID] = lsn
+	var max uint64
+	for _, val := range r.flowLSNs {
+		if val > max {
+			max = val
+		}
+	}
+	r.metricsMu.Unlock()
+	r.metrics.Set(state.MetricIncrementalLSNCurrent, float64(max))
+	r.metrics.Set(state.MetricIncrementalLSNApplied, float64(max))
+	r.metrics.Set(state.MetricIncrementalLagMs, 0)
 }
