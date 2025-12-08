@@ -47,6 +47,9 @@ type Replicator struct {
 	// Replay statistics
 	replayStats ReplayStats
 
+	// RDB snapshot statistics
+	rdbStats RDBStats
+
 	// Automatic checkpoint saving
 	checkpointInterval time.Duration
 	lastCheckpointTime time.Time
@@ -1024,6 +1027,13 @@ type ReplayStats struct {
 	LastReplayTime time.Time
 }
 
+// RDBStats holds RDB snapshot import statistics
+type RDBStats struct {
+	mu       sync.Mutex
+	Commands int64 // Total Redis commands executed during RDB import
+	Keys     int64 // Total keys imported
+}
+
 // replayCommand replays a single journal command into Redis Cluster
 func (r *Replicator) replayCommand(flowID int, entry *JournalEntry) error {
 	switch entry.Opcode {
@@ -1257,6 +1267,10 @@ func (r *Replicator) writeString(entry *RDBEntry) error {
 	}
 
 	// Write value
+	r.rdbStats.mu.Lock()
+	r.rdbStats.Commands++
+	r.rdbStats.mu.Unlock()
+
 	_, err := r.clusterClient.Do("SET", entry.Key, strVal.Value)
 	if err != nil {
 		return fmt.Errorf("SET 命令失败: %w", err)
@@ -1267,12 +1281,20 @@ func (r *Replicator) writeString(entry *RDBEntry) error {
 		// Compute remaining TTL
 		remainingMs := entry.ExpireMs - getCurrentTimeMillis()
 		if remainingMs > 0 {
+			r.rdbStats.mu.Lock()
+			r.rdbStats.Commands++
+			r.rdbStats.mu.Unlock()
+
 			_, err := r.clusterClient.Do("PEXPIRE", entry.Key, fmt.Sprintf("%d", remainingMs))
 			if err != nil {
 				return fmt.Errorf("PEXPIRE 命令失败: %w", err)
 			}
 		}
 	}
+
+	r.rdbStats.mu.Lock()
+	r.rdbStats.Keys++
+	r.rdbStats.mu.Unlock()
 
 	return nil
 }
@@ -1286,6 +1308,9 @@ func (r *Replicator) writeHash(entry *RDBEntry) error {
 	}
 
 	// Remove existing key to avoid stale fields
+	r.rdbStats.mu.Lock()
+	r.rdbStats.Commands++
+	r.rdbStats.mu.Unlock()
 	_, _ = r.clusterClient.Do("DEL", entry.Key)
 
 	// Write all fields using HSET key field1 value1 ...
@@ -1297,6 +1322,11 @@ func (r *Replicator) writeHash(entry *RDBEntry) error {
 			log.Printf("  [DEBUG]   field=%s, value=%s", field, value)
 		}
 		log.Printf("  [DEBUG] 执行 HSET 命令，参数数量=%d", len(args))
+
+		r.rdbStats.mu.Lock()
+		r.rdbStats.Commands++
+		r.rdbStats.mu.Unlock()
+
 		_, err := r.clusterClient.Do("HSET", args...)
 		if err != nil {
 			return fmt.Errorf("HSET 命令失败: %w", err)
@@ -1310,12 +1340,20 @@ func (r *Replicator) writeHash(entry *RDBEntry) error {
 	if entry.ExpireMs > 0 {
 		remainingMs := entry.ExpireMs - getCurrentTimeMillis()
 		if remainingMs > 0 {
+			r.rdbStats.mu.Lock()
+			r.rdbStats.Commands++
+			r.rdbStats.mu.Unlock()
+
 			_, err := r.clusterClient.Do("PEXPIRE", entry.Key, fmt.Sprintf("%d", remainingMs))
 			if err != nil {
 				return fmt.Errorf("PEXPIRE 命令失败: %w", err)
 			}
 		}
 	}
+
+	r.rdbStats.mu.Lock()
+	r.rdbStats.Keys++
+	r.rdbStats.mu.Unlock()
 
 	return nil
 }
@@ -1329,6 +1367,9 @@ func (r *Replicator) writeList(entry *RDBEntry) error {
 	}
 
 	// Remove existing key
+	r.rdbStats.mu.Lock()
+	r.rdbStats.Commands++
+	r.rdbStats.mu.Unlock()
 	_, _ = r.clusterClient.Do("DEL", entry.Key)
 
 	// Insert elements with RPUSH
@@ -1337,6 +1378,11 @@ func (r *Replicator) writeList(entry *RDBEntry) error {
 		for _, elem := range listVal.Elements {
 			args = append(args, elem)
 		}
+
+		r.rdbStats.mu.Lock()
+		r.rdbStats.Commands++
+		r.rdbStats.mu.Unlock()
+
 		_, err := r.clusterClient.Do("RPUSH", args...)
 		if err != nil {
 			return fmt.Errorf("RPUSH 命令失败: %w", err)
@@ -1347,12 +1393,20 @@ func (r *Replicator) writeList(entry *RDBEntry) error {
 	if entry.ExpireMs > 0 {
 		remainingMs := entry.ExpireMs - getCurrentTimeMillis()
 		if remainingMs > 0 {
+			r.rdbStats.mu.Lock()
+			r.rdbStats.Commands++
+			r.rdbStats.mu.Unlock()
+
 			_, err := r.clusterClient.Do("PEXPIRE", entry.Key, fmt.Sprintf("%d", remainingMs))
 			if err != nil {
 				return fmt.Errorf("PEXPIRE 命令失败: %w", err)
 			}
 		}
 	}
+
+	r.rdbStats.mu.Lock()
+	r.rdbStats.Keys++
+	r.rdbStats.mu.Unlock()
 
 	return nil
 }
@@ -1366,6 +1420,9 @@ func (r *Replicator) writeSet(entry *RDBEntry) error {
 	}
 
 	// Remove existing key
+	r.rdbStats.mu.Lock()
+	r.rdbStats.Commands++
+	r.rdbStats.mu.Unlock()
 	_, _ = r.clusterClient.Do("DEL", entry.Key)
 
 	// Insert members via SADD
@@ -1374,6 +1431,11 @@ func (r *Replicator) writeSet(entry *RDBEntry) error {
 		for _, member := range setVal.Members {
 			args = append(args, member)
 		}
+
+		r.rdbStats.mu.Lock()
+		r.rdbStats.Commands++
+		r.rdbStats.mu.Unlock()
+
 		_, err := r.clusterClient.Do("SADD", args...)
 		if err != nil {
 			return fmt.Errorf("SADD 命令失败: %w", err)
@@ -1384,12 +1446,20 @@ func (r *Replicator) writeSet(entry *RDBEntry) error {
 	if entry.ExpireMs > 0 {
 		remainingMs := entry.ExpireMs - getCurrentTimeMillis()
 		if remainingMs > 0 {
+			r.rdbStats.mu.Lock()
+			r.rdbStats.Commands++
+			r.rdbStats.mu.Unlock()
+
 			_, err := r.clusterClient.Do("PEXPIRE", entry.Key, fmt.Sprintf("%d", remainingMs))
 			if err != nil {
 				return fmt.Errorf("PEXPIRE 命令失败: %w", err)
 			}
 		}
 	}
+
+	r.rdbStats.mu.Lock()
+	r.rdbStats.Keys++
+	r.rdbStats.mu.Unlock()
 
 	return nil
 }
@@ -1403,6 +1473,9 @@ func (r *Replicator) writeZSet(entry *RDBEntry) error {
 	}
 
 	// Remove existing key
+	r.rdbStats.mu.Lock()
+	r.rdbStats.Commands++
+	r.rdbStats.mu.Unlock()
 	_, _ = r.clusterClient.Do("DEL", entry.Key)
 
 	// Insert members via ZADD key score member ...
@@ -1411,6 +1484,11 @@ func (r *Replicator) writeZSet(entry *RDBEntry) error {
 		for _, zm := range zsetVal.Members {
 			args = append(args, fmt.Sprintf("%f", zm.Score), zm.Member)
 		}
+
+		r.rdbStats.mu.Lock()
+		r.rdbStats.Commands++
+		r.rdbStats.mu.Unlock()
+
 		_, err := r.clusterClient.Do("ZADD", args...)
 		if err != nil {
 			return fmt.Errorf("ZADD 命令失败: %w", err)
@@ -1421,12 +1499,20 @@ func (r *Replicator) writeZSet(entry *RDBEntry) error {
 	if entry.ExpireMs > 0 {
 		remainingMs := entry.ExpireMs - getCurrentTimeMillis()
 		if remainingMs > 0 {
+			r.rdbStats.mu.Lock()
+			r.rdbStats.Commands++
+			r.rdbStats.mu.Unlock()
+
 			_, err := r.clusterClient.Do("PEXPIRE", entry.Key, fmt.Sprintf("%d", remainingMs))
 			if err != nil {
 				return fmt.Errorf("PEXPIRE 命令失败: %w", err)
 			}
 		}
 	}
+
+	r.rdbStats.mu.Lock()
+	r.rdbStats.Keys++
+	r.rdbStats.mu.Unlock()
 
 	return nil
 }
@@ -1578,11 +1664,18 @@ func (r *Replicator) recordFlowLSN(flowID int, lsn uint64) {
 	r.metrics.Set(state.MetricIncrementalLSNApplied, float64(max))
 	r.metrics.Set(state.MetricIncrementalLagMs, 0)
 
-	// Update operation statistics
+	// Update operation statistics (RDB + Journal)
 	r.replayStats.mu.Lock()
-	r.metrics.Set(state.MetricIncrementalOpsTotal, float64(r.replayStats.TotalCommands))
-	r.metrics.Set(state.MetricIncrementalOpsSuccess, float64(r.replayStats.ReplayedOK))
+	r.rdbStats.mu.Lock()
+
+	totalOps := r.rdbStats.Commands + r.replayStats.TotalCommands
+	totalSuccess := r.rdbStats.Commands + r.replayStats.ReplayedOK
+
+	r.metrics.Set(state.MetricIncrementalOpsTotal, float64(totalOps))
+	r.metrics.Set(state.MetricIncrementalOpsSuccess, float64(totalSuccess))
 	r.metrics.Set(state.MetricIncrementalOpsSkipped, float64(r.replayStats.Skipped))
 	r.metrics.Set(state.MetricIncrementalOpsFailed, float64(r.replayStats.Failed))
+
+	r.rdbStats.mu.Unlock()
 	r.replayStats.mu.Unlock()
 }
