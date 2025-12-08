@@ -103,7 +103,8 @@ func (s *DashboardServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 		"GeneratedAt": time.Now().Format(time.RFC3339),
 		"Source":      s.cfg.Source,
 		"Target":      s.cfg.Target,
-		"Snapshot":    s.cfg.Migrate.SnapshotPath,
+		"SnapshotPath": s.cfg.Migrate.SnapshotPath,
+		"TaskName":    s.cfg.TaskName,
 	}
 	s.snapshotMu.RLock()
 	ctx["Snapshot"] = s.snapshot

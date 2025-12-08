@@ -5,6 +5,12 @@
         <p class="subtitle">Track Dragonfly → Redis synchronization at a glance.</p>
     </div>
     <div class="meta-row">
+        {{ if .TaskName }}
+        <div class="meta-pill" style="background: rgba(168, 85, 247, 0.15); border-color: rgba(168, 85, 247, 0.3);">
+            <span class="icon">🏷️</span>
+            <span>Task: <strong>{{ .TaskName }}</strong></span>
+        </div>
+        {{ end }}
         <div class="meta-pill">
             <span class="icon">🗄️</span>
             <span>Source: <strong>{{ .Source.Type }} @ {{ .Source.Addr }}</strong></span>
@@ -54,8 +60,7 @@
 <div class="grid grid-2" style="margin-top:24px;">
     <section class="card highlight">
         <div class="card-title">Metrics overview</div>
-        <canvas id="metricsChart" height="160"></canvas>
-        <div class="metrics-grid" id="metrics-list" style="margin-top:18px;">
+        <div class="metrics-grid" id="metrics-list" style="margin-top:0;">
             {{ with .Snapshot }}
             {{ range $k, $v := .Metrics }}
             <div class="metric-item">
@@ -112,7 +117,14 @@
             <div class="flow-step" data-status="active">
                 <div class="flow-node">
                     <div class="flow-icon">📝</div>
-                    <div class="flow-label">Journal Stream</div>
+                    <div class="flow-label">Journal Stream (Continuous)</div>
+                </div>
+                <div class="flow-connector"></div>
+            </div>
+            <div class="flow-step" data-status="pending">
+                <div class="flow-node">
+                    <div class="flow-icon">✅</div>
+                    <div class="flow-label">Sync Complete</div>
                 </div>
             </div>
         </div>
