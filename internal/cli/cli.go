@@ -153,7 +153,7 @@ func runMigrate(args []string) int {
 				return
 			}
 			log.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📺 自动仪表盘已启动\n   🔊 监听 : %s\n   🌐 访问 : %s\n   ⌨️ 提示 : 按 Ctrl+C 结束仪表盘服务\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", dashboardAddr, formatDashboardURL(dashboardAddr))
-			if err := server.Start(); err != nil {
+			if err := server.Start(nil); err != nil {
 				log.Printf("dashboard 停止: %v", err)
 			}
 		}()
@@ -274,7 +274,7 @@ func runDashboard(args []string) int {
 	}
 
 	log.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📺 仪表盘已就绪\n   🔊 监听 : %s\n   🌐 访问 : %s\n   ⌨️ 提示 : 按 Ctrl+C 结束仪表盘服务\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", addr, formatDashboardURL(addr))
-	if err := server.Start(); err != nil {
+	if err := server.Start(nil); err != nil {
 		if strings.Contains(err.Error(), "address already in use") {
 			log.Printf("dashboard 启动失败: 端口 %s 已占用，请在配置文件 dashboard.addr 或 --addr 中修改", addr)
 		} else {
@@ -402,19 +402,30 @@ func runReplicate(args []string) int {
 			Store: store,
 		})
 		if err != nil {
-			log.Printf("初始化内置仪表盘失败: %v", err)
-		} else {
+			logger.Error("初始化内置仪表盘失败: %v", err)
+			return 1
+		}
+		dashErr := make(chan error, 1)
+		ready := make(chan string, 1)
+		go func() {
+			dashErr <- server.Start(ready)
+		}()
+		select {
+		case err := <-dashErr:
+			if err != nil && strings.Contains(err.Error(), "address already in use") {
+				logger.Error("内置仪表盘启动失败: 端口 %s 已占用，请在 config.dashboard.addr 或 --dashboard-addr 中修改", dashboardAddr)
+			} else if err != nil {
+				logger.Error("内置仪表盘启动失败: %v", err)
+			}
+			return 1
+		case actual := <-ready:
+			logger.Console("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 内置仪表盘已启动\n   🔊 监听 : %s\n   🌐 访问 : %s\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				actual, formatDashboardURL(actual))
 			go func() {
-				if err := server.Start(); err != nil {
-					if strings.Contains(err.Error(), "address already in use") {
-						log.Printf("内置仪表盘启动失败: 端口 %s 已占用，请在 config.dashboard.addr 或 --dashboard-addr 中修改", dashboardAddr)
-					} else {
-						log.Printf("内置仪表盘停止: %v", err)
-					}
+				if err := <-dashErr; err != nil {
+					logger.Warn("内置仪表盘停止: %v", err)
 				}
 			}()
-			log.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 内置仪表盘已启动\n   🔊 监听 : %s\n   🌐 访问 : %s\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-				dashboardAddr, formatDashboardURL(dashboardAddr))
 		}
 	}
 
@@ -430,17 +441,17 @@ func runReplicate(args []string) int {
 			return
 		}
 		// Keep running after handshake until interrupted
-		log.Println("\n⌨️  按 Ctrl+C 停止复制器")
+		logger.Console("\n⌨️  按 Ctrl+C 停止复制器")
 		select {}
 	}()
 
 	// Wait for error or signal
 	select {
 	case err := <-errCh:
-		log.Printf("❌ 复制器启动失败: %v", err)
+		logger.Error("❌ 复制器启动失败: %v", err)
 		return 1
 	case sig := <-sigCh:
-		log.Printf("\n📡 收到信号 %v，正在停止...", sig)
+		logger.Console("\n📡 收到信号 %v，正在停止...", sig)
 		replicator.Stop()
 		return 0
 	}
@@ -594,9 +605,10 @@ func initLogger(cfg *config.Config, mode string) error {
 	logFilePrefix := buildLogFilePrefix(cfg, mode)
 
 	// Initialize logger
-	if err := logger.Init(logDir, level, logFilePrefix); err != nil {
+	if err := logger.Init(logDir, level, logFilePrefix, cfg.Log.ConsoleEnabledValue()); err != nil {
 		return fmt.Errorf("初始化日志器失败: %w", err)
 	}
+	log.SetOutput(logger.Writer())
 
 	return nil
 }

@@ -109,7 +109,7 @@ Key modules:
 | `df2redis dashboard --config <file> [--addr :8080]` | Start the standalone dashboard service |
 | `df2redis migrate/prepare/...` | Legacy redis-shake based pipeline helpers |
 
-The CLI shares logging helpers (`internal/logger`) that output both to the console and to rotating files. Use the `log` block in the config file to customize directories and levels.
+The CLI uses a shared logger (`internal/logger`) that truncates `<log.dir>/<task>_<command>.log` on each run. Detailed replication steps are written there, while the console only shows highlights (set `log.consoleEnabled: false` to silence it). Customize level/dir via the `log` block in the config file.
 
 The embedded dashboard listens on `config.dashboard.addr` (default `:8080`). Override it in the YAML or pass `--dashboard-addr` to `replicate`/`--addr` to `dashboard`.
 

@@ -165,13 +165,7 @@ func parseList(lines []yamlLine, idx int, indent int) ([]interface{}, int, error
 }
 
 func parseScalar(value string) interface{} {
-	value = strings.TrimSpace(value)
-	// Strip inline comments for unquoted scalars.
-	if !strings.HasPrefix(value, "\"") && !strings.HasPrefix(value, "'") {
-		if idx := strings.Index(value, "#"); idx >= 0 {
-			value = strings.TrimSpace(value[:idx])
-		}
-	}
+	value = stripInlineComment(strings.TrimSpace(value))
 
 	// Try to unquote first so quoted booleans/numbers are handled.
 	if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") {
@@ -199,6 +193,41 @@ func parseScalar(value string) interface{} {
 		return f
 	}
 	return value
+}
+
+func stripInlineComment(value string) string {
+	inSingle := false
+	inDouble := false
+	escaped := false
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		switch ch {
+		case '\\':
+			if inDouble {
+				escaped = !escaped
+			}
+		case '"':
+			if !inSingle {
+				if escaped {
+					escaped = false
+					continue
+				}
+				inDouble = !inDouble
+				continue
+			}
+		case '\'':
+			if !inDouble {
+				inSingle = !inSingle
+				continue
+			}
+		case '#':
+			if !inSingle && !inDouble {
+				return strings.TrimSpace(value[:i])
+			}
+		}
+		escaped = false
+	}
+	return strings.TrimSpace(value)
 }
 
 func parseInlineMap(item string) (map[string]interface{}, bool) {

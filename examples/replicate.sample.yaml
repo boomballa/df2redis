@@ -42,9 +42,9 @@ checkpoint:
 ##### 📝 log config ####################
 ########################################
 log:
-  dir: "logs"
-  level: "info"
-  consoleEnabled: true
+  dir: "logs"                # Relative to this config directory (e.g. ../logs)
+  level: "info"              # debug | info | warn | error
+  consoleEnabled: true        # Print highlights to stdout (false = silent)
 
 ########################################
 ##### ⚖️ Conflict Policy ##############

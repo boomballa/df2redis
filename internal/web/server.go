@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html/template"
 	"log"
+	"net"
 	"net/http"
 	"path/filepath"
 	"sort"
@@ -49,7 +50,8 @@ func New(opts Options) (*DashboardServer, error) {
 }
 
 // Start runs HTTP server. Blocks until server stops.
-func (s *DashboardServer) Start() error {
+// When ready is not nil it will receive the actual listen address once the port is bound.
+func (s *DashboardServer) Start(ready chan<- string) error {
 	if s.addr == "" {
 		s.addr = ":8080"
 	}
@@ -68,8 +70,18 @@ func (s *DashboardServer) Start() error {
 
 	go s.refreshLoop()
 
-	log.Printf("[dashboard] serving at http://%s", s.addr)
-	return http.ListenAndServe(s.addr, mux)
+	ln, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		return err
+	}
+	actualAddr := ln.Addr().String()
+	s.addr = actualAddr
+	if ready != nil {
+		ready <- actualAddr
+	}
+	log.Printf("[dashboard] serving at http://%s", actualAddr)
+	server := &http.Server{Handler: mux}
+	return server.Serve(ln)
 }
 
 func (s *DashboardServer) refreshLoop() {
