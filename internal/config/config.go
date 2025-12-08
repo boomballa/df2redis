@@ -17,6 +17,7 @@ type Config struct {
 	Checkpoint CheckpointConfig `json:"checkpoint"`
 	Conflict   ConflictConfig   `json:"conflict"`
 	Log        LogConfig        `json:"log"`
+	Dashboard  DashboardConfig  `json:"dashboard"`
 	StateDir   string           `json:"stateDir"`
 	StatusFile string           `json:"statusFile"`
 
@@ -91,6 +92,11 @@ type LogConfig struct {
 // ConflictConfig sets the key conflict policy
 type ConflictConfig struct {
 	Policy string `json:"policy"` // overwrite (default), panic (stop on duplicates), skip (ignore duplicates)
+}
+
+// DashboardConfig controls the embedded dashboard server.
+type DashboardConfig struct {
+	Addr string `json:"addr"` // e.g. ":8080"
 }
 
 // ValidationError collects configuration issues.
@@ -188,6 +194,9 @@ func (c *Config) ApplyDefaults() {
 	// Conflict defaults
 	if c.Conflict.Policy == "" {
 		c.Conflict.Policy = "overwrite" // overwrite by default
+	}
+	if c.Dashboard.Addr == "" {
+		c.Dashboard.Addr = ":8080"
 	}
 }
 
