@@ -155,24 +155,42 @@
     </section>
 
     <section class="card">
-        <div class="card-title">Event Stream</div>
-        <div class="events" id="events-list">
+        <div class="card-title">Errors & Warnings</div>
+        <div class="errors-warnings" id="errors-warnings">
             {{ with .Snapshot }}
-            {{ if .Events }}
-                {{ range .Events }}
-                <div class="event-item">
-                    <div>
-                        <div class="badge" style="background:rgba(99,102,241,0.16);color:var(--accent);">{{ .Type }}</div>
-                        <div style="margin-top:6px;">{{ .Message }}</div>
-                    </div>
-                    <time>{{ .Timestamp }}</time>
+            <div class="error-warning-section">
+                <div class="error-warning-header">
+                    <span class="error-warning-icon error-icon">✗</span>
+                    <span class="error-warning-label">Failed Commands</span>
+                    <span class="error-warning-count" id="failed-count">{{ if .Metrics }}{{ index .Metrics "sync.incremental.ops.failed" }}{{ else }}0{{ end }}</span>
                 </div>
-                {{ end }}
+                <div class="error-warning-body" id="failed-details">
+                    <p class="muted">Command execution failures (MOVED, timeout, etc.)</p>
+                </div>
+            </div>
+
+            <div class="error-warning-section">
+                <div class="error-warning-header">
+                    <span class="error-warning-icon warning-icon">⚠</span>
+                    <span class="error-warning-label">Skipped Commands</span>
+                    <span class="error-warning-count" id="skipped-count">{{ if .Metrics }}{{ index .Metrics "sync.incremental.ops.skipped" }}{{ else }}0{{ end }}</span>
+                </div>
+                <div class="error-warning-body" id="skipped-details">
+                    <p class="muted">Commands skipped (SELECT, PING, global commands)</p>
+                </div>
+            </div>
+
+            <div class="error-warning-section success-section">
+                <div class="error-warning-header">
+                    <span class="error-warning-icon success-icon">✓</span>
+                    <span class="error-warning-label">Status</span>
+                </div>
+                <div class="error-warning-body">
+                    <p class="success-text" id="status-summary">All systems operational</p>
+                </div>
+            </div>
             {{ else }}
-                <p class="muted">No events yet.</p>
-            {{ end }}
-            {{ else }}
-            <p class="muted">No events yet.</p>
+            <p class="muted">No data available.</p>
             {{ end }}
         </div>
     </section>

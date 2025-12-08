@@ -25,7 +25,7 @@
     renderMetrics(metrics);
     renderMetricsGrid(metrics);
     renderStageTable(stages);
-    renderEvents(events);
+    updateErrorsWarnings(metrics);
     updateFlowDiagram(events, stages);
     updateFlowMetrics(metrics);
   }
@@ -230,30 +230,33 @@
       }).join('');
   }
 
-  function renderEvents(events) {
-    const container = document.getElementById('events-list');
-    if (!container) return;
-    if (!events.length) {
-      container.innerHTML = '<p class="muted">No events yet.</p>';
-      return;
+  function updateErrorsWarnings(metrics) {
+    const failedCount = metrics['sync.incremental.ops.failed'] || 0;
+    const skippedCount = metrics['sync.incremental.ops.skipped'] || 0;
+    const successCount = metrics['sync.incremental.ops.success'] || 0;
+    const totalCount = metrics['sync.incremental.ops.total'] || 0;
+
+    // Update counts
+    const failedEl = document.getElementById('failed-count');
+    const skippedEl = document.getElementById('skipped-count');
+    if (failedEl) failedEl.textContent = formatNumber(failedCount);
+    if (skippedEl) skippedEl.textContent = formatNumber(skippedCount);
+
+    // Update status summary
+    const statusEl = document.getElementById('status-summary');
+    if (statusEl) {
+      if (failedCount > 0) {
+        statusEl.textContent = `${formatNumber(failedCount)} commands failed - check logs for details`;
+        statusEl.style.color = '#ef4444';
+      } else if (totalCount === 0) {
+        statusEl.textContent = 'No operations yet';
+        statusEl.style.color = '#64748b';
+      } else {
+        const successRate = totalCount > 0 ? ((successCount / totalCount) * 100).toFixed(1) : 100;
+        statusEl.textContent = `All systems operational - ${successRate}% success rate`;
+        statusEl.style.color = '#10b981';
+      }
     }
-    container.innerHTML = events
-      .map(ev => {
-        const type = ev.Type || ev.type || '';
-        const message = ev.Message || ev.message || '';
-        const badgeClass = getBadgeClass(type);
-        const englishMessage = translateMessage(message);
-        return `
-        <div class="event-item">
-          <div class="event-content">
-            <span class="badge ${badgeClass}">${escapeHTML(type)}</span>
-            <span class="event-separator">•</span>
-            <span class="event-message">${escapeHTML(englishMessage)}</span>
-          </div>
-          <time>${formatTime(ev.Timestamp || ev.timestamp)}</time>
-        </div>`;
-      })
-      .join('');
   }
 
   function translateMessage(msg) {
