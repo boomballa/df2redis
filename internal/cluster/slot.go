@@ -2,7 +2,7 @@ package cluster
 
 import "strings"
 
-// CRC16 查找表（XMODEM 多项式）
+// CRC16 lookup table (XMODEM polynomial)
 var crc16tab = [256]uint16{
 	0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50a5, 0x60c6, 0x70e7,
 	0x8108, 0x9129, 0xa14a, 0xb16b, 0xc18c, 0xd1ad, 0xe1ce, 0xf1ef,
@@ -38,7 +38,7 @@ var crc16tab = [256]uint16{
 	0x6e17, 0x7e36, 0x4e55, 0x5e74, 0x2e93, 0x3eb2, 0x0ed1, 0x1ef0,
 }
 
-// crc16 计算 CRC16 校验和（XMODEM 算法）
+// crc16 computes the CRC16 checksum using the XMODEM algorithm
 func crc16(data []byte) uint16 {
 	var crc uint16 = 0
 	for _, b := range data {
@@ -47,16 +47,16 @@ func crc16(data []byte) uint16 {
 	return crc
 }
 
-// CalculateSlot 计算 Redis Cluster slot
-// 算法：CRC16(key) % 16384
-// 支持 Hash Tag：{user}:1000 -> 只对 "user" 计算 CRC16
+// CalculateSlot computes the Redis Cluster slot.
+// Algorithm: CRC16(key) % 16384
+// Supports hash tags: {user}:1000 applies CRC16 to "user" only.
 func CalculateSlot(key string) int {
-	// 查找 Hash Tag
+	// Extract hash tag when available
 	start := strings.Index(key, "{")
 	if start != -1 {
 		end := strings.Index(key[start+1:], "}")
 		if end != -1 {
-			// 提取 Hash Tag 内容
+			// Extract content between braces
 			hashTag := key[start+1 : start+1+end]
 			if len(hashTag) > 0 {
 				key = hashTag
@@ -64,7 +64,7 @@ func CalculateSlot(key string) int {
 		}
 	}
 
-	// 计算 CRC16 并取模
+	// Compute modulo result
 	checksum := crc16([]byte(key))
 	return int(checksum % 16384)
 }

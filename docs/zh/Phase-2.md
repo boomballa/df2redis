@@ -1,5 +1,7 @@
 # Phase 2: 多 FLOW 并行架构 + RDB 快照接收 + EOF Token 验证
 
+[English Version](en/Phase-2.md) | [中文版](Phase-2.md)
+
 ## 概述
 
 Phase 2 实现了完整的 RDB 快照接收流程，包括多 FLOW 并行架构、FULLSYNC_END 标记检测、STARTSTABLE 切换、以及 EOF Token 验证。这是实现 Dragonfly → Redis 数据迁移的关键步骤，确保了完整的 RDB 数据同步和 Journal 流准备。

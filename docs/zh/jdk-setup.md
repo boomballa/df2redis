@@ -1,5 +1,7 @@
 # JDK 21 安装指南
 
+[English Version](en/jdk-setup.md) | [中文版](jdk-setup.md)
+
 df2redis 依赖 Camellia 与 redis-rdb-cli 源码，在构建这些模块时要求 **JDK 21**。本指南整理常见平台的安装方式，帮助你快速准备好满足要求的 Java 环境。
 
 > 提示：JDK 18 及以下版本无法满足 `--release 21` 的编译配置，构建时会报 “无效的目标发行版: 21”。

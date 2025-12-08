@@ -1,5 +1,7 @@
 # Phase 1: Dragonfly 复制握手流程
 
+[English Version](en/Phase-1.md) | [中文版](Phase-1.md)
+
 ## 概述
 
 Phase 1 实现了与 Dragonfly 主库建立复制连接的完整握手流程，这是实现 Dragonfly → Redis 数据迁移的第一步，也是最关键的基础。

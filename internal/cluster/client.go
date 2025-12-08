@@ -10,16 +10,16 @@ import (
 	"df2redis/internal/redisx"
 )
 
-// NodeInfo 表示 Redis Cluster 节点信息
+// NodeInfo describes a Redis Cluster node
 type NodeInfo struct {
 	ID      string
 	Addr    string
 	Flags   []string
 	Master  string
-	Slots   [][2]int // slot 范围 [start, end]
+	Slots   [][2]int // slot ranges [start, end]
 }
 
-// IsMaster 判断节点是否为 Master
+// IsMaster reports whether this node is a primary
 func (n *NodeInfo) IsMaster() bool {
 	for _, flag := range n.Flags {
 		if flag == "master" {
@@ -29,25 +29,25 @@ func (n *NodeInfo) IsMaster() bool {
 	return false
 }
 
-// ClusterClient 表示 Redis Cluster 客户端（兼容单机模式）
+// ClusterClient routes commands in Cluster mode with a Standalone fallback
 type ClusterClient struct {
 	seedAddr  string
 	password  string
 	useTLS    bool
 
-	// 拓扑信息
+	// Topology cache
 	mu       sync.RWMutex
 	slotMap  map[int]string   // slot -> node addr
 	nodes    map[string]*redisx.Client // addr -> client
 	topology []*NodeInfo
 
-	// 配置
+	// Configuration
 	dialTimeout   time.Duration
-	isCluster     bool             // 是否为 Cluster 模式
-	standaloneClient *redisx.Client // 单机模式客户端
+	isCluster     bool             // true when cluster mode detected
+	standaloneClient *redisx.Client // standalone client when not cluster
 }
 
-// NewClusterClient 创建 Redis Cluster 客户端
+// NewClusterClient builds a cluster-aware client
 func NewClusterClient(seedAddr, password string, useTLS bool) *ClusterClient {
 	return &ClusterClient{
 		seedAddr:    seedAddr,
@@ -59,22 +59,22 @@ func NewClusterClient(seedAddr, password string, useTLS bool) *ClusterClient {
 	}
 }
 
-// Connect 连接到 Redis 并自动检测是否为 Cluster 模式
+// Connect establishes initial connections and autodetects cluster mode
 func (c *ClusterClient) Connect() error {
-	// 1. 连接到 seed 节点
+	// 1. Connect to the seed node
 	seedClient, err := c.connectNode(c.seedAddr)
 	if err != nil {
 		return fmt.Errorf("连接 seed 节点失败: %w", err)
 	}
 
-	// 2. 尝试执行 CLUSTER NODES 检测是否为 Cluster 模式
+	// 2. Execute CLUSTER NODES to detect cluster mode
 	resp, err := seedClient.Do("CLUSTER", "NODES")
 	if err != nil {
-		// 如果失败，尝试判断是否为单机模式
+		// Fallback: determine if server runs standalone
 		errStr := fmt.Sprintf("%v", err)
 		if strings.Contains(errStr, "cluster support disabled") ||
 		   strings.Contains(errStr, "ERR This instance has cluster support disabled") {
-			// 单机模式
+			// Standalone mode detected
 			c.mu.Lock()
 			c.isCluster = false
 			c.standaloneClient = seedClient
@@ -84,7 +84,7 @@ func (c *ClusterClient) Connect() error {
 		return fmt.Errorf("执行 CLUSTER NODES 失败: %w", err)
 	}
 
-	// 3. Cluster 模式：解析拓扑信息
+	// 3. Parse topology data
 	nodesStr, err := redisx.ToString(resp)
 	if err != nil {
 		return fmt.Errorf("解析 CLUSTER NODES 响应失败: %w", err)
@@ -95,7 +95,7 @@ func (c *ClusterClient) Connect() error {
 		return fmt.Errorf("解析拓扑信息失败: %w", err)
 	}
 
-	// 4. 构建 slot 映射表
+	// 4. Build the slot map
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -108,14 +108,14 @@ func (c *ClusterClient) Connect() error {
 			continue
 		}
 
-		// 为每个 slot 范围建立映射
+		// Map slots to this node
 		for _, slotRange := range node.Slots {
 			for slot := slotRange[0]; slot <= slotRange[1]; slot++ {
 				c.slotMap[slot] = node.Addr
 			}
 		}
 
-		// 如果节点不是 seed，建立连接
+		// Connect to other primaries as needed
 		if node.Addr != c.seedAddr {
 			client, err := c.connectNode(node.Addr)
 			if err != nil {
@@ -128,7 +128,7 @@ func (c *ClusterClient) Connect() error {
 	return nil
 }
 
-// connectNode 连接到指定节点
+// connectNode dials a single node with timeout
 func (c *ClusterClient) connectNode(addr string) (*redisx.Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), c.dialTimeout)
 	defer cancel()
@@ -145,20 +145,20 @@ func (c *ClusterClient) connectNode(addr string) (*redisx.Client, error) {
 	return client, nil
 }
 
-// Do 执行命令（自动路由到正确的节点或单机）
+// Do routes and executes a command
 func (c *ClusterClient) Do(cmd string, args ...string) (interface{}, error) {
 	c.mu.RLock()
 	isCluster := c.isCluster
 	standaloneClient := c.standaloneClient
 	c.mu.RUnlock()
 
-	// 将 string 参数转换为 interface{} 参数
+	// Convert args to []interface{}
 	interfaceArgs := make([]interface{}, len(args))
 	for i, arg := range args {
 		interfaceArgs[i] = arg
 	}
 
-	// 单机模式：直接执行
+	// Standalone execution
 	if !isCluster {
 		if standaloneClient == nil {
 			return nil, fmt.Errorf("单机客户端未初始化")
@@ -166,7 +166,7 @@ func (c *ClusterClient) Do(cmd string, args ...string) (interface{}, error) {
 		return standaloneClient.Do(cmd, interfaceArgs...)
 	}
 
-	// Cluster 模式：计算 slot 并路由
+	// Cluster mode: compute slot and route
 	slot := c.calculateSlot(cmd, args)
 
 	c.mu.RLock()
@@ -178,39 +178,39 @@ func (c *ClusterClient) Do(cmd string, args ...string) (interface{}, error) {
 		return nil, fmt.Errorf("未找到 slot %d 对应的节点", slot)
 	}
 
-	// 执行命令
+	// Forward command
 	return client.Do(cmd, interfaceArgs...)
 }
 
-// calculateSlot 计算命令的 slot
+// calculateSlot determines the key slot for a command
 func (c *ClusterClient) calculateSlot(cmd string, args []string) int {
 	if len(args) == 0 {
 		return 0
 	}
 
-	// 获取第一个 key（大多数命令的第一个参数是 key）
+	// Default to the first argument as key
 	key := args[0]
 
-	// 特殊命令处理
+	// Special-case commands that accept multiple keys
 	switch strings.ToUpper(cmd) {
 	case "MSET", "MGET", "DEL":
-		// 多 key 命令，使用第一个 key
+		// still hash based on the first key
 		key = args[0]
 	case "HSET", "HGET", "HDEL", "HINCRBY", "HINCRBYFLOAT":
-		// Hash 命令，第一个参数是 key
+		// hash commands: first argument is key
 		key = args[0]
 	}
 
 	return CalculateSlot(key)
 }
 
-// Close 关闭所有连接
+// Close closes all active connections
 func (c *ClusterClient) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if !c.isCluster {
-		// 单机模式
+		// Standalone
 		if c.standaloneClient != nil {
 			c.standaloneClient.Close()
 			c.standaloneClient = nil
@@ -218,7 +218,7 @@ func (c *ClusterClient) Close() error {
 		return nil
 	}
 
-	// Cluster 模式
+	// Cluster mode cleanup
 	for _, client := range c.nodes {
 		client.Close()
 	}
@@ -229,7 +229,7 @@ func (c *ClusterClient) Close() error {
 	return nil
 }
 
-// GetTopology 返回拓扑信息（用于调试）
+// GetTopology returns a copy of the cached topology (useful for debugging)
 func (c *ClusterClient) GetTopology() []*NodeInfo {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

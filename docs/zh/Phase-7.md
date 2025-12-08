@@ -1,5 +1,7 @@
 # Phase 7: Journal 流超时修复与增量同步实现
 
+[English Version](en/Phase-7.md) | [中文版](Phase-7.md)
+
 **实现日期**: 2025-12-05
 **实施阶段**: Phase 7
 **功能状态**: ✅ 已完成
