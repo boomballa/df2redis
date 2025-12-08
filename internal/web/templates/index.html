@@ -102,29 +102,45 @@
         <div class="flow-diagram" id="flow-diagram">
             <div class="flow-step" data-status="completed">
                 <div class="flow-node">
-                    <div class="flow-icon">🤝</div>
-                    <div class="flow-label">Handshake</div>
+                    <div class="flow-header">
+                        <div class="flow-icon">🤝</div>
+                        <div class="flow-label">Handshake</div>
+                    </div>
+                    <div class="flow-description">Establishing connection with Dragonfly</div>
+                    <div class="flow-status">Status: <span class="status-text">Completed ✓</span></div>
                 </div>
                 <div class="flow-connector"></div>
             </div>
             <div class="flow-step" data-status="completed">
                 <div class="flow-node">
-                    <div class="flow-icon">📦</div>
-                    <div class="flow-label">RDB Snapshot</div>
+                    <div class="flow-header">
+                        <div class="flow-icon">📦</div>
+                        <div class="flow-label">RDB Snapshot</div>
+                    </div>
+                    <div class="flow-description">Full data transfer from source</div>
+                    <div class="flow-status">Loaded: <span class="status-value" data-metric="target.keys.initial">--</span> keys</div>
                 </div>
                 <div class="flow-connector"></div>
             </div>
             <div class="flow-step" data-status="active">
                 <div class="flow-node">
-                    <div class="flow-icon">📝</div>
-                    <div class="flow-label">Journal Stream (Continuous)</div>
+                    <div class="flow-header">
+                        <div class="flow-icon">📝</div>
+                        <div class="flow-label">Journal Stream (Continuous)</div>
+                    </div>
+                    <div class="flow-description">Real-time incremental replication</div>
+                    <div class="flow-status">Applied: <span class="status-value" data-metric="sync.incremental.lsn.applied">--</span> operations</div>
                 </div>
                 <div class="flow-connector"></div>
             </div>
             <div class="flow-step" data-status="pending">
                 <div class="flow-node">
-                    <div class="flow-icon">✅</div>
-                    <div class="flow-label">Sync Complete</div>
+                    <div class="flow-header">
+                        <div class="flow-icon">✅</div>
+                        <div class="flow-label">Sync Complete</div>
+                    </div>
+                    <div class="flow-description">Manually stopped by user</div>
+                    <div class="flow-status">Status: <span class="status-text">Standby</span></div>
                 </div>
             </div>
         </div>

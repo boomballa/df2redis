@@ -27,6 +27,7 @@
     renderStageTable(stages);
     renderEvents(events);
     updateFlowDiagram(events, stages);
+    updateFlowMetrics(metrics);
   }
 
   function updatePipeline(data) {
@@ -339,6 +340,19 @@
         currentStageEl.textContent = 'handshake';
       }
     }
+  }
+
+  function updateFlowMetrics(metrics) {
+    // Update all elements with data-metric attributes
+    document.querySelectorAll('[data-metric]').forEach(el => {
+      const metricKey = el.getAttribute('data-metric');
+      const value = metrics[metricKey];
+      if (value !== undefined && value !== null) {
+        el.textContent = formatNumber(value);
+      } else {
+        el.textContent = '--';
+      }
+    });
   }
 
   fetchStatus();
