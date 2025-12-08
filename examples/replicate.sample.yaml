@@ -53,8 +53,8 @@ conflict:
   policy: "overwrite"          # overwrite | panic | skip
 
 ########################################
-##### 🛠️ Legacy shake placeholders ###
+##### 🛠️ Cold import / shake config ###
 ########################################
 migrate:
-  snapshotPath: /tmp/placeholder.rdb
-  shakeBinary: /tmp/placeholder
+  snapshotPath: ../tmp/placeholder.rdb    # Path to existing RDB (used by cold-import / legacy migrate)
+  shakeBinary: ../redis-shake-v4/redis-shake
