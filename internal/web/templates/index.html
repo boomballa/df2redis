@@ -4,13 +4,15 @@
         <h1>df2redis Live Dashboard</h1>
         <p class="subtitle">Track Dragonfly → Redis synchronization at a glance.</p>
     </div>
+    {{ if .TaskName }}
     <div class="meta-row">
-        {{ if .TaskName }}
-        <div class="meta-pill" style="background: rgba(168, 85, 247, 0.15); border-color: rgba(168, 85, 247, 0.3);">
+        <div class="meta-pill task-pill">
             <span class="icon">🏷️</span>
             <span>Task: <strong>{{ .TaskName }}</strong></span>
         </div>
-        {{ end }}
+    </div>
+    {{ end }}
+    <div class="meta-row">
         <div class="meta-pill">
             <span class="icon">🗄️</span>
             <span>Source: <strong>{{ .Source.Type }} @ {{ .Source.Addr }}</strong></span>
@@ -23,15 +25,21 @@
     <div class="meta-row">
         <div class="meta-pill">
             <span class="icon">🗂️</span>
-            <span>State dir: <strong>{{ .StateDir }}</strong></span>
+            <span>State: <strong>{{ .StateDir }}</strong></span>
         </div>
         <div class="meta-pill">
             <span class="icon">📝</span>
-            <span>Status file: <strong>{{ .StatusFile }}</strong></span>
+            <span>Status: <strong>{{ .StatusFile }}</strong></span>
         </div>
+        {{ if .LogDir }}
+        <div class="meta-pill">
+            <span class="icon">📋</span>
+            <span>Logs: <strong>{{ .LogDir }}</strong></span>
+        </div>
+        {{ end }}
         <div class="meta-pill">
             <span class="icon">⏱️</span>
-            <span>Generated at: <strong>{{ .GeneratedAt }}</strong></span>
+            <span>Updated: <strong>{{ .GeneratedAt }}</strong></span>
         </div>
     </div>
 </div>
