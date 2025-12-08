@@ -64,7 +64,7 @@
     if (!container) return;
     const entries = Object.entries(metrics);
     if (!entries.length) {
-      container.innerHTML = '<p class="muted">暂无指标。</p>';
+      container.innerHTML = '<p class="muted">No metrics yet.</p>';
       return;
     }
     container.innerHTML = entries
@@ -81,7 +81,7 @@
     if (!body) return;
     const entries = Object.entries(stages);
     if (!entries.length) {
-      body.innerHTML = '<tr><td colspan="4" class="muted">尚无阶段信息</td></tr>';
+      body.innerHTML = '<tr><td colspan="4" class="muted">No stage data.</td></tr>';
       return;
     }
     entries.sort(([a], [b]) => a.localeCompare(b));
@@ -104,7 +104,7 @@
     const container = document.getElementById('events-list');
     if (!container) return;
     if (!events.length) {
-      container.innerHTML = '<p class="muted">暂无事件记录。</p>';
+      container.innerHTML = '<p class="muted">No events yet.</p>';
       return;
     }
     container.innerHTML = events
