@@ -332,6 +332,32 @@ checkpoint:
 </details>
 
 <details>
+<summary><strong>Conflict Handling (RDB Snapshot Phase)</strong></summary>
+
+```yaml
+conflict:
+  policy: "overwrite"         # Conflict handling strategy (default: overwrite)
+                              # - overwrite: Directly overwrite duplicate keys (highest performance)
+                              # - panic: Stop immediately when duplicate key detected
+                              # - skip: Skip duplicate keys and continue processing
+```
+
+**Mode Comparison:**
+
+| Mode | Performance | Use Case | Duplicate Key Behavior |
+|------|-------------|----------|------------------------|
+| **overwrite** | Highest (no EXISTS check) | Production migration, replacing target data | Overwrites silently |
+| **panic** | Medium (EXISTS check) | Fresh database migration, validation | Stops immediately, logs key |
+| **skip** | Lower (EXISTS check) | Incremental data append, partial sync | Skips and continues, logs key |
+
+**Important Notes:**
+- Conflict checking only applies to **RDB snapshot phase**, not Journal stream
+- `panic` and `skip` modes log duplicate keys for visibility
+- `overwrite` is recommended for most use cases (zero overhead)
+
+</details>
+
+<details>
 <summary><strong>Advanced Options</strong></summary>
 
 ```yaml
