@@ -69,3 +69,4 @@ camellia/.github*
 # 本地参考源码与构建产物
 dragonfly/
 bin/df2redis*
+bin/df2redis
