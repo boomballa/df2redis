@@ -239,7 +239,7 @@ func runDashboard(args []string) int {
 	)
 	fs.StringVar(&configPath, "config", "", "配置文件路径 (YAML)")
 	fs.StringVar(&configPath, "c", "", "配置文件路径 (YAML)")
-	fs.StringVar(&addr, "addr", ":8080", "仪表盘监听地址")
+	fs.StringVar(&addr, "addr", "", "仪表盘监听地址（留空使用配置文件 dashboard.addr）")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -258,6 +258,9 @@ func runDashboard(args []string) int {
 		log.Printf("配置加载失败: %v", err)
 		return 2
 	}
+	if addr == "" {
+		addr = cfg.Dashboard.Addr
+	}
 	store := state.NewStore(cfg.StatusFilePath())
 
 	server, err := web.New(web.Options{
@@ -272,7 +275,11 @@ func runDashboard(args []string) int {
 
 	log.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📺 仪表盘已就绪\n   🔊 监听 : %s\n   🌐 访问 : %s\n   ⌨️ 提示 : 按 Ctrl+C 结束仪表盘服务\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", addr, formatDashboardURL(addr))
 	if err := server.Start(); err != nil {
-		log.Printf("dashboard 停止: %v", err)
+		if strings.Contains(err.Error(), "address already in use") {
+			log.Printf("dashboard 启动失败: 端口 %s 已占用，请在配置文件 dashboard.addr 或 --addr 中修改", addr)
+		} else {
+			log.Printf("dashboard 停止: %v", err)
+		}
 		return 1
 	}
 	return 0
@@ -336,9 +343,37 @@ func errorToExitCode(err error) int {
 }
 
 func runReplicate(args []string) int {
-	cfg, err := loadConfigFromArgs("replicate", args)
+	fs := flag.NewFlagSet("replicate", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	var configPath string
+	var dashboardAddr string
+	var taskNameFlag string
+	fs.StringVar(&configPath, "config", "", "配置文件路径 (YAML)")
+	fs.StringVar(&configPath, "c", "", "配置文件路径 (YAML)")
+	fs.StringVar(&dashboardAddr, "dashboard-addr", "", "内置仪表盘监听地址（留空则使用配置文件，设为空字符串以禁用）")
+	fs.StringVar(&taskNameFlag, "task-name", "", "任务名（用于日志前缀，可覆盖配置文件）")
+
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
+		log.Printf("解析参数失败: %v", err)
+		return 1
+	}
+	if configPath == "" {
+		fs.Usage()
+		return 2
+	}
+
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return errorToExitCode(err)
+	}
+	if taskNameFlag != "" {
+		cfg.TaskName = taskNameFlag
+	}
+	if dashboardAddr == "" {
+		dashboardAddr = cfg.Dashboard.Addr
 	}
 	store := state.NewStore(cfg.StatusFilePath())
 	_ = store.SetPipelineStatus("starting", "准备启动复制器")
@@ -359,6 +394,29 @@ func runReplicate(args []string) int {
 	// Build replicator
 	replicator := replica.NewReplicator(cfg)
 	replicator.AttachStateStore(store)
+
+	if dashboardAddr != "" {
+		server, err := web.New(web.Options{
+			Addr:  dashboardAddr,
+			Cfg:   cfg,
+			Store: store,
+		})
+		if err != nil {
+			log.Printf("初始化内置仪表盘失败: %v", err)
+		} else {
+			go func() {
+				if err := server.Start(); err != nil {
+					if strings.Contains(err.Error(), "address already in use") {
+						log.Printf("内置仪表盘启动失败: 端口 %s 已占用，请在 config.dashboard.addr 或 --dashboard-addr 中修改", dashboardAddr)
+					} else {
+						log.Printf("内置仪表盘停止: %v", err)
+					}
+				}
+			}()
+			log.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 内置仪表盘已启动\n   🔊 监听 : %s\n   🌐 访问 : %s\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+				dashboardAddr, formatDashboardURL(dashboardAddr))
+		}
+	}
 
 	// Configure signal handling
 	sigCh := make(chan os.Signal, 1)

@@ -104,12 +104,14 @@ Key modules:
 
 | Command | Description |
 | --- | --- |
-| `df2redis replicate --config <file>` | Run Dragonfly → Redis replication with checkpoints |
+| `df2redis replicate --config <file> [--dashboard-addr :8080] [--task-name foo]` | Run replication (auto-starts dashboard unless addr is empty) |
 | `df2redis check --config <file> [flags]` | Launch data consistency check (wrapper around `redis-full-check`) |
-| `df2redis dashboard --config <file>` | Start the standalone dashboard service |
+| `df2redis dashboard --config <file> [--addr :8080]` | Start the standalone dashboard service |
 | `df2redis migrate/prepare/...` | Legacy redis-shake based pipeline helpers |
 
 The CLI shares logging helpers (`internal/logger`) that output both to the console and to rotating files. Use the `log` block in the config file to customize directories and levels.
+
+The embedded dashboard listens on `config.dashboard.addr` (default `:8080`). Override it in the YAML or pass `--dashboard-addr` to `replicate`/`--addr` to `dashboard`.
 
 ---
 
