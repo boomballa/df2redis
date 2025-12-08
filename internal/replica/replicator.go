@@ -16,52 +16,52 @@ import (
 	"df2redis/internal/redisx"
 )
 
-// Replicator 负责与 Dragonfly 建立复制关系
+// Replicator establishes the replication relationship with Dragonfly
 type Replicator struct {
 	cfg    *config.Config
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	// 主连接（用于握手）
+	// Primary connection (used for handshake)
 	mainConn *redisx.Client
 
-	// 每个 FLOW 的独立连接
+	// Dedicated connections for each FLOW
 	flowConns []*redisx.Client
 
-	// Redis Cluster 客户端（用于命令重放）
+	// Redis Cluster client (replay commands)
 	clusterClient *cluster.ClusterClient
 
-	// Checkpoint 管理器
+	// Checkpoint manager
 	checkpointMgr *checkpoint.Manager
 
-	// 复制状态
+	// Replication state
 	state      ReplicaState
 	masterInfo MasterInfo
 	flows      []FlowInfo
 
-	// 配置
+	// Configuration
 	listeningPort int
 	announceIP    string
 
-	// 统计信息
+	// Replay statistics
 	replayStats ReplayStats
 
-	// Checkpoint 自动保存
+	// Automatic checkpoint saving
 	checkpointInterval time.Duration
 	lastCheckpointTime time.Time
 
-	// 用于等待 Start() 完成的 channel
+	// Channel used to wait for Start() to finish
 	done chan struct{}
 }
 
-// NewReplicator 创建一个新的复制器
+// NewReplicator creates a new replicator
 func NewReplicator(cfg *config.Config) *Replicator {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Checkpoint 文件路径：使用配置中的路径或默认路径
+	// Checkpoint file path: use configured path or the default path
 	checkpointPath := cfg.ResolveCheckpointPath()
 
-	// Checkpoint 保存间隔：从配置读取（默认 10 秒）
+	// Checkpoint save interval: read from config (default 10 seconds)
 	checkpointInterval := time.Duration(cfg.Checkpoint.Interval) * time.Second
 
 	return &Replicator{
@@ -69,32 +69,32 @@ func NewReplicator(cfg *config.Config) *Replicator {
 		ctx:                ctx,
 		cancel:             cancel,
 		state:              StateDisconnected,
-		listeningPort:      6380, // 默认端口
+		listeningPort:      6380, // default port
 		checkpointMgr:      checkpoint.NewManager(checkpointPath),
 		checkpointInterval: checkpointInterval,
 		done:               make(chan struct{}),
 	}
 }
 
-// Start 启动复制流程
+// Start launches the replication workflow
 func (r *Replicator) Start() error {
-	defer close(r.done) // 确保退出时通知 Stop()
+	defer close(r.done) // ensure Stop() gets notified when exiting
 
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	log.Println("🚀 启动 Dragonfly 复制器")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-	// 连接到 Dragonfly
+	// Connect to Dragonfly
 	if err := r.connect(); err != nil {
 		return fmt.Errorf("连接失败: %w", err)
 	}
 
-	// 执行握手
+	// Perform handshake
 	if err := r.handshake(); err != nil {
 		return fmt.Errorf("握手失败: %w", err)
 	}
 
-	// 初始化 Redis 客户端（自动检测 Cluster/Standalone）
+	// Initialize Redis client (auto-detects cluster/standalone)
 	log.Println("")
 	log.Println("🔗 连接到目标 Redis...")
 	r.clusterClient = cluster.NewClusterClient(
@@ -106,7 +106,7 @@ func (r *Replicator) Start() error {
 		return fmt.Errorf("连接目标 Redis 失败: %w", err)
 	}
 
-	// 检测模式
+	// Detect topology
 	topology := r.clusterClient.GetTopology()
 	if len(topology) > 0 {
 		log.Printf("  ✓ Redis Cluster 连接成功（%d 个主节点）", len(topology))
@@ -114,12 +114,12 @@ func (r *Replicator) Start() error {
 		log.Println("  ✓ Redis Standalone 连接成功")
 	}
 
-	// 发送 DFLY SYNC 触发 RDB 数据传输
+	// Send DFLY SYNC to trigger the RDB transfer
 	if err := r.sendDflySync(); err != nil {
 		return fmt.Errorf("发送 DFLY SYNC 失败: %w", err)
 	}
 
-	// 接收 RDB 快照（并行）
+	// Receive snapshot in parallel
 	r.state = StateFullSync
 	if err := r.receiveSnapshot(); err != nil {
 		return fmt.Errorf("接收快照失败: %w", err)
@@ -129,7 +129,7 @@ func (r *Replicator) Start() error {
 	log.Println("🎯 复制器启动成功！")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-	// 接收并解析 Journal 流
+	// Receive and parse the journal stream
 	if err := r.receiveJournal(); err != nil {
 		return fmt.Errorf("接收 Journal 流失败: %w", err)
 	}
@@ -137,14 +137,14 @@ func (r *Replicator) Start() error {
 	return nil
 }
 
-// Stop 停止复制
+// Stop halts replication
 func (r *Replicator) Stop() {
 	log.Println("⏸  停止复制器...")
 
-	// 先取消上下文
+	// Cancel the context first
 	r.cancel()
 
-	// 立即关闭所有连接，强制阻塞的读取操作失败
+	// Close all connections immediately so blocking reads fail fast
 	if r.mainConn != nil {
 		r.mainConn.Close()
 	}
@@ -155,7 +155,7 @@ func (r *Replicator) Stop() {
 		}
 	}
 
-	// 等待 Start() 完成（包括 checkpoint 保存）
+	// Wait for Start() to finish (including checkpoint persistence)
 	log.Println("  • 等待所有 goroutine 退出...")
 	<-r.done
 
@@ -163,7 +163,7 @@ func (r *Replicator) Stop() {
 	log.Println("✓ 复制器已停止")
 }
 
-// connect 连接到 Dragonfly 主库（建立主连接用于握手）
+// connect creates the primary connection to Dragonfly for the handshake
 func (r *Replicator) connect() error {
 	r.state = StateConnecting
 	log.Printf("🔗 连接到 Dragonfly: %s", r.cfg.Source.Addr)
@@ -187,7 +187,7 @@ func (r *Replicator) connect() error {
 	return nil
 }
 
-// handshake 执行完整的握手流程
+// handshake performs the full handshake procedure
 func (r *Replicator) handshake() error {
 	r.state = StateHandshaking
 	log.Println("")
@@ -208,7 +208,7 @@ func (r *Replicator) handshake() error {
 	}
 	log.Println("  ✓ 端口已注册")
 
-	// Step 3: REPLCONF ip-address (可选)
+	// Step 3: REPLCONF ip-address (optional)
 	if r.announceIP != "" {
 		log.Printf("  [3/6] 声明 IP 地址: %s...", r.announceIP)
 		if err := r.sendIPAddress(); err != nil {
@@ -234,7 +234,7 @@ func (r *Replicator) handshake() error {
 	}
 	log.Printf("  ✓ Dragonfly 版本: %s, Shard 数量: %d", r.masterInfo.Version, r.masterInfo.NumFlows)
 
-	// Step 6: 建立 FLOW
+	// Step 6: establish FLOW connections
 	log.Printf("  [6/6] 建立 %d 个 FLOW...", r.masterInfo.NumFlows)
 	if err := r.establishFlows(); err != nil {
 		return err
@@ -249,7 +249,7 @@ func (r *Replicator) handshake() error {
 	return nil
 }
 
-// sendPing 发送 PING 命令（使用主连接）
+// sendPing issues a PING command over the main connection
 func (r *Replicator) sendPing() error {
 	resp, err := r.mainConn.Do("PING")
 	if err != nil {
@@ -264,7 +264,7 @@ func (r *Replicator) sendPing() error {
 	return nil
 }
 
-// sendListeningPort 发送 REPLCONF listening-port
+// sendListeningPort sends REPLCONF listening-port
 func (r *Replicator) sendListeningPort() error {
 	resp, err := r.mainConn.Do("REPLCONF", "listening-port", strconv.Itoa(r.listeningPort))
 	if err != nil {
@@ -274,7 +274,7 @@ func (r *Replicator) sendListeningPort() error {
 	return r.expectOK(resp)
 }
 
-// sendIPAddress 发送 REPLCONF ip-address
+// sendIPAddress sends REPLCONF ip-address
 func (r *Replicator) sendIPAddress() error {
 	resp, err := r.mainConn.Do("REPLCONF", "ip-address", r.announceIP)
 	if err != nil {
@@ -284,7 +284,7 @@ func (r *Replicator) sendIPAddress() error {
 	return r.expectOK(resp)
 }
 
-// sendCapaEOF 发送 REPLCONF capa eof capa psync2
+// sendCapaEOF sends REPLCONF capa eof/capa psync2
 func (r *Replicator) sendCapaEOF() error {
 	resp, err := r.mainConn.Do("REPLCONF", "capa", "eof", "capa", "psync2")
 	if err != nil {
@@ -294,23 +294,23 @@ func (r *Replicator) sendCapaEOF() error {
 	return r.expectOK(resp)
 }
 
-// sendCapaDragonfly 发送 REPLCONF capa dragonfly 并解析响应
+// sendCapaDragonfly sends REPLCONF capa dragonfly and parses the response
 func (r *Replicator) sendCapaDragonfly() error {
 	resp, err := r.mainConn.Do("REPLCONF", "capa", "dragonfly")
 	if err != nil {
 		return fmt.Errorf("REPLCONF capa dragonfly 失败: %w", err)
 	}
 
-	// 解析响应
-	// Dragonfly 实际响应格式（v1.30.0）：
-	// 数组: [replication_id, sync_version, unknown_param, num_flows]
-	// 例如: ["16c2763d...", "SYNC5", 8, 4]
+	// Parse response
+	// Dragonfly response format (v1.30.0):
+	// Array: [replication_id, sync_version, unknown_param, num_flows]
+	// Example: ["16c2763d...", "SYNC5", 8, 4]
 
 	arr, err := redisx.ToStringSlice(resp)
 	if err != nil {
-		// 不是数组，尝试作为简单字符串解析
+		// Not an array, try parsing as a simple string
 		if str, err2 := redisx.ToString(resp); err2 == nil {
-			// 检查是否是 OK（旧版本或 Redis）
+			// Check if it is OK (older versions or vanilla Redis)
 			if str == "OK" {
 				return fmt.Errorf("目标是 Redis 或旧版本 Dragonfly（收到简单 OK 响应）")
 			}
@@ -319,28 +319,28 @@ func (r *Replicator) sendCapaDragonfly() error {
 		return fmt.Errorf("无法解析 capa dragonfly 响应: %w", err)
 	}
 
-	// 验证数组长度
+	// Validate length
 	if len(arr) < 4 {
 		return fmt.Errorf("Dragonfly 响应格式错误（长度不足，期望 4 个元素）: %v", arr)
 	}
 
-	// 响应格式：[master_id, sync_id, flow_count, version]
-	// 例如：["16c2763d...", "SYNC11", 8, 4]
+	// Response layout: [master_id, sync_id, flow_count, version]
+	// e.g. ["16c2763d...", "SYNC11", 8, 4]
 
-	// 第一个元素：复制 ID (master_id)
+	// Element 0: replication ID (master_id)
 	r.masterInfo.ReplID = arr[0]
 
-	// 第二个元素：同步会话 ID (sync_id，如 "SYNC11")
+	// Element 1: sync session ID (e.g. "SYNC11")
 	r.masterInfo.SyncID = arr[1]
 
-	// 第三个元素：flow 数量
+	// Element 2: number of flows
 	numFlows, err := strconv.Atoi(arr[2])
 	if err != nil {
 		return fmt.Errorf("无法解析 flow 数量: %s", arr[2])
 	}
 	r.masterInfo.NumFlows = numFlows
 
-	// 第四个元素：Dragonfly 协议版本
+	// Element 3: Dragonfly protocol version
 	version, err := strconv.Atoi(arr[3])
 	if err != nil {
 		return fmt.Errorf("无法解析协议版本: %s", arr[3])
@@ -355,7 +355,7 @@ func (r *Replicator) sendCapaDragonfly() error {
 	return nil
 }
 
-// establishFlows 为每个 shard 建立独立的 FLOW 连接
+// establishFlows creates dedicated FLOW connections for each shard
 func (r *Replicator) establishFlows() error {
 	numFlows := r.masterInfo.NumFlows
 	log.Printf("    • 将建立 %d 个并行 FLOW 连接...", numFlows)
@@ -363,11 +363,11 @@ func (r *Replicator) establishFlows() error {
 	r.flows = make([]FlowInfo, numFlows)
 	r.flowConns = make([]*redisx.Client, numFlows)
 
-	// 为每个 FLOW 建立独立的 TCP 连接
+	// Create independent TCP connections for each FLOW
 	for i := 0; i < numFlows; i++ {
 		log.Printf("    • 建立 FLOW-%d 独立连接...", i)
 
-		// 1. 创建新的 TCP 连接
+		// 1. Create a new TCP connection
 		dialCtx, cancel := context.WithTimeout(r.ctx, 10*time.Second)
 		flowConn, err := redisx.Dial(dialCtx, redisx.Config{
 			Addr:     r.cfg.Source.Addr,
@@ -382,22 +382,22 @@ func (r *Replicator) establishFlows() error {
 
 		r.flowConns[i] = flowConn
 
-		// 2. 在新连接上发送 PING（可选，确保连接可用）
+		// 2. Send PING (optional, ensures the connection is alive)
 		if err := flowConn.Ping(); err != nil {
 			return fmt.Errorf("FLOW-%d PING 失败: %w", i, err)
 		}
 
-		// 4. 发送 DFLY FLOW 命令注册此 FLOW
-		// 命令格式: DFLY FLOW <master_id> <sync_id> <flow_id>
+		// 3. Send DFLY FLOW to register this FLOW
+		// Command: DFLY FLOW <master_id> <sync_id> <flow_id>
 		resp, err := flowConn.Do("DFLY", "FLOW", r.masterInfo.ReplID, r.masterInfo.SyncID, strconv.Itoa(i))
 		if err != nil {
 			return fmt.Errorf("FLOW-%d 注册失败: %w", i, err)
 		}
 
-		// 4. 解析响应：["FULL", <eof_token>] 或 ["PARTIAL", <eof_token>]
+		// 4. Parse response: ["FULL", <eof_token>] or ["PARTIAL", <eof_token>]
 		arr, err := redisx.ToStringSlice(resp)
 		if err != nil {
-			// 可能是简单的 OK
+			// Could be a simple OK string
 			if err := r.expectOK(resp); err != nil {
 				return fmt.Errorf("FLOW-%d 返回错误: %w", i, err)
 			}
@@ -431,7 +431,7 @@ func (r *Replicator) establishFlows() error {
 	return nil
 }
 
-// min 返回两个整数中的较小值
+// min returns the smaller of two integers
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -439,20 +439,20 @@ func min(a, b int) int {
 	return b
 }
 
-// sendDflySync 发送 DFLY SYNC 命令触发 RDB 数据传输
-// 必须在所有 FLOW 建立后调用，否则 Dragonfly 不会发送数据
+// sendDflySync issues DFLY SYNC to trigger the RDB transfer.
+// Must be called only after every FLOW is established, otherwise Dragonfly will not send data.
 func (r *Replicator) sendDflySync() error {
 	log.Println("")
 	log.Println("🔄 发送 DFLY SYNC 触发数据传输...")
 
-	// 使用主连接发送 DFLY SYNC 命令
-	// 命令格式: DFLY SYNC <sync_id>
+	// Send DFLY SYNC via the main connection
+	// Command: DFLY SYNC <sync_id>
 	resp, err := r.mainConn.Do("DFLY", "SYNC", r.masterInfo.SyncID)
 	if err != nil {
 		return fmt.Errorf("DFLY SYNC 失败: %w", err)
 	}
 
-	// 期望返回 OK
+	// Expect OK
 	if err := r.expectOK(resp); err != nil {
 		return fmt.Errorf("DFLY SYNC 返回错误: %w", err)
 	}
@@ -461,7 +461,7 @@ func (r *Replicator) sendDflySync() error {
 	return nil
 }
 
-// expectOK 检查响应是否为 OK
+// expectOK validates that a Redis reply is the literal OK
 func (r *Replicator) expectOK(resp interface{}) error {
 	reply, err := redisx.ToString(resp)
 	if err != nil {
@@ -475,9 +475,9 @@ func (r *Replicator) expectOK(resp interface{}) error {
 	return nil
 }
 
-// receiveSnapshot 并行接收和解析所有 FLOW 的 RDB 快照
-// 流程：使用 RDB 解析器解析数据，写入目标 Redis
-// EOF Token 将在发送 STARTSTABLE 后单独验证
+// receiveSnapshot concurrently receives and parses RDB snapshots from all FLOW connections.
+// Flow: use the RDB parser to decode data and write it into the target Redis.
+// EOF tokens are validated after STARTSTABLE is issued.
 func (r *Replicator) receiveSnapshot() error {
 	log.Println("")
 	log.Println("📦 开始并行接收和解析 RDB 快照...")
@@ -490,11 +490,11 @@ func (r *Replicator) receiveSnapshot() error {
 
 	log.Printf("  • 将使用 %d 个 FLOW 并行接收和解析 RDB 快照", numFlows)
 
-	// 使用 WaitGroup 等待所有 goroutine 完成
+	// Wait for all goroutines
 	var wg sync.WaitGroup
 	errChan := make(chan error, numFlows)
 
-	// 统计信息
+	// Stats
 	type FlowStats struct {
 		KeyCount     int
 		SkippedCount int
@@ -503,7 +503,7 @@ func (r *Replicator) receiveSnapshot() error {
 	statsMap := make(map[int]*FlowStats)
 	var statsMu sync.Mutex
 
-	// 为每个 FLOW 启动一个 goroutine 接收和解析 RDB 数据
+	// Start a goroutine per FLOW to read and parse RDB data
 	for i := 0; i < numFlows; i++ {
 		statsMap[i] = &FlowStats{}
 		wg.Add(1)
@@ -515,19 +515,19 @@ func (r *Replicator) receiveSnapshot() error {
 
 			log.Printf("  [FLOW-%d] 开始解析 RDB 数据...", flowID)
 
-			// 创建 RDB 解析器
+			// Create RDB parser
 			parser := NewRDBParser(flowConn, flowID)
 
-			// 1. 解析 RDB 头部
+			// 1. Parse header
 			if err := parser.ParseHeader(); err != nil {
 				errChan <- fmt.Errorf("FLOW-%d: 解析 RDB 头部失败: %w", flowID, err)
 				return
 			}
 			log.Printf("  [FLOW-%d] ✓ RDB 头部解析成功", flowID)
 
-			// 2. 逐个解析键值对
+			// 2. Parse entries
 			for {
-				// 检查取消信号
+				// Observe cancellation
 				select {
 				case <-r.ctx.Done():
 					errChan <- fmt.Errorf("FLOW-%d: 快照接收被取消", flowID)
@@ -535,21 +535,21 @@ func (r *Replicator) receiveSnapshot() error {
 				default:
 				}
 
-				// 解析下一个 entry
+				// Parse next entry
 				entry, err := parser.ParseNext()
 				if err != nil {
 					if err == io.EOF {
 						log.Printf("  [FLOW-%d] ✓ RDB 解析完成（成功=%d, 跳过=%d, 失败=%d）",
 							flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount)
-						// FULLSYNC_END 已接收，RDB 解析完成
-						// EOF Token 将在发送 STARTSTABLE 后读取
+						// FULLSYNC_END received, snapshot done.
+						// EOF tokens are read after STARTSTABLE.
 						return
 					}
 					errChan <- fmt.Errorf("FLOW-%d: 解析失败: %w", flowID, err)
 					return
 				}
 
-				// 跳过已过期的键
+				// Skip expired keys
 				if entry.IsExpired() {
 					statsMu.Lock()
 					stats.SkippedCount++
@@ -557,7 +557,7 @@ func (r *Replicator) receiveSnapshot() error {
 					continue
 				}
 
-				// 写入 Redis
+				// Write entry into Redis
 				if err := r.writeRDBEntry(entry); err != nil {
 					log.Printf("  [FLOW-%d] ⚠ 写入失败 (key=%s): %v", flowID, entry.Key, err)
 					statsMu.Lock()
@@ -568,7 +568,7 @@ func (r *Replicator) receiveSnapshot() error {
 					stats.KeyCount++
 					statsMu.Unlock()
 
-					// 每 100 个键打印一次进度
+					// Log progress every 100 keys
 					if stats.KeyCount%100 == 0 {
 						log.Printf("  [FLOW-%d] • 已导入: %d 个键", flowID, stats.KeyCount)
 					}
@@ -577,18 +577,18 @@ func (r *Replicator) receiveSnapshot() error {
 		}(i)
 	}
 
-	// 等待所有 goroutine 完成
+	// Wait for goroutines
 	wg.Wait()
 	close(errChan)
 
-	// 检查是否有错误
+	// Drain errors
 	for err := range errChan {
 		if err != nil {
 			return err
 		}
 	}
 
-	// 打印最终统计
+	// Final stats
 	totalKeys := 0
 	totalSkipped := 0
 	totalErrors := 0
@@ -603,7 +603,7 @@ func (r *Replicator) receiveSnapshot() error {
 	log.Printf("  ✓ RDB 全量导入完成: 总计 %d 个键, 跳过 %d 个（已过期）, 失败 %d 个",
 		totalKeys, totalSkipped, totalErrors)
 
-	// Dragonfly 只会在收到 STARTSTABLE 之后发送 EOF Token；如果提前读取会导致 60s 超时。
+	// Dragonfly only sends EOF tokens after STARTSTABLE; reading before that causes a 60s timeout.
 	if err := r.sendStartStable(); err != nil {
 		return fmt.Errorf("切换稳定同步失败: %w", err)
 	}
@@ -615,7 +615,7 @@ func (r *Replicator) receiveSnapshot() error {
 	return nil
 }
 
-// sendStartStable 发送 DFLY STARTSTABLE 命令（使用主连接）
+// sendStartStable issues DFLY STARTSTABLE on the main connection
 func (r *Replicator) sendStartStable() error {
 	log.Println("")
 	log.Println("🔄 切换到稳定同步模式...")
@@ -634,11 +634,11 @@ func (r *Replicator) sendStartStable() error {
 	return nil
 }
 
-// verifyEofTokens 验证所有 FLOW 的 EOF Token
-// 在 STARTSTABLE 之后，每个 FLOW 会发送：
-//   1. EOF opcode (0xFF) - 1 字节
-//   2. Checksum - 8 字节
-//   3. EOF Token - 40 字节
+// verifyEofTokens validates EOF tokens emitted by each FLOW after STARTSTABLE.
+// After STARTSTABLE each FLOW sends:
+//   1. EOF opcode (0xFF) - 1 byte
+//   2. Checksum - 8 bytes
+//   3. EOF token - 40 bytes
 func (r *Replicator) verifyEofTokens() error {
 	log.Println("")
 	log.Println("🔐 验证 EOF Token...")
@@ -661,15 +661,14 @@ func (r *Replicator) verifyEofTokens() error {
 			}
 			log.Printf("  [FLOW-%d] → 正在读取 EOF Token (%d 字节)...", flowID, tokenLen)
 
-			// 1. 跳过元数据块（0xD3 + 8 字节）
-			// Dragonfly 在 EOF 之前发送一个元数据块
+			// 1. Skip metadata block (0xD3 + 8 bytes). Dragonfly sends it before EOF.
 			metadataBuf := make([]byte, 9) // 1 byte opcode + 8 bytes data
 			if _, err := io.ReadFull(flowConn, metadataBuf); err != nil {
 				errChan <- fmt.Errorf("FLOW-%d: 读取元数据失败: %w", flowID, err)
 				return
 			}
 
-			// 2. 读取 EOF opcode (0xFF)
+			// 2. Read EOF opcode (0xFF)
 			opcodeBuf := make([]byte, 1)
 			if _, err := io.ReadFull(flowConn, opcodeBuf); err != nil {
 				errChan <- fmt.Errorf("FLOW-%d: 读取 EOF opcode 失败: %w", flowID, err)
@@ -680,14 +679,14 @@ func (r *Replicator) verifyEofTokens() error {
 				return
 			}
 
-			// 2. 读取 checksum (8 字节)
+			// 3. Read checksum (8 bytes)
 			checksumBuf := make([]byte, 8)
 			if _, err := io.ReadFull(flowConn, checksumBuf); err != nil {
 				errChan <- fmt.Errorf("FLOW-%d: 读取 checksum 失败: %w", flowID, err)
 				return
 			}
 
-			// 3. 读取 EOF token (40 字节)
+			// 4. Read EOF token (40 bytes)
 			tokenBuf := make([]byte, 40)
 			if _, err := io.ReadFull(flowConn, tokenBuf); err != nil {
 				errChan <- fmt.Errorf("FLOW-%d: 读取 EOF token 失败: %w", flowID, err)
@@ -695,7 +694,7 @@ func (r *Replicator) verifyEofTokens() error {
 			}
 			receivedToken := string(tokenBuf)
 
-			// 4. 验证 token 是否匹配
+			// 5. Compare token
 			if receivedToken != expectedToken {
 				errChan <- fmt.Errorf("FLOW-%d: EOF token 不匹配\n  期望: %s\n  实际: %s",
 					flowID, expectedToken, receivedToken)
@@ -709,7 +708,7 @@ func (r *Replicator) verifyEofTokens() error {
 	wg.Wait()
 	close(errChan)
 
-	// 检查错误
+	// Surface the first error if any
 	for err := range errChan {
 		return err
 	}
@@ -719,14 +718,14 @@ func (r *Replicator) verifyEofTokens() error {
 	return nil
 }
 
-// FlowEntry 表示带有 FLOW ID 的 Journal Entry
+// FlowEntry represents a journal entry tagged with its FLOW ID
 type FlowEntry struct {
 	FlowID int
 	Entry  *JournalEntry
 	Error  error
 }
 
-// receiveJournal 接收并解析 Journal 流（并行监听所有 FLOW）
+// receiveJournal consumes journal streams from all FLOW connections in parallel
 func (r *Replicator) receiveJournal() error {
 	log.Println("")
 	log.Println("📡 开始接收 Journal 流...")
@@ -739,29 +738,29 @@ func (r *Replicator) receiveJournal() error {
 
 	log.Printf("  • 并行监听所有 %d 个 FLOW", numFlows)
 
-	// 创建 channel 接收所有 FLOW 的 Entry
+	// Channel for entries from all FLOWs
 	entryChan := make(chan *FlowEntry, 100)
 
-	// 为每个 FLOW 启动一个 goroutine
+	// Launch a goroutine per FLOW
 	var wg sync.WaitGroup
 	for i := 0; i < numFlows; i++ {
 		wg.Add(1)
 		go r.readFlowJournal(i, entryChan, &wg)
 	}
 
-	// 启动一个 goroutine 等待所有 FLOW 结束后关闭 channel
+	// Close the channel once every FLOW goroutine exits
 	go func() {
 		wg.Wait()
 		close(entryChan)
 	}()
 
-	// 主循环处理 Entry
+	// Main processing loop
 	entriesCount := 0
 	currentDB := uint64(0)
-	flowStats := make(map[int]int) // 每个 FLOW 的 Entry 计数
+	flowStats := make(map[int]int) // entries per FLOW
 
 	for flowEntry := range entryChan {
-		// 检查错误
+		// Handle errors
 		if flowEntry.Error != nil {
 			log.Printf("  ✗ FLOW-%d 错误: %v", flowEntry.FlowID, flowEntry.Error)
 			continue
@@ -771,15 +770,15 @@ func (r *Replicator) receiveJournal() error {
 		flowStats[flowEntry.FlowID]++
 		entry := flowEntry.Entry
 
-		// 更新当前数据库
+		// Track current database
 		if entry.Opcode == OpSelect {
 			currentDB = entry.DbIndex
 		}
 
-		// 显示解析的命令
+		// Display decoded command
 		r.displayFlowEntry(flowEntry.FlowID, entry, currentDB, entriesCount)
 
-		// 重放命令到 Redis Cluster
+		// Replay command to Redis Cluster
 		r.replayStats.mu.Lock()
 		r.replayStats.TotalCommands++
 		r.replayStats.mu.Unlock()
@@ -788,10 +787,10 @@ func (r *Replicator) receiveJournal() error {
 			log.Printf("  ✗ 重放失败: %v", err)
 		}
 
-		// 尝试自动保存 checkpoint
+		// Attempt automatic checkpoint save
 		r.tryAutoSaveCheckpoint()
 
-		// 每 50 条打印一次统计
+		// Log statistics every 50 entries
 		if entriesCount%50 == 0 {
 			r.replayStats.mu.Lock()
 			log.Printf("  📊 统计: 总计=%d, 成功=%d, 跳过=%d, 失败=%d",
@@ -800,7 +799,7 @@ func (r *Replicator) receiveJournal() error {
 				r.replayStats.Skipped,
 				r.replayStats.Failed)
 
-			// 打印每个 FLOW 的统计
+			// Report per-FLOW stats
 			for fid, count := range flowStats {
 				lsn := r.replayStats.FlowLSNs[fid]
 				log.Printf("    FLOW-%d: %d 条, LSN=%d", fid, count, lsn)
@@ -811,7 +810,7 @@ func (r *Replicator) receiveJournal() error {
 
 	log.Println("  • 所有 FLOW 的 Journal 流已结束")
 
-	// 最终保存 checkpoint（如果启用）
+	// Persist final checkpoint if enabled
 	if r.cfg.Checkpoint.Enabled {
 		log.Println("  💾 保存最终 checkpoint...")
 		if err := r.saveCheckpoint(); err != nil {
@@ -824,7 +823,7 @@ func (r *Replicator) receiveJournal() error {
 	return nil
 }
 
-// readFlowJournal 读取单个 FLOW 的 Journal 流
+// readFlowJournal reads the journal stream for a specific FLOW
 func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg *sync.WaitGroup) {
 	defer wg.Done()
 
@@ -832,7 +831,7 @@ func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg
 	log.Printf("  [FLOW-%d] 开始接收 Journal 流", flowID)
 
 	for {
-		// 检查取消信号
+		// Observe cancellation
 		select {
 		case <-r.ctx.Done():
 			log.Printf("  [FLOW-%d] 收到停止信号", flowID)
@@ -840,14 +839,14 @@ func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg
 		default:
 		}
 
-		// 读取一条 Entry
+		// Read entry
 		entry, err := reader.ReadEntry()
 		if err != nil {
 			if err == io.EOF {
 				log.Printf("  [FLOW-%d] Journal 流结束（EOF）", flowID)
 				return
 			}
-			// 发送错误到 channel
+			// Send error to channel
 			entryChan <- &FlowEntry{
 				FlowID: flowID,
 				Error:  fmt.Errorf("读取失败: %w", err),
@@ -855,7 +854,7 @@ func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg
 			return
 		}
 
-		// 发送 Entry 到 channel
+		// Forward entry
 		entryChan <- &FlowEntry{
 			FlowID: flowID,
 			Entry:  entry,
@@ -863,9 +862,9 @@ func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg
 	}
 }
 
-// displayFlowEntry 显示带 FLOW ID 的 Journal Entry
+// displayFlowEntry prints a FLOW-tagged journal entry
 func (r *Replicator) displayFlowEntry(flowID int, entry *JournalEntry, currentDB uint64, count int) {
-	// 根据 opcode 不同显示不同格式
+	// Format output based on opcode
 	switch entry.Opcode {
 	case OpSelect:
 		log.Printf("  [%d] FLOW-%d: SELECT DB=%d", count, flowID, entry.DbIndex)
@@ -877,7 +876,7 @@ func (r *Replicator) displayFlowEntry(flowID int, entry *JournalEntry, currentDB
 		log.Printf("  [%d] FLOW-%d: PING", count, flowID)
 
 	case OpCommand:
-		// 格式化参数
+		// Format arguments
 		args := make([]string, len(entry.Args))
 		for i, arg := range entry.Args {
 			if len(arg) > 50 {
@@ -898,9 +897,9 @@ func (r *Replicator) displayFlowEntry(flowID int, entry *JournalEntry, currentDB
 	}
 }
 
-// displayEntry 显示解析的 Journal Entry
+// displayEntry prints a decoded journal entry without FLOW context
 func (r *Replicator) displayEntry(entry *JournalEntry, currentDB uint64, count int) {
-	// 根据 opcode 不同显示不同格式
+	// Format output based on opcode
 	switch entry.Opcode {
 	case OpSelect:
 		log.Printf("  [%d] SELECT DB=%d", count, entry.DbIndex)
@@ -912,7 +911,7 @@ func (r *Replicator) displayEntry(entry *JournalEntry, currentDB uint64, count i
 		log.Printf("  [%d] PING", count)
 
 	case OpCommand:
-		// 格式化参数
+		// Format arguments
 		args := make([]string, len(entry.Args))
 		for i, arg := range entry.Args {
 			if len(arg) > 50 {
@@ -943,51 +942,51 @@ func (r *Replicator) displayEntry(entry *JournalEntry, currentDB uint64, count i
 	}
 }
 
-// GetState 获取当前状态
+// GetState returns the current replicator state
 func (r *Replicator) GetState() ReplicaState {
 	return r.state
 }
 
-// GetMasterInfo 获取主库信息
+// GetMasterInfo returns master metadata collected during handshake
 func (r *Replicator) GetMasterInfo() MasterInfo {
 	return r.masterInfo
 }
 
-// GetFlows 获取所有 Flow 信息
+// GetFlows returns all FLOW descriptors
 func (r *Replicator) GetFlows() []FlowInfo {
 	return r.flows
 }
 
-// ReplayStats 记录命令重放统计
+// ReplayStats holds command replay statistics
 type ReplayStats struct {
 	mu             sync.Mutex
 	TotalCommands  int64
 	ReplayedOK     int64
 	Skipped        int64
 	Failed         int64
-	FlowLSNs       map[int]uint64 // 每个 FLOW 的最新 LSN
+	FlowLSNs       map[int]uint64 // latest LSN per FLOW
 	LastReplayTime time.Time
 }
 
-// replayCommand 重放单条命令到 Redis Cluster
+// replayCommand replays a single journal command into Redis Cluster
 func (r *Replicator) replayCommand(flowID int, entry *JournalEntry) error {
 	switch entry.Opcode {
 	case OpSelect:
-		// Redis Cluster 只有 DB 0，忽略 SELECT 命令
+		// Redis Cluster only exposes DB 0, ignore SELECT
 		r.replayStats.mu.Lock()
 		r.replayStats.Skipped++
 		r.replayStats.mu.Unlock()
 		return nil
 
 	case OpPing:
-		// 忽略 PING 心跳
+		// Ignore heartbeat
 		r.replayStats.mu.Lock()
 		r.replayStats.Skipped++
 		r.replayStats.mu.Unlock()
 		return nil
 
 	case OpLSN:
-		// 记录 LSN，不执行
+		// Track LSN only
 		r.replayStats.mu.Lock()
 		if r.replayStats.FlowLSNs == nil {
 			r.replayStats.FlowLSNs = make(map[int]uint64)
@@ -997,7 +996,7 @@ func (r *Replicator) replayCommand(flowID int, entry *JournalEntry) error {
 		return nil
 
 	case OpExpired:
-		// 处理过期键：使用 PEXPIRE 设置剩余 TTL
+		// Handle expired key by re-applying TTL using PEXPIRE
 		if err := r.handleExpiredKey(entry); err != nil {
 			r.replayStats.mu.Lock()
 			r.replayStats.Failed++
@@ -1011,7 +1010,7 @@ func (r *Replicator) replayCommand(flowID int, entry *JournalEntry) error {
 		return nil
 
 	case OpCommand:
-		// 检查是否为全局命令
+		// Check for global commands
 		cmd := strings.ToUpper(entry.Command)
 		if isGlobalCommand(cmd) {
 			log.Printf("  ⚠ 跳过全局命令: %s（需要多分片协调）", cmd)
@@ -1021,7 +1020,7 @@ func (r *Replicator) replayCommand(flowID int, entry *JournalEntry) error {
 			return nil
 		}
 
-		// 执行普通命令
+		// Execute regular command
 		if err := r.executeCommand(entry); err != nil {
 			r.replayStats.mu.Lock()
 			r.replayStats.Failed++
@@ -1040,7 +1039,7 @@ func (r *Replicator) replayCommand(flowID int, entry *JournalEntry) error {
 	}
 }
 
-// handleExpiredKey 处理过期键
+// handleExpiredKey sets TTL for expired key events
 func (r *Replicator) handleExpiredKey(entry *JournalEntry) error {
 	if len(entry.Args) == 0 {
 		return fmt.Errorf("EXPIRED 命令缺少 key 参数")
@@ -1048,8 +1047,7 @@ func (r *Replicator) handleExpiredKey(entry *JournalEntry) error {
 
 	key := entry.Args[0]
 
-	// 假设 TTL 为 1ms（键已过期）
-	// 实际实现中可以从 Args 中解析 TTL（如果 Dragonfly 提供）
+	// Assume TTL is 1ms (key already expired). Can be refined if Dragonfly publishes TTL.
 	ttlMs := int64(1)
 
 	_, err := r.clusterClient.Do("PEXPIRE", key, fmt.Sprintf("%d", ttlMs))
@@ -1060,18 +1058,18 @@ func (r *Replicator) handleExpiredKey(entry *JournalEntry) error {
 	return nil
 }
 
-// executeCommand 执行普通命令
+// executeCommand executes a journal command verbatim
 func (r *Replicator) executeCommand(entry *JournalEntry) error {
-	// 构建完整的命令参数列表
+	// Copy args
 	args := make([]string, len(entry.Args))
 	copy(args, entry.Args)
 
-	// 执行命令
+	// Execute
 	_, err := r.clusterClient.Do(entry.Command, args...)
 	return err
 }
 
-// isGlobalCommand 检查是否为全局命令（需要多分片协调）
+// isGlobalCommand checks if a command needs cluster-wide coordination
 func isGlobalCommand(cmd string) bool {
 	globalCmds := map[string]bool{
 		"FLUSHDB":                true,
@@ -1081,12 +1079,12 @@ func isGlobalCommand(cmd string) bool {
 	return globalCmds[cmd]
 }
 
-// saveCheckpoint 保存当前 checkpoint
+// saveCheckpoint persists the current checkpoint state
 func (r *Replicator) saveCheckpoint() error {
 	r.replayStats.mu.Lock()
 	defer r.replayStats.mu.Unlock()
 
-	// 构建 checkpoint
+	// Build checkpoint payload
 	cp := &checkpoint.Checkpoint{
 		ReplicationID: r.masterInfo.ReplID,
 		SessionID:     r.masterInfo.SyncID,
@@ -1094,12 +1092,12 @@ func (r *Replicator) saveCheckpoint() error {
 		FlowLSNs:      make(map[int]uint64),
 	}
 
-	// 复制 FlowLSNs
+	// Copy FlowLSNs
 	for flowID, lsn := range r.replayStats.FlowLSNs {
 		cp.FlowLSNs[flowID] = lsn
 	}
 
-	// 保存到文件
+	// Save to file
 	if err := r.checkpointMgr.Save(cp); err != nil {
 		return fmt.Errorf("保存 checkpoint 失败: %w", err)
 	}
@@ -1108,9 +1106,9 @@ func (r *Replicator) saveCheckpoint() error {
 	return nil
 }
 
-// tryAutoSaveCheckpoint 尝试自动保存 checkpoint（如果时间到了）
+// tryAutoSaveCheckpoint periodically persists checkpoints
 func (r *Replicator) tryAutoSaveCheckpoint() {
-	// 检查是否启用了 checkpoint
+	// Skip when checkpointing is disabled
 	if !r.cfg.Checkpoint.Enabled {
 		return
 	}
@@ -1122,17 +1120,17 @@ func (r *Replicator) tryAutoSaveCheckpoint() {
 	}
 }
 
-// checkKeyConflict 检查键冲突并根据策略决定是否写入
-// 返回值: shouldWrite (是否应该写入), error (错误信息)
+// checkKeyConflict validates whether an RDB entry should be written based on conflict policy.
+// Returns (write, error).
 func (r *Replicator) checkKeyConflict(key string) (bool, error) {
 	policy := r.cfg.Conflict.Policy
 
-	// overwrite 模式：直接写入，不检查
+	// overwrite: always write
 	if policy == "overwrite" {
 		return true, nil
 	}
 
-	// panic 和 skip 模式：需要检查键是否存在
+	// panic/skip: check if key exists
 	reply, err := r.clusterClient.Do("EXISTS", key)
 	if err != nil {
 		return false, fmt.Errorf("检查键存在性失败: %w", err)
@@ -1144,29 +1142,29 @@ func (r *Replicator) checkKeyConflict(key string) (bool, error) {
 	}
 
 	if exists == 0 {
-		return true, nil // 键不存在，可以写入
+		return true, nil // key does not exist
 	}
 
-	// 键已存在
+	// Key exists
 	if policy == "panic" {
 		log.Printf("  ⚠️ 检测到重复键: %s (policy=panic，程序终止)", key)
 		return false, fmt.Errorf("检测到重复键: %s", key)
 	}
 
-	// policy == "skip"
+	// policy == skip
 	log.Printf("  ⚠️ 跳过重复键: %s (policy=skip)", key)
 	return false, nil
 }
 
-// writeRDBEntry 将 RDB entry 写入 Redis
+// writeRDBEntry writes an RDB entry into Redis
 func (r *Replicator) writeRDBEntry(entry *RDBEntry) error {
-	// 检查键冲突
+	// Check conflicts
 	shouldWrite, err := r.checkKeyConflict(entry.Key)
 	if err != nil {
-		return err // panic 模式会返回错误
+		return err // panic mode bubbles up
 	}
 	if !shouldWrite {
-		return nil // skip 模式跳过写入
+		return nil // skip mode simply ignores it
 	}
 
 	switch entry.Type {
@@ -1176,7 +1174,7 @@ func (r *Replicator) writeRDBEntry(entry *RDBEntry) error {
 	case RDB_TYPE_HASH, RDB_TYPE_HASH_ZIPLIST:
 		return r.writeHash(entry)
 
-	case RDB_TYPE_LIST_QUICKLIST_2, 18: // 18 是 Dragonfly 使用的 List Listpack 类型
+	case RDB_TYPE_LIST_QUICKLIST_2, 18: // 18 is Dragonfly listpack encoding for lists
 		return r.writeList(entry)
 
 	case RDB_TYPE_SET, RDB_TYPE_SET_INTSET:
@@ -1190,23 +1188,23 @@ func (r *Replicator) writeRDBEntry(entry *RDBEntry) error {
 	}
 }
 
-// writeString 写入 String 类型的键值对
+// writeString handles string entries
 func (r *Replicator) writeString(entry *RDBEntry) error {
-	// 1. 提取值
+	// Extract value
 	strVal, ok := entry.Value.(*StringValue)
 	if !ok {
 		return fmt.Errorf("String 类型值转换失败")
 	}
 
-	// 2. 写入键值
+	// Write value
 	_, err := r.clusterClient.Do("SET", entry.Key, strVal.Value)
 	if err != nil {
 		return fmt.Errorf("SET 命令失败: %w", err)
 	}
 
-	// 3. 设置 TTL（如果有）
+	// Apply TTL if needed
 	if entry.ExpireMs > 0 {
-		// 计算剩余 TTL（毫秒）
+		// Compute remaining TTL
 		remainingMs := entry.ExpireMs - getCurrentTimeMillis()
 		if remainingMs > 0 {
 			_, err := r.clusterClient.Do("PEXPIRE", entry.Key, fmt.Sprintf("%d", remainingMs))
@@ -1219,18 +1217,18 @@ func (r *Replicator) writeString(entry *RDBEntry) error {
 	return nil
 }
 
-// writeHash 写入 Hash 类型的键值对
+// writeHash handles hash entries
 func (r *Replicator) writeHash(entry *RDBEntry) error {
-	// 1. 提取值
+	// Extract value
 	hashVal, ok := entry.Value.(*HashValue)
 	if !ok {
 		return fmt.Errorf("Hash 类型值转换失败")
 	}
 
-	// 2. 删除旧键（避免残留字段）
+	// Remove existing key to avoid stale fields
 	_, _ = r.clusterClient.Do("DEL", entry.Key)
 
-	// 3. 写入所有字段（使用 HSET key field1 value1 field2 value2 ...）
+	// Write all fields using HSET key field1 value1 ...
 	log.Printf("  [DEBUG] writeHash: key=%s, fields=%d", entry.Key, len(hashVal.Fields))
 	if len(hashVal.Fields) > 0 {
 		args := []string{entry.Key}
@@ -1248,7 +1246,7 @@ func (r *Replicator) writeHash(entry *RDBEntry) error {
 		log.Printf("  [DEBUG] 字段为空，跳过写入")
 	}
 
-	// 4. 设置 TTL（如果有）
+	// Apply TTL if needed
 	if entry.ExpireMs > 0 {
 		remainingMs := entry.ExpireMs - getCurrentTimeMillis()
 		if remainingMs > 0 {
@@ -1262,18 +1260,18 @@ func (r *Replicator) writeHash(entry *RDBEntry) error {
 	return nil
 }
 
-// writeList 写入 List 类型的键值对
+// writeList handles list entries
 func (r *Replicator) writeList(entry *RDBEntry) error {
-	// 1. 提取值
+	// Extract value
 	listVal, ok := entry.Value.(*ListValue)
 	if !ok {
 		return fmt.Errorf("List 类型值转换失败")
 	}
 
-	// 2. 删除旧键
+	// Remove existing key
 	_, _ = r.clusterClient.Do("DEL", entry.Key)
 
-	// 3. 写入所有元素（使用 RPUSH key element1 element2 ...）
+	// Insert elements with RPUSH
 	if len(listVal.Elements) > 0 {
 		args := []string{entry.Key}
 		for _, elem := range listVal.Elements {
@@ -1285,7 +1283,7 @@ func (r *Replicator) writeList(entry *RDBEntry) error {
 		}
 	}
 
-	// 4. 设置 TTL（如果有）
+	// Apply TTL
 	if entry.ExpireMs > 0 {
 		remainingMs := entry.ExpireMs - getCurrentTimeMillis()
 		if remainingMs > 0 {
@@ -1299,18 +1297,18 @@ func (r *Replicator) writeList(entry *RDBEntry) error {
 	return nil
 }
 
-// writeSet 写入 Set 类型的键值对
+// writeSet handles set entries
 func (r *Replicator) writeSet(entry *RDBEntry) error {
-	// 1. 提取值
+	// Extract value
 	setVal, ok := entry.Value.(*SetValue)
 	if !ok {
 		return fmt.Errorf("Set 类型值转换失败")
 	}
 
-	// 2. 删除旧键
+	// Remove existing key
 	_, _ = r.clusterClient.Do("DEL", entry.Key)
 
-	// 3. 写入所有成员（使用 SADD key member1 member2 ...）
+	// Insert members via SADD
 	if len(setVal.Members) > 0 {
 		args := []string{entry.Key}
 		for _, member := range setVal.Members {
@@ -1322,7 +1320,7 @@ func (r *Replicator) writeSet(entry *RDBEntry) error {
 		}
 	}
 
-	// 4. 设置 TTL（如果有）
+	// Apply TTL
 	if entry.ExpireMs > 0 {
 		remainingMs := entry.ExpireMs - getCurrentTimeMillis()
 		if remainingMs > 0 {
@@ -1336,18 +1334,18 @@ func (r *Replicator) writeSet(entry *RDBEntry) error {
 	return nil
 }
 
-// writeZSet 写入 ZSet 类型的键值对
+// writeZSet handles sorted set entries
 func (r *Replicator) writeZSet(entry *RDBEntry) error {
-	// 1. 提取值
+	// Extract value
 	zsetVal, ok := entry.Value.(*ZSetValue)
 	if !ok {
 		return fmt.Errorf("ZSet 类型值转换失败")
 	}
 
-	// 2. 删除旧键
+	// Remove existing key
 	_, _ = r.clusterClient.Do("DEL", entry.Key)
 
-	// 3. 写入所有成员（使用 ZADD key score1 member1 score2 member2 ...）
+	// Insert members via ZADD key score member ...
 	if len(zsetVal.Members) > 0 {
 		args := []string{entry.Key}
 		for _, zm := range zsetVal.Members {
@@ -1359,7 +1357,7 @@ func (r *Replicator) writeZSet(entry *RDBEntry) error {
 		}
 	}
 
-	// 4. 设置 TTL（如果有）
+	// Apply TTL
 	if entry.ExpireMs > 0 {
 		remainingMs := entry.ExpireMs - getCurrentTimeMillis()
 		if remainingMs > 0 {

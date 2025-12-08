@@ -10,7 +10,7 @@ import (
 
 // Config holds migration configuration.
 type Config struct {
-	TaskName   string           `json:"taskName"`   // 可选的任务名（用于日志文件命名）
+	TaskName   string           `json:"taskName"`   // optional task name used for log file naming
 	Source     SourceConfig     `json:"source"`
 	Target     TargetConfig     `json:"target"`
 	Migrate    MigrateConfig    `json:"migrate"`
@@ -74,23 +74,23 @@ type MigrateConfig struct {
 	BgsaveTimeout   int     `json:"bgsaveTimeoutSeconds"`
 }
 
-// CheckpointConfig 配置 LSN 检查点持久化
+// CheckpointConfig controls LSN checkpoint persistence
 type CheckpointConfig struct {
-	Enabled  bool   `json:"enabled"`          // 是否启用 checkpoint
-	Interval int    `json:"intervalSeconds"`  // 自动保存间隔（秒）
-	Path     string `json:"path"`             // checkpoint 文件路径（可选，默认为 stateDir/checkpoint.json）
+	Enabled  bool   `json:"enabled"`          // enable checkpointing
+	Interval int    `json:"intervalSeconds"`  // auto-save interval in seconds
+	Path     string `json:"path"`             // optional checkpoint path (default: stateDir/checkpoint.json)
 }
 
-// LogConfig 日志配置
+// LogConfig configures logging
 type LogConfig struct {
-	Dir            string `json:"dir"`            // 日志目录（默认：logs）
-	Level          string `json:"level"`          // 日志级别：debug/info/warn/error（默认：info）
-	ConsoleEnabled bool   `json:"consoleEnabled"` // 是否在控制台显示关键信息（默认：true）
+	Dir            string `json:"dir"`            // log directory (default: logs)
+	Level          string `json:"level"`          // log level debug/info/warn/error (default: info)
+	ConsoleEnabled bool   `json:"consoleEnabled"` // show key info on console (default: true)
 }
 
-// ConflictConfig 键冲突处理配置
+// ConflictConfig sets the key conflict policy
 type ConflictConfig struct {
-	Policy string `json:"policy"` // 冲突处理策略：overwrite（默认，覆盖）| panic（检测到重复键立即停止）| skip（跳过重复键）
+	Policy string `json:"policy"` // overwrite (default), panic (stop on duplicates), skip (ignore duplicates)
 }
 
 // ValidationError collects configuration issues.
@@ -169,26 +169,25 @@ func (c *Config) ApplyDefaults() {
 	if c.Migrate.BgsaveTimeout == 0 {
 		c.Migrate.BgsaveTimeout = 300
 	}
-	// Checkpoint 默认值
+	// Checkpoint defaults
 	if c.Checkpoint.Interval == 0 {
-		c.Checkpoint.Interval = 10 // 默认 10 秒
+		c.Checkpoint.Interval = 10 // default 10 seconds
 	}
-	// Checkpoint.Enabled 默认为 false，需要显式启用
-	// Checkpoint.Path 默认为空，后续在 Replicator 中使用 stateDir/checkpoint.json
+	// Checkpoint.Enabled defaults to false and must be explicitly enabled
+	// Checkpoint.Path defaults to empty and will fall back to stateDir/checkpoint.json
 
-	// Log 默认值
+	// Log defaults
 	if c.Log.Dir == "" {
 		c.Log.Dir = "logs"
 	}
 	if c.Log.Level == "" {
 		c.Log.Level = "info"
 	}
-	// ConsoleEnabled 默认为 true，因为零值为 false，需要特殊处理
-	// 如果未明确设置，则设为 true（通过检查是否为空配置来判断）
+	// ConsoleEnabled should default to true because the zero value is false
 
-	// Conflict 默认值
+	// Conflict defaults
 	if c.Conflict.Policy == "" {
-		c.Conflict.Policy = "overwrite" // 默认覆盖模式
+		c.Conflict.Policy = "overwrite" // overwrite by default
 	}
 }
 
@@ -208,7 +207,7 @@ func (c *Config) Validate() error {
 	if c.Migrate.ShakeBinary == "" {
 		errs = append(errs, "migrate.shakeBinary 必填 (redis-shake 可执行文件路径)")
 	}
-	// 如果既没有提供 shakeArgs 也没有提供 shakeConfigFile，将自动生成配置文件
+	// When neither shakeArgs nor shakeConfigFile is provided a config file will be generated
 
 	if len(errs) > 0 {
 		return &ValidationError{Path: c.path, Errors: errs}
@@ -241,13 +240,13 @@ func (c *Config) StatusFilePath() string {
 	return c.statusPath
 }
 
-// ResolveCheckpointPath 返回 checkpoint 文件的绝对路径
+// ResolveCheckpointPath returns the absolute checkpoint path
 func (c *Config) ResolveCheckpointPath() string {
 	if c.Checkpoint.Path != "" {
-		// 如果配置了自定义路径，解析它
+		// resolve custom path when provided
 		return c.ResolvePath(c.Checkpoint.Path)
 	}
-	// 默认使用 stateDir/checkpoint.json
+	// default to stateDir/checkpoint.json
 	return filepath.Join(c.stateDirPath, "checkpoint.json")
 }
 

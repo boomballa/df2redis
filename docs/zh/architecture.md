@@ -1,5 +1,7 @@
 # 架构草案：Dragonfly → Redis 复制工具
 
+[English Version](en/architecture.md) | [中文版](architecture.md)
+
 ## 目标
 - 以 Go 实现“伪 Dragonfly replica”，直接兼容 DFLY 复制协议。
 - 支持 Dragonfly 主库到 Redis（含 Cluster）的全量 + 增量同步。
