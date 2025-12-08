@@ -1577,4 +1577,12 @@ func (r *Replicator) recordFlowLSN(flowID int, lsn uint64) {
 	r.metrics.Set(state.MetricIncrementalLSNCurrent, float64(max))
 	r.metrics.Set(state.MetricIncrementalLSNApplied, float64(max))
 	r.metrics.Set(state.MetricIncrementalLagMs, 0)
+
+	// Update operation statistics
+	r.replayStats.mu.Lock()
+	r.metrics.Set(state.MetricIncrementalOpsTotal, float64(r.replayStats.TotalCommands))
+	r.metrics.Set(state.MetricIncrementalOpsSuccess, float64(r.replayStats.ReplayedOK))
+	r.metrics.Set(state.MetricIncrementalOpsSkipped, float64(r.replayStats.Skipped))
+	r.metrics.Set(state.MetricIncrementalOpsFailed, float64(r.replayStats.Failed))
+	r.replayStats.mu.Unlock()
 }
