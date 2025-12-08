@@ -298,9 +298,14 @@
       return type.includes('incremental') || type.includes('journal') || msg.includes('journal');
     });
 
+    const hasStopped = events.some(e => {
+      const type = (e.Type || e.type || '').toLowerCase();
+      return type.includes('stopped') || type.includes('completed');
+    });
+
     // Get flow steps
     const flowSteps = document.querySelectorAll('.flow-step');
-    if (flowSteps.length !== 3) return;
+    if (flowSteps.length !== 4) return;
 
     // Update status based on events
     if (hasHandshake) {
@@ -316,10 +321,17 @@
       flowSteps[2].setAttribute('data-status', 'active');
     }
 
+    if (hasStopped) {
+      flowSteps[2].setAttribute('data-status', 'completed');
+      flowSteps[3].setAttribute('data-status', 'completed');
+    }
+
     // Update current stage text
     const currentStageEl = document.getElementById('current-stage');
     if (currentStageEl) {
-      if (hasIncremental) {
+      if (hasStopped) {
+        currentStageEl.textContent = 'completed';
+      } else if (hasIncremental) {
         currentStageEl.textContent = 'incremental';
       } else if (hasFullSync) {
         currentStageEl.textContent = 'full_sync';
