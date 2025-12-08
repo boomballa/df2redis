@@ -371,6 +371,8 @@ logging:
   level: "info"               # Log level: debug/info/warn/error (default: info)
   file: "logs/df2redis.log"   # Log file path (optional)
 ```
+
+> 日志说明：`log.dir` 相对配置文件所在目录解析，最终文件名为 `<任务名>_<命令>.log`。同名任务每次运行都会覆盖旧日志，详细步骤仅写入日志文件，终端只展示少量提示；如需完全静默，可将 `log.consoleEnabled` 设为 `false`。
 </details>
 
 ---

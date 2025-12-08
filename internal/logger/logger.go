@@ -35,6 +35,7 @@ type Logger struct {
 	level       Level
 	logFile     *os.File
 	logFilePath string
+	consoleOn   bool
 }
 
 var (
@@ -44,7 +45,7 @@ var (
 
 // Init creates the global logger.
 // logFilePrefix examples: "df2redis-test_replicate" or "dragonfly_10.46.128.12_7380_replicate".
-func Init(logDir string, level Level, logFilePrefix string) error {
+func Init(logDir string, level Level, logFilePrefix string, consoleEnabled bool) error {
 	var initErr error
 	once.Do(func() {
 		// Ensure log directory exists
@@ -60,8 +61,8 @@ func Init(logDir string, level Level, logFilePrefix string) error {
 		logFileName := fmt.Sprintf("%s.log", logFilePrefix)
 		logFilePath := filepath.Join(logDir, logFileName)
 
-		// Open log file in append mode
-		logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		// Open log file in truncate mode so each run starts fresh
+		logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 		if err != nil {
 			initErr = fmt.Errorf("打开日志文件失败: %w", err)
 			return
@@ -79,6 +80,7 @@ func Init(logDir string, level Level, logFilePrefix string) error {
 			level:       level,
 			logFile:     logFile,
 			logFilePath: logFilePath,
+			consoleOn:   consoleEnabled,
 		}
 	})
 	return initErr
@@ -126,6 +128,9 @@ func logToFile(level Level, format string, args ...interface{}) {
 func logToConsole(format string, args ...interface{}) {
 	if defaultLogger == nil {
 		fmt.Printf(format+"\n", args...)
+		return
+	}
+	if !defaultLogger.consoleOn {
 		return
 	}
 	defaultLogger.mu.Lock()
