@@ -10,7 +10,7 @@ import (
 
 // Config holds migration configuration.
 type Config struct {
-	TaskName   string           `json:"taskName"`   // optional task name used for log file naming
+	TaskName   string           `json:"taskName"` // optional task name used for log file naming
 	Source     SourceConfig     `json:"source"`
 	Target     TargetConfig     `json:"target"`
 	Migrate    MigrateConfig    `json:"migrate"`
@@ -77,16 +77,24 @@ type MigrateConfig struct {
 
 // CheckpointConfig controls LSN checkpoint persistence
 type CheckpointConfig struct {
-	Enabled  bool   `json:"enabled"`          // enable checkpointing
-	Interval int    `json:"intervalSeconds"`  // auto-save interval in seconds
-	Path     string `json:"path"`             // optional checkpoint path (default: stateDir/checkpoint.json)
+	Enabled  bool   `json:"enabled"`         // enable checkpointing
+	Interval int    `json:"intervalSeconds"` // auto-save interval in seconds
+	Path     string `json:"path"`            // optional checkpoint path (default: stateDir/checkpoint.json)
 }
 
 // LogConfig configures logging
 type LogConfig struct {
 	Dir            string `json:"dir"`            // log directory (default: logs)
 	Level          string `json:"level"`          // log level debug/info/warn/error (default: info)
-	ConsoleEnabled bool   `json:"consoleEnabled"` // show key info on console (default: true)
+	ConsoleEnabled *bool  `json:"consoleEnabled"` // show key info on console (default: true)
+}
+
+// ConsoleEnabledValue returns the effective console logging flag.
+func (lc LogConfig) ConsoleEnabledValue() bool {
+	if lc.ConsoleEnabled == nil {
+		return true
+	}
+	return *lc.ConsoleEnabled
 }
 
 // ConflictConfig sets the key conflict policy
@@ -189,7 +197,10 @@ func (c *Config) ApplyDefaults() {
 	if c.Log.Level == "" {
 		c.Log.Level = "info"
 	}
-	// ConsoleEnabled should default to true because the zero value is false
+	if c.Log.ConsoleEnabled == nil {
+		val := true
+		c.Log.ConsoleEnabled = &val
+	}
 
 	// Conflict defaults
 	if c.Conflict.Policy == "" {
