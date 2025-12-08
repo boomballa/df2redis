@@ -26,6 +26,7 @@
     renderMetricsGrid(metrics);
     renderStageTable(stages);
     renderEvents(events);
+    updateFlowDiagram(events, stages);
   }
 
   function updatePipeline(data) {
@@ -94,8 +95,12 @@
               ticks: {
                 color: '#64748b',
                 font: {
-                  size: 11
-                }
+                  size: 10
+                },
+                maxRotation: 45,
+                minRotation: 45,
+                autoSkip: true,
+                maxTicksLimit: 8
               }
             },
             y: {
@@ -199,7 +204,7 @@
     if (lower.includes('journal') || lower.includes('incremental')) return 'badge-journal';
     if (lower.includes('established') || lower.includes('success')) return 'badge-established';
     if (lower.includes('rdb_done') || lower.includes('completed')) return 'badge-completed';
-    if (lower.includes('starting') || lower.includes('handshake') || lower.includes('full_sync')) return 'badge-starting';
+    if (lower.includes('starting') || lower.includes('handshake') || lower.includes('full_sync') || lower.includes('rdb')) return 'badge-starting';
     if (lower.includes('stopped') || lower.includes('failed')) return 'badge-stopped';
     return '';
   }
@@ -231,6 +236,70 @@
     return str.replace(/[&<>"']/g, function (c) {
       return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
     });
+  }
+
+  function updateFlowDiagram(events, stages) {
+    if (!events || events.length === 0) return;
+
+    // Analyze events to determine flow state
+    const hasHandshake = events.some(e => {
+      const type = (e.Type || e.type || '').toLowerCase();
+      return type.includes('handshake') || type.includes('starting');
+    });
+
+    const hasFullSync = events.some(e => {
+      const type = (e.Type || e.type || '').toLowerCase();
+      const msg = (e.Message || e.message || '').toLowerCase();
+      return type.includes('full_sync') || msg.includes('rdb') || msg.includes('快照');
+    });
+
+    const hasIncremental = events.some(e => {
+      const type = (e.Type || e.type || '').toLowerCase();
+      const msg = (e.Message || e.message || '').toLowerCase();
+      return type.includes('incremental') || type.includes('journal') || msg.includes('journal');
+    });
+
+    const hasStopped = events.some(e => {
+      const type = (e.Type || e.type || '').toLowerCase();
+      return type.includes('stopped') || type.includes('completed');
+    });
+
+    // Get flow steps
+    const flowSteps = document.querySelectorAll('.flow-step');
+    if (flowSteps.length !== 4) return;
+
+    // Update status based on events
+    if (hasHandshake) {
+      flowSteps[0].setAttribute('data-status', 'completed');
+    }
+
+    if (hasFullSync) {
+      flowSteps[1].setAttribute('data-status', 'completed');
+    }
+
+    if (hasIncremental) {
+      flowSteps[1].setAttribute('data-status', 'completed');
+      flowSteps[2].setAttribute('data-status', 'active');
+    }
+
+    if (hasStopped) {
+      flowSteps[2].setAttribute('data-status', 'completed');
+      flowSteps[3].setAttribute('data-status', 'completed');
+    }
+
+    // Update current stage text
+    const currentStageEl = document.getElementById('current-stage');
+    if (currentStageEl) {
+      if (hasStopped) {
+        currentStageEl.textContent = 'completed';
+      } else if (hasIncremental) {
+        currentStageEl.textContent = 'incremental';
+      } else if (hasFullSync) {
+        currentStageEl.textContent = 'full_sync';
+      } else if (hasHandshake) {
+        currentStageEl.textContent = 'handshake';
+      }
+    }
   }
 
   fetchStatus();
