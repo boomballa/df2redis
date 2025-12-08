@@ -2,10 +2,13 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"log"
 	"net/http"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +56,10 @@ func (s *DashboardServer) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/sync/summary", s.handleSyncSummary)
+	mux.HandleFunc("/api/sync/progress", s.handleSyncProgress)
+	mux.HandleFunc("/api/check/latest", s.handleCheckLatest)
+	mux.HandleFunc("/api/events", s.handleEvents)
 	fileServer := http.FileServer(http.Dir(staticDir()))
 	mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
 		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/static")
@@ -105,6 +112,40 @@ func (s *DashboardServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(snap)
 }
 
+func (s *DashboardServer) handleSyncSummary(w http.ResponseWriter, r *http.Request) {
+	resp := buildSyncSummary(s.cfg, s.currentSnapshot())
+	writeJSON(w, resp)
+}
+
+func (s *DashboardServer) handleSyncProgress(w http.ResponseWriter, r *http.Request) {
+	resp := buildSyncProgress(s.cfg, s.currentSnapshot())
+	writeJSON(w, resp)
+}
+
+func (s *DashboardServer) handleCheckLatest(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, buildCheckResponse(s.currentSnapshot()))
+}
+
+func (s *DashboardServer) handleEvents(w http.ResponseWriter, r *http.Request) {
+	snap := s.currentSnapshot()
+	writeJSON(w, map[string]interface{}{
+		"events": snap.Events,
+	})
+}
+
+func (s *DashboardServer) currentSnapshot() state.Snapshot {
+	s.snapshotMu.RLock()
+	snap := s.snapshot
+	s.snapshotMu.RUnlock()
+	if snap.UpdatedAt.IsZero() {
+		loaded, err := s.store.Load()
+		if err == nil {
+			return loaded
+		}
+	}
+	return snap
+}
+
 func loadTemplates() (*template.Template, error) {
 	layout := filepath.Join(templatesDir(), "layout.html")
 	index := filepath.Join(templatesDir(), "index.html")
@@ -117,4 +158,253 @@ func templatesDir() string {
 
 func staticDir() string {
 	return "internal/web/static"
+}
+
+func writeJSON(w http.ResponseWriter, payload interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+type syncSummaryResponse struct {
+	Stage          string          `json:"stage"`
+	StageMessage   string          `json:"stageMessage,omitempty"`
+	StageUpdatedAt time.Time       `json:"stageUpdatedAt,omitempty"`
+	Source         sourceInfo      `json:"source"`
+	Target         targetInfo      `json:"target"`
+	Checkpoint     checkpointInfo  `json:"checkpoint"`
+	UpdatedAt      time.Time       `json:"updatedAt"`
+	ConfigPath     string          `json:"configPath"`
+	StateDir       string          `json:"stateDir"`
+	StageDetails   []stageResponse `json:"stageDetails"`
+}
+
+type stageResponse struct {
+	Name      string    `json:"name"`
+	Status    string    `json:"status"`
+	Message   string    `json:"message,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt,omitempty"`
+}
+
+type sourceInfo struct {
+	Type string `json:"type"`
+	Addr string `json:"addr"`
+}
+
+type targetInfo struct {
+	Type        string  `json:"type"`
+	Seed        string  `json:"seed"`
+	InitialKeys float64 `json:"initialKeys"`
+}
+
+type checkpointInfo struct {
+	LastSavedAt time.Time `json:"lastSavedAt,omitempty"`
+	File        string    `json:"file"`
+	Enabled     bool      `json:"enabled"`
+}
+
+type syncProgressResponse struct {
+	Phase               string          `json:"phase"`
+	Percent             float64         `json:"percent"`
+	SourceKeysEstimated float64         `json:"sourceKeysEstimated"`
+	TargetKeysInitial   float64         `json:"targetKeysInitial"`
+	TargetKeysCurrent   float64         `json:"targetKeysCurrent"`
+	SyncedKeys          float64         `json:"syncedKeys"`
+	FlowStats           []flowProgress  `json:"flowStats"`
+	Incremental         incrementalInfo `json:"incremental"`
+	UpdatedAt           time.Time       `json:"updatedAt"`
+}
+
+type flowProgress struct {
+	FlowID       int       `json:"flowId"`
+	State        string    `json:"state"`
+	Message      string    `json:"message,omitempty"`
+	ImportedKeys float64   `json:"importedKeys"`
+	UpdatedAt    time.Time `json:"updatedAt,omitempty"`
+}
+
+type incrementalInfo struct {
+	LSNCurrent float64 `json:"lsnCurrent"`
+	LSNApplied float64 `json:"lsnApplied"`
+	LagLsns    float64 `json:"lagLsns"`
+	LagMillis  float64 `json:"lagMillis"`
+}
+
+type checkResponse struct {
+	Status           string              `json:"status"`
+	Mode             string              `json:"mode,omitempty"`
+	Message          string              `json:"message,omitempty"`
+	StartedAt        time.Time           `json:"startedAt,omitempty"`
+	FinishedAt       time.Time           `json:"finishedAt,omitempty"`
+	DurationSeconds  float64             `json:"durationSeconds,omitempty"`
+	InconsistentKeys int                 `json:"inconsistentKeys,omitempty"`
+	Samples          []state.CheckSample `json:"samples,omitempty"`
+	ResultFile       string              `json:"resultFile,omitempty"`
+	SummaryFile      string              `json:"summaryFile,omitempty"`
+}
+
+func buildSyncSummary(cfg *config.Config, snap state.Snapshot) syncSummaryResponse {
+	stageName := snap.PipelineStatus
+	var stageMsg string
+	var stageUpdated time.Time
+	if len(snap.Stages) > 0 {
+		if latestName, latest := findLatestStage(snap.Stages); latestName != "" {
+			stageName = latest.Status
+			stageMsg = latest.Message
+			stageUpdated = latest.UpdatedAt
+		}
+	}
+	stageDetails := make([]stageResponse, 0, len(snap.Stages))
+	for name, info := range snap.Stages {
+		stageDetails = append(stageDetails, stageResponse{
+			Name:      name,
+			Status:    info.Status,
+			Message:   info.Message,
+			UpdatedAt: info.UpdatedAt,
+		})
+	}
+	sort.Slice(stageDetails, func(i, j int) bool {
+		return stageDetails[i].Name < stageDetails[j].Name
+	})
+	cpInfo := checkpointInfo{
+		Enabled: cfg.Checkpoint.Enabled,
+		File:    cfg.ResolveCheckpointPath(),
+	}
+	if ts, ok := snap.Metrics[state.MetricCheckpointSavedAtUnix]; ok && ts > 0 {
+		cpInfo.LastSavedAt = time.Unix(int64(ts), 0)
+	}
+	return syncSummaryResponse{
+		Stage:          defaultString(stageName, "idle"),
+		StageMessage:   stageMsg,
+		StageUpdatedAt: stageUpdated,
+		Source: sourceInfo{
+			Type: cfg.Source.Type,
+			Addr: cfg.Source.Addr,
+		},
+		Target: targetInfo{
+			Type:        cfg.Target.Type,
+			Seed:        cfg.Target.Seed,
+			InitialKeys: snap.Metrics[state.MetricTargetKeysInitial],
+		},
+		Checkpoint:   cpInfo,
+		UpdatedAt:    snap.UpdatedAt,
+		ConfigPath:   cfg.ConfigDir(),
+		StateDir:     cfg.ResolveStateDir(),
+		StageDetails: stageDetails,
+	}
+}
+
+func buildSyncProgress(cfg *config.Config, snap state.Snapshot) syncProgressResponse {
+	sourceKeys := snap.Metrics[state.MetricSourceKeysEstimated]
+	targetInitial := snap.Metrics[state.MetricTargetKeysInitial]
+	targetCurrent := snap.Metrics[state.MetricTargetKeysCurrent]
+	synced := snap.Metrics[state.MetricSyncedKeys]
+	if synced == 0 {
+		synced = targetCurrent - targetInitial
+	}
+	percent := 0.0
+	if sourceKeys > 0 {
+		percent = clamp01(synced / sourceKeys)
+	}
+	return syncProgressResponse{
+		Phase:               defaultString(snap.PipelineStatus, "idle"),
+		Percent:             percent,
+		SourceKeysEstimated: sourceKeys,
+		TargetKeysInitial:   targetInitial,
+		TargetKeysCurrent:   targetCurrent,
+		SyncedKeys:          synced,
+		FlowStats:           buildFlowStats(snap),
+		Incremental:         buildIncrementalInfo(snap),
+		UpdatedAt:           snap.UpdatedAt,
+	}
+}
+
+func buildIncrementalInfo(snap state.Snapshot) incrementalInfo {
+	current := snap.Metrics[state.MetricIncrementalLSNCurrent]
+	applied := snap.Metrics[state.MetricIncrementalLSNApplied]
+	lag := current - applied
+	if lag < 0 {
+		lag = 0
+	}
+	return incrementalInfo{
+		LSNCurrent: current,
+		LSNApplied: applied,
+		LagLsns:    lag,
+		LagMillis:  snap.Metrics[state.MetricIncrementalLagMs],
+	}
+}
+
+func buildFlowStats(snap state.Snapshot) []flowProgress {
+	var flows []flowProgress
+	for name, info := range snap.Stages {
+		if !strings.HasPrefix(name, "flow:") {
+			continue
+		}
+		idStr := strings.TrimPrefix(name, "flow:")
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			continue
+		}
+		metricKey := fmt.Sprintf(state.MetricFlowImportedFormat, id)
+		flows = append(flows, flowProgress{
+			FlowID:       id,
+			State:        info.Status,
+			Message:      info.Message,
+			ImportedKeys: snap.Metrics[metricKey],
+			UpdatedAt:    info.UpdatedAt,
+		})
+	}
+	sort.Slice(flows, func(i, j int) bool {
+		return flows[i].FlowID < flows[j].FlowID
+	})
+	return flows
+}
+
+func buildCheckResponse(snap state.Snapshot) checkResponse {
+	if snap.Check == nil {
+		return checkResponse{Status: "not_run"}
+	}
+	return checkResponse{
+		Status:           snap.Check.Status,
+		Mode:             snap.Check.Mode,
+		Message:          snap.Check.Message,
+		StartedAt:        snap.Check.StartedAt,
+		FinishedAt:       snap.Check.FinishedAt,
+		DurationSeconds:  snap.Check.DurationSeconds,
+		InconsistentKeys: snap.Check.InconsistentKeys,
+		Samples:          snap.Check.Samples,
+		ResultFile:       snap.Check.ResultFile,
+		SummaryFile:      snap.Check.SummaryFile,
+	}
+}
+
+func findLatestStage(stages map[string]state.StageSnapshot) (string, state.StageSnapshot) {
+	var latestName string
+	var latest state.StageSnapshot
+	for name, st := range stages {
+		if st.UpdatedAt.After(latest.UpdatedAt) {
+			latest = st
+			latestName = name
+		}
+	}
+	return latestName, latest
+}
+
+func defaultString(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+func clamp01(v float64) float64 {
+	switch {
+	case v < 0:
+		return 0
+	case v > 1:
+		return 1
+	default:
+		return v
+	}
 }
