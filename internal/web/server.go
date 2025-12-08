@@ -97,14 +97,20 @@ func (s *DashboardServer) refreshLoop() {
 }
 
 func (s *DashboardServer) handleIndex(w http.ResponseWriter, r *http.Request) {
+	// Use relative paths for cleaner display
+	stateDir := s.cfg.StateDir
+	statusFile := s.cfg.StatusFile
+	logDir := s.cfg.Log.Dir
+
 	ctx := map[string]interface{}{
-		"StateDir":    s.cfg.ResolveStateDir(),
-		"StatusFile":  s.cfg.StatusFilePath(),
-		"GeneratedAt": time.Now().Format(time.RFC3339),
-		"Source":      s.cfg.Source,
-		"Target":      s.cfg.Target,
+		"StateDir":     stateDir,
+		"StatusFile":   statusFile,
+		"LogDir":       logDir,
+		"GeneratedAt":  time.Now().Format(time.RFC3339),
+		"Source":       s.cfg.Source,
+		"Target":       s.cfg.Target,
 		"SnapshotPath": s.cfg.Migrate.SnapshotPath,
-		"TaskName":    s.cfg.TaskName,
+		"TaskName":     s.cfg.TaskName,
 	}
 	s.snapshotMu.RLock()
 	ctx["Snapshot"] = s.snapshot
