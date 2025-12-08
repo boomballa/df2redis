@@ -10,4 +10,8 @@ const (
 	MetricIncrementalLSNCurrent = "sync.incremental.lsn.current"
 	MetricIncrementalLSNApplied = "sync.incremental.lsn.applied"
 	MetricIncrementalLagMs      = "sync.incremental.lag.ms"
+	MetricIncrementalOpsTotal   = "sync.incremental.ops.total"
+	MetricIncrementalOpsSuccess = "sync.incremental.ops.success"
+	MetricIncrementalOpsSkipped = "sync.incremental.ops.skipped"
+	MetricIncrementalOpsFailed  = "sync.incremental.ops.failed"
 )
