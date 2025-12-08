@@ -33,6 +33,13 @@ log:
   level: "info"               # 日志级别：debug/info/warn/error（默认：info）
   consoleEnabled: true        # 是否在控制台显示关键信息（默认：true）
 
+# 键冲突处理策略（仅在 RDB 快照阶段生效）
+conflict:
+  policy: "overwrite"         # 冲突处理策略：
+                              # - overwrite（默认，覆盖）：直接覆盖目标库中的重复键，性能最高
+                              # - panic：检测到重复键立即停止程序，适用于全新数据库迁移
+                              # - skip：跳过重复键，继续处理其他键，适用于增量数据追加场景
+
 # 注意：replicate 命令目前仅测试握手流程
 # 以下参数仅为通过配置校验，实际不使用
 migrate:
