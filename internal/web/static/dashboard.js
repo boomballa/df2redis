@@ -640,3 +640,142 @@
     startAutoRefresh();
   }
 })();
+
+// Data Validation (Check) Module
+(function () {
+  const checkStartBtn = document.getElementById('check-start-btn');
+  const checkStopBtn = document.getElementById('check-stop-btn');
+  const checkProgressPanel = document.getElementById('check-progress-panel');
+  const checkModeRadios = document.querySelectorAll('input[name="check-mode"]');
+  const samplingOptions = document.getElementById('sampling-options');
+
+  if (!checkStartBtn) return;
+
+  let pollTimer = null;
+  let isRunning = false;
+
+  // Toggle sampling options based on mode
+  checkModeRadios.forEach(radio => {
+    radio.addEventListener('change', (e) => {
+      if (e.target.value === 'full') {
+        samplingOptions.style.display = 'none';
+      } else {
+        samplingOptions.style.display = 'flex';
+      }
+    });
+  });
+
+  // Start validation
+  checkStartBtn.addEventListener('click', async () => {
+    const mode = document.querySelector('input[name="check-mode"]:checked').value;
+    const sampleSize = parseInt(document.getElementById('check-sample-size').value) || 1000;
+    const keyPrefix = document.getElementById('check-key-prefix').value.trim();
+    const qps = parseInt(document.getElementById('check-qps').value) || 100;
+
+    try {
+      const res = await fetch('/api/check/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, sampleSize, keyPrefix, qps })
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        isRunning = true;
+        checkStartBtn.style.display = 'none';
+        checkStopBtn.style.display = 'inline-flex';
+        checkProgressPanel.style.display = 'block';
+
+        // Start polling status
+        startStatusPolling();
+      } else {
+        alert(data.message || 'Failed to start validation');
+      }
+    } catch (err) {
+      console.error('Start check error:', err);
+      alert('Failed to start validation: ' + err.message);
+    }
+  });
+
+  // Stop validation
+  checkStopBtn.addEventListener('click', async () => {
+    try {
+      const res = await fetch('/api/check/stop', { method: 'POST' });
+      const data = await res.json();
+
+      if (data.success) {
+        stopStatusPolling();
+        isRunning = false;
+        checkStartBtn.style.display = 'inline-flex';
+        checkStopBtn.style.display = 'none';
+      } else {
+        alert(data.message || 'Failed to stop validation');
+      }
+    } catch (err) {
+      console.error('Stop check error:', err);
+      alert('Failed to stop validation: ' + err.message);
+    }
+  });
+
+  // Poll status from server
+  async function pollStatus() {
+    try {
+      const res = await fetch('/api/check/status');
+      const status = await res.json();
+
+      updateUI(status);
+
+      // Stop polling if task completed
+      if (!status.running && isRunning) {
+        stopStatusPolling();
+        isRunning = false;
+        checkStartBtn.style.display = 'inline-flex';
+        checkStopBtn.style.display = 'none';
+      }
+    } catch (err) {
+      console.error('Poll status error:', err);
+    }
+  }
+
+  // Update UI with status
+  function updateUI(status) {
+    if (!status || !status.running) return;
+
+    // Update progress bar
+    const progress = (status.progress || 0) * 100;
+    document.getElementById('check-progress-bar').style.width = progress + '%';
+    document.getElementById('check-progress-percent').textContent = progress.toFixed(1) + '%';
+
+    // Update status text
+    document.getElementById('check-status-text').textContent = status.message || 'Running...';
+
+    // Update stats
+    document.getElementById('check-consistent-count').textContent = formatNumber(status.consistentKeys || 0);
+    document.getElementById('check-inconsistent-count').textContent = formatNumber(status.inconsistentKeys || 0);
+    document.getElementById('check-error-count').textContent = formatNumber(status.errorCount || 0);
+    document.getElementById('check-elapsed-time').textContent = formatElapsedTime(status.elapsedSeconds || 0);
+  }
+
+  function formatElapsedTime(seconds) {
+    if (seconds < 60) {
+      return seconds.toFixed(1) + 's';
+    }
+    const minutes = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${minutes}m ${secs}s`;
+  }
+
+  function startStatusPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(pollStatus, 1000); // Poll every second
+    pollStatus(); // Initial poll
+  }
+
+  function stopStatusPolling() {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+})();

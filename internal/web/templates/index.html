@@ -219,6 +219,93 @@
     </section>
 </div>
 
+<section class="card" id="check-validation-card" style="margin-top:24px;">
+    <div class="card-title">📊 Data Validation</div>
+
+    <div class="check-config-form">
+        <div class="check-form-row">
+            <div class="check-form-group">
+                <label class="check-label">Validation Mode</label>
+                <div class="check-radio-group">
+                    <label class="check-radio-label">
+                        <input type="radio" name="check-mode" value="sampling" checked>
+                        <span>Sampling</span>
+                    </label>
+                    <label class="check-radio-label">
+                        <input type="radio" name="check-mode" value="full">
+                        <span>Full Scan</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <div class="check-form-row" id="sampling-options">
+            <div class="check-form-group">
+                <label class="check-label" for="check-sample-size">Sample Size</label>
+                <input type="number" id="check-sample-size" class="check-input" value="1000" min="1" max="1000000">
+                <span class="check-hint">Number of keys to validate</span>
+            </div>
+            <div class="check-form-group">
+                <label class="check-label" for="check-key-prefix">Key Prefix (optional)</label>
+                <input type="text" id="check-key-prefix" class="check-input" placeholder="e.g., user:*">
+                <span class="check-hint">Filter keys by prefix pattern</span>
+            </div>
+        </div>
+
+        <div class="check-form-row">
+            <div class="check-form-group">
+                <label class="check-label" for="check-qps">QPS Limit</label>
+                <input type="number" id="check-qps" class="check-input" value="100" min="1" max="10000">
+                <span class="check-hint">Requests per second</span>
+            </div>
+        </div>
+
+        <div class="check-actions">
+            <button id="check-start-btn" class="check-btn check-btn-primary">
+                <span>▶</span> Start Validation
+            </button>
+            <button id="check-stop-btn" class="check-btn check-btn-danger" style="display:none;">
+                <span>⏹</span> Stop
+            </button>
+        </div>
+    </div>
+
+    <div class="check-progress-panel" id="check-progress-panel" style="display:none;">
+        <div class="check-progress-header">
+            <div class="check-progress-title">Validation Progress</div>
+            <div class="check-progress-status" id="check-status-text">Initializing...</div>
+        </div>
+
+        <div class="check-progress-bar-container">
+            <div class="check-progress-bar" id="check-progress-bar" style="width: 0%;"></div>
+            <div class="check-progress-percent" id="check-progress-percent">0%</div>
+        </div>
+
+        <div class="check-stats-grid">
+            <div class="check-stat-item">
+                <div class="check-stat-icon check-stat-checked">✓</div>
+                <div class="check-stat-label">Consistent</div>
+                <div class="check-stat-value" id="check-consistent-count">0</div>
+            </div>
+            <div class="check-stat-item">
+                <div class="check-stat-icon check-stat-inconsistent">✗</div>
+                <div class="check-stat-label">Inconsistent</div>
+                <div class="check-stat-value" id="check-inconsistent-count">0</div>
+            </div>
+            <div class="check-stat-item">
+                <div class="check-stat-icon check-stat-error">⚠</div>
+                <div class="check-stat-label">Errors</div>
+                <div class="check-stat-value" id="check-error-count">0</div>
+            </div>
+            <div class="check-stat-item">
+                <div class="check-stat-icon check-stat-time">⏱</div>
+                <div class="check-stat-label">Elapsed</div>
+                <div class="check-stat-value" id="check-elapsed-time">0s</div>
+            </div>
+        </div>
+    </div>
+</section>
+
 <section class="card" id="live-logs-card" style="margin-top:24px;">
     <div class="card-title">
         Live Logs
