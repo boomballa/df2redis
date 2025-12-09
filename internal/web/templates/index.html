@@ -4,42 +4,65 @@
         <h1>df2redis Live Dashboard</h1>
         <p class="subtitle">Track Dragonfly → Redis synchronization at a glance.</p>
     </div>
+
     {{ if .TaskName }}
-    <div class="meta-row">
-        <div class="meta-pill task-pill">
-            <span class="icon">🏷️</span>
-            <span>Task: <strong>{{ .TaskName }}</strong></span>
+    <!-- Task Module -->
+    <div class="meta-section">
+        <div class="meta-section-title">
+            <span class="section-icon">🏷️</span>
+            <span>Task Information</span>
+        </div>
+        <div class="meta-row">
+            <div class="meta-pill task-pill">
+                <span>Task: <strong>{{ .TaskName }}</strong></span>
+            </div>
+            <div class="meta-pill">
+                <span class="icon">⏱️</span>
+                <span>Updated: <strong>{{ .GeneratedAt }}</strong></span>
+            </div>
         </div>
     </div>
     {{ end }}
-    <div class="meta-row">
-        <div class="meta-pill">
-            <span class="icon">🗄️</span>
-            <span>Source: <strong>{{ .Source.Type }} @ {{ .Source.Addr }}</strong></span>
+
+    <!-- Data Source Module -->
+    <div class="meta-section">
+        <div class="meta-section-title">
+            <span class="section-icon">🔄</span>
+            <span>Data Source Configuration</span>
         </div>
-        <div class="meta-pill">
-            <span class="icon">🎯</span>
-            <span>Target: <strong>{{ .Target.Type }} @ {{ .Target.Seed }}</strong></span>
+        <div class="meta-row">
+            <div class="meta-pill">
+                <span class="icon">🗄️</span>
+                <span>Source: <strong>{{ .Source.Type }} @ {{ .Source.Addr }}</strong></span>
+            </div>
+            <div class="meta-pill">
+                <span class="icon">🎯</span>
+                <span>Target: <strong>{{ .Target.Type }} @ {{ .Target.Seed }}</strong></span>
+            </div>
         </div>
     </div>
-    <div class="meta-row">
-        <div class="meta-pill">
-            <span class="icon">🗂️</span>
-            <span>State: <strong>{{ .StateDir }}</strong></span>
+
+    <!-- Storage & Logs Module -->
+    <div class="meta-section">
+        <div class="meta-section-title">
+            <span class="section-icon">💾</span>
+            <span>Storage & Logs</span>
         </div>
-        <div class="meta-pill">
-            <span class="icon">📝</span>
-            <span>Status: <strong>{{ .StatusFile }}</strong></span>
-        </div>
-        {{ if .LogDir }}
-        <div class="meta-pill">
-            <span class="icon">📋</span>
-            <span>Logs: <strong>{{ .LogDir }}</strong></span>
-        </div>
-        {{ end }}
-        <div class="meta-pill">
-            <span class="icon">⏱️</span>
-            <span>Updated: <strong>{{ .GeneratedAt }}</strong></span>
+        <div class="meta-row">
+            <div class="meta-pill">
+                <span class="icon">🗂️</span>
+                <span>State: <strong>{{ .StateDir }}</strong></span>
+            </div>
+            <div class="meta-pill">
+                <span class="icon">📝</span>
+                <span>Status: <strong>{{ .StatusFile }}</strong></span>
+            </div>
+            {{ if .LogFile }}
+            <div class="meta-pill">
+                <span class="icon">📋</span>
+                <span>Logs: <strong>{{ .LogFile }}</strong></span>
+            </div>
+            {{ end }}
         </div>
     </div>
 </div>
