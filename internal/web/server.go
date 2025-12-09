@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"df2redis/internal/config"
+	"df2redis/internal/logger"
 	"df2redis/internal/state"
 )
 
@@ -102,7 +103,13 @@ func (s *DashboardServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	// Use relative paths for cleaner display
 	stateDir := s.cfg.StateDir
 	statusFile := s.cfg.StatusFile
-	logFile := filepath.Join(s.cfg.Log.Dir, "df2redis.log")
+
+	// Get actual log file path from logger (e.g., log/dba-song-test_replicate.log)
+	logFile := logger.GetLogFilePath()
+	if logFile == "" {
+		// Fallback: infer log file path from config
+		logFile = s.inferLogFilePath()
+	}
 
 	ctx := map[string]interface{}{
 		"StateDir":     stateDir,
@@ -173,8 +180,12 @@ func (s *DashboardServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 构建日志文件路径
-	logPath := filepath.Join(s.cfg.Log.Dir, "df2redis.log")
+	// 获取实际日志文件路径
+	logPath := logger.GetLogFilePath()
+	if logPath == "" {
+		// Fallback: infer log file path from config
+		logPath = s.inferLogFilePath()
+	}
 
 	// 读取日志文件
 	content, err := readLogFile(logPath, offset, lines)
@@ -523,4 +534,51 @@ func readLogFile(path string, offset, count int) (*logContent, error) {
 		Lines:      lines,
 		TotalLines: totalLines,
 	}, nil
+}
+
+// inferLogFilePath attempts to find the actual log file based on config and existing files.
+// Log file naming format: {taskName}_{mode}.log or {sourceType}_{sourceAddr}_{mode}.log
+func (s *DashboardServer) inferLogFilePath() string {
+	logDir := s.cfg.Log.Dir
+
+	// Try multiple possible log file patterns
+	var candidates []string
+
+	// Pattern 1: taskName_replicate.log (most common)
+	if s.cfg.TaskName != "" {
+		candidates = append(candidates,
+			filepath.Join(logDir, fmt.Sprintf("%s_replicate.log", s.cfg.TaskName)),
+			filepath.Join(logDir, fmt.Sprintf("%s_migrate.log", s.cfg.TaskName)),
+			filepath.Join(logDir, fmt.Sprintf("%s_check.log", s.cfg.TaskName)),
+		)
+	}
+
+	// Pattern 2: sourceType_sourceAddr_mode.log
+	sourceType := s.cfg.Source.Type
+	if sourceType == "" {
+		sourceType = "dragonfly"
+	}
+	addr := strings.ReplaceAll(s.cfg.Source.Addr, ":", "_")
+	addr = strings.ReplaceAll(addr, ".", "_")
+	candidates = append(candidates,
+		filepath.Join(logDir, fmt.Sprintf("%s_%s_replicate.log", sourceType, addr)),
+		filepath.Join(logDir, fmt.Sprintf("%s_%s_migrate.log", sourceType, addr)),
+	)
+
+	// Pattern 3: fallback to default
+	candidates = append(candidates, filepath.Join(logDir, "df2redis.log"))
+
+	// Return first existing file
+	for _, candidate := range candidates {
+		absPath, err := filepath.Abs(candidate)
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(absPath); err == nil {
+			return candidate
+		}
+	}
+
+	// No file found, return first candidate (will be created when logger initializes)
+	return candidates[0]
 }
