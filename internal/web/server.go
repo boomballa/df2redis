@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -62,6 +63,7 @@ func (s *DashboardServer) Start(ready chan<- string) error {
 	mux.HandleFunc("/api/sync/progress", s.handleSyncProgress)
 	mux.HandleFunc("/api/check/latest", s.handleCheckLatest)
 	mux.HandleFunc("/api/events", s.handleEvents)
+	mux.HandleFunc("/api/logs", s.handleLogs)
 	fileServer := http.FileServer(http.Dir(staticDir()))
 	mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
 		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/static")
@@ -149,6 +151,48 @@ func (s *DashboardServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 	snap := s.currentSnapshot()
 	writeJSON(w, map[string]interface{}{
 		"events": snap.Events,
+	})
+}
+
+func (s *DashboardServer) handleLogs(w http.ResponseWriter, r *http.Request) {
+	// 解析查询参数
+	linesParam := r.URL.Query().Get("lines")
+	offsetParam := r.URL.Query().Get("offset")
+
+	lines := 100 // 默认 100 行
+	if linesParam != "" {
+		if parsed, err := strconv.Atoi(linesParam); err == nil && parsed > 0 {
+			lines = parsed
+		}
+	}
+
+	offset := 0 // 默认从头开始
+	if offsetParam != "" {
+		if parsed, err := strconv.Atoi(offsetParam); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+
+	// 构建日志文件路径
+	logPath := filepath.Join(s.cfg.Log.Dir, "df2redis.log")
+
+	// 读取日志文件
+	content, err := readLogFile(logPath, offset, lines)
+	if err != nil {
+		writeJSON(w, map[string]interface{}{
+			"error": fmt.Sprintf("读取日志失败: %v", err),
+			"lines": []string{},
+			"total": 0,
+			"offset": offset,
+		})
+		return
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"lines":  content.Lines,
+		"total":  content.TotalLines,
+		"offset": offset,
+		"count":  len(content.Lines),
 	})
 }
 
@@ -426,4 +470,57 @@ func clamp01(v float64) float64 {
 	default:
 		return v
 	}
+}
+
+type logContent struct {
+	Lines      []string
+	TotalLines int
+}
+
+func readLogFile(path string, offset, count int) (*logContent, error) {
+	// 打开文件
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		// 如果文件不存在，返回空内容而不是错误
+		if os.IsNotExist(err) {
+			return &logContent{Lines: []string{}, TotalLines: 0}, nil
+		}
+		return nil, err
+	}
+
+	// 按行分割
+	content := string(data)
+	allLines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	if len(allLines) == 1 && allLines[0] == "" {
+		allLines = []string{}
+	}
+
+	totalLines := len(allLines)
+
+	// 计算切片范围
+	start := offset
+	if start > totalLines {
+		start = totalLines
+	}
+
+	end := start + count
+	if end > totalLines {
+		end = totalLines
+	}
+
+	// 提取请求的行
+	lines := []string{}
+	if start < end {
+		lines = allLines[start:end]
+	}
+
+	return &logContent{
+		Lines:      lines,
+		TotalLines: totalLines,
+	}, nil
 }
