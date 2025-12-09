@@ -102,12 +102,12 @@ func (s *DashboardServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	// Use relative paths for cleaner display
 	stateDir := s.cfg.StateDir
 	statusFile := s.cfg.StatusFile
-	logDir := s.cfg.Log.Dir
+	logFile := filepath.Join(s.cfg.Log.Dir, "df2redis.log")
 
 	ctx := map[string]interface{}{
 		"StateDir":     stateDir,
 		"StatusFile":   statusFile,
-		"LogDir":       logDir,
+		"LogFile":      logFile,
 		"GeneratedAt":  time.Now().Format(time.RFC3339),
 		"Source":       s.cfg.Source,
 		"Target":       s.cfg.Target,
