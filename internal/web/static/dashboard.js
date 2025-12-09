@@ -442,7 +442,9 @@
     try {
       const res = await fetch(`/api/logs?offset=${offset}&lines=${lines}`);
       if (!res.ok) throw new Error('fetch logs failed');
-      return await res.json();
+      const data = await res.json();
+      console.log('[Live Logs] Fetched data:', data);
+      return data;
     } catch (err) {
       console.error('logs fetch error', err);
       return null;
@@ -450,6 +452,7 @@
   }
 
   function renderLogLines(lines, append = false) {
+    console.log('[Live Logs] Rendering lines:', lines ? lines.length : 0, 'append:', append);
     if (!lines || lines.length === 0) {
       if (!append) {
         logContent.innerHTML = '<div class="log-loading">No logs available</div>';
@@ -506,12 +509,15 @@
   async function loadInitialLogs() {
     currentOffset = 0;
     const data = await fetchLogs(0, 100);
+    console.log('[Live Logs] loadInitialLogs data:', data);
     if (data) {
       totalLines = data.total;
       currentOffset = data.count;
       renderLogLines(data.lines, false);
       scrollToBottom();
       updateLoadMoreButton();
+    } else {
+      console.error('[Live Logs] No data received from fetchLogs');
     }
   }
 
