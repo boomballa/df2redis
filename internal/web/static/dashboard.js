@@ -428,8 +428,10 @@
   const logSearchInput = document.getElementById('log-search-input');
   const logSearchBtn = document.getElementById('log-search-btn');
   const logSearchClear = document.getElementById('log-search-clear');
+  const logJumpTopBtn = document.getElementById('log-jump-top-btn');
   const logRefreshBtn = document.getElementById('log-refresh-btn');
   const logScrollBottomBtn = document.getElementById('log-scroll-bottom-btn');
+  const logJumpLatestBtn = document.getElementById('log-jump-latest-btn');
   const logSettingsBtn = document.getElementById('log-settings-btn');
   const logLoadMoreBtn = document.getElementById('log-load-more-btn');
   const autoRefreshIndicator = document.getElementById('auto-refresh-indicator');
@@ -545,6 +547,47 @@
     await loadInitialLogs();
   }
 
+  async function jumpToTop() {
+    // Jump to the beginning: load first 100 lines
+    currentOffset = 0;
+    const data = await fetchLogs(0, 100);
+    console.log('[Live Logs] jumpToTop data:', data);
+    if (data) {
+      totalLines = data.total;
+      currentOffset = data.count;
+      renderLogLines(data.lines, false);
+      // Scroll to top
+      logViewer.scrollTop = 0;
+      updateLoadMoreButton();
+    }
+  }
+
+  async function jumpToLatest() {
+    // Jump to the latest: load last 100 lines
+    // First fetch to get total line count
+    const tempData = await fetchLogs(0, 1);
+    if (!tempData) return;
+
+    const total = tempData.total;
+    const offset = Math.max(0, total - 100);
+
+    const data = await fetchLogs(offset, 100);
+    console.log('[Live Logs] jumpToLatest data:', data);
+    if (data) {
+      totalLines = data.total;
+      currentOffset = total; // Set to end so "Load More" is disabled
+      renderLogLines(data.lines, false);
+      scrollToBottom();
+      updateLoadMoreButton();
+
+      // Resume auto-refresh if enabled
+      if (autoRefresh) {
+        isAtBottom = true;
+        updateAutoRefreshState();
+      }
+    }
+  }
+
   function updateLoadMoreButton() {
     if (currentOffset >= totalLines) {
       logLoadMoreBtn.disabled = true;
@@ -637,8 +680,10 @@
   // Event listeners
   logViewer.addEventListener('scroll', checkScrollPosition);
   logLoadMoreBtn.addEventListener('click', loadMoreLogs);
+  logJumpTopBtn.addEventListener('click', jumpToTop);
   logRefreshBtn.addEventListener('click', refreshLogs);
   logScrollBottomBtn.addEventListener('click', scrollToBottom);
+  logJumpLatestBtn.addEventListener('click', jumpToLatest);
   logSettingsBtn.addEventListener('click', toggleAutoRefresh);
   logSearchBtn.addEventListener('click', performSearch);
   logSearchClear.addEventListener('click', clearSearch);
