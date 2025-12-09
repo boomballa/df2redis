@@ -438,6 +438,14 @@
 
   if (!logViewer) return;
 
+  // Helper function to escape HTML
+  function escapeHTML(str) {
+    if (typeof str !== 'string') return str;
+    return str.replace(/[&<>"']/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+    });
+  }
+
   async function fetchLogs(offset, lines) {
     try {
       const res = await fetch(`/api/logs?offset=${offset}&lines=${lines}`);
