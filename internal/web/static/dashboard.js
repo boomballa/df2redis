@@ -412,3 +412,231 @@
 
   fetchStatus();
 })();
+
+// Live Logs Viewer
+(function () {
+  let currentOffset = 0;
+  let totalLines = 0;
+  let searchKeyword = '';
+  let autoRefresh = true;
+  let refreshInterval = 5000;
+  let refreshTimer = null;
+  let isAtBottom = true;
+
+  const logViewer = document.getElementById('log-viewer');
+  const logContent = document.getElementById('log-content');
+  const logSearchInput = document.getElementById('log-search-input');
+  const logSearchBtn = document.getElementById('log-search-btn');
+  const logSearchClear = document.getElementById('log-search-clear');
+  const logRefreshBtn = document.getElementById('log-refresh-btn');
+  const logScrollBottomBtn = document.getElementById('log-scroll-bottom-btn');
+  const logSettingsBtn = document.getElementById('log-settings-btn');
+  const logLoadMoreBtn = document.getElementById('log-load-more-btn');
+  const autoRefreshIndicator = document.getElementById('auto-refresh-indicator');
+  const logShownCount = document.getElementById('log-shown-count');
+  const logTotalCount = document.getElementById('log-total-count');
+
+  if (!logViewer) return;
+
+  async function fetchLogs(offset, lines) {
+    try {
+      const res = await fetch(`/api/logs?offset=${offset}&lines=${lines}`);
+      if (!res.ok) throw new Error('fetch logs failed');
+      return await res.json();
+    } catch (err) {
+      console.error('logs fetch error', err);
+      return null;
+    }
+  }
+
+  function renderLogLines(lines, append = false) {
+    if (!lines || lines.length === 0) {
+      if (!append) {
+        logContent.innerHTML = '<div class="log-loading">No logs available</div>';
+      }
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    lines.forEach(line => {
+      const div = document.createElement('div');
+      div.className = 'log-line';
+
+      // Detect log level
+      if (line.includes('[ERROR]')) {
+        div.classList.add('log-error');
+      } else if (line.includes('[WARN]')) {
+        div.classList.add('log-warn');
+      } else if (line.includes('[INFO]')) {
+        div.classList.add('log-info');
+      } else if (line.includes('[DEBUG]')) {
+        div.classList.add('log-debug');
+      }
+
+      // Apply search highlighting
+      let content = escapeHTML(line);
+      if (searchKeyword) {
+        const regex = new RegExp(`(${escapeRegex(searchKeyword)})`, 'gi');
+        content = content.replace(regex, '<span class="log-highlight">$1</span>');
+        if (regex.test(line)) {
+          div.classList.add('highlighted');
+        }
+      }
+
+      div.innerHTML = content;
+      fragment.appendChild(div);
+    });
+
+    if (append) {
+      logContent.appendChild(fragment);
+    } else {
+      logContent.innerHTML = '';
+      logContent.appendChild(fragment);
+    }
+
+    // Update status
+    logShownCount.textContent = logContent.querySelectorAll('.log-line').length;
+    logTotalCount.textContent = totalLines;
+  }
+
+  function escapeRegex(str) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  async function loadInitialLogs() {
+    currentOffset = 0;
+    const data = await fetchLogs(0, 100);
+    if (data) {
+      totalLines = data.total;
+      currentOffset = data.count;
+      renderLogLines(data.lines, false);
+      scrollToBottom();
+      updateLoadMoreButton();
+    }
+  }
+
+  async function loadMoreLogs() {
+    const data = await fetchLogs(currentOffset, 50);
+    if (data) {
+      totalLines = data.total;
+      const oldOffset = currentOffset;
+      currentOffset += data.count;
+      renderLogLines(data.lines, true);
+      updateLoadMoreButton();
+    }
+  }
+
+  async function refreshLogs() {
+    // Reload from beginning
+    await loadInitialLogs();
+  }
+
+  function updateLoadMoreButton() {
+    if (currentOffset >= totalLines) {
+      logLoadMoreBtn.disabled = true;
+      logLoadMoreBtn.textContent = 'No More Logs';
+    } else {
+      logLoadMoreBtn.disabled = false;
+      logLoadMoreBtn.textContent = `Load 50 More Lines`;
+    }
+  }
+
+  function scrollToBottom() {
+    logViewer.scrollTop = logViewer.scrollHeight;
+  }
+
+  function checkScrollPosition() {
+    const threshold = 50;
+    const atBottom = logViewer.scrollHeight - logViewer.scrollTop - logViewer.clientHeight < threshold;
+
+    if (atBottom !== isAtBottom) {
+      isAtBottom = atBottom;
+      updateAutoRefreshState();
+    }
+  }
+
+  function updateAutoRefreshState() {
+    if (autoRefresh && !isAtBottom) {
+      // Pause auto-refresh when not at bottom
+      autoRefreshIndicator.classList.add('paused');
+      autoRefreshIndicator.innerHTML = '<span class="refresh-dot"></span> Auto-refresh PAUSED';
+      clearInterval(refreshTimer);
+      refreshTimer = null;
+    } else if (autoRefresh && isAtBottom) {
+      // Resume auto-refresh when at bottom
+      autoRefreshIndicator.classList.remove('paused');
+      autoRefreshIndicator.innerHTML = '<span class="refresh-dot"></span> Auto-refresh ON';
+      if (!refreshTimer) {
+        startAutoRefresh();
+      }
+    }
+  }
+
+  function startAutoRefresh() {
+    if (refreshTimer) clearInterval(refreshTimer);
+    refreshTimer = setInterval(async () => {
+      if (autoRefresh && isAtBottom) {
+        await refreshLogs();
+      }
+    }, refreshInterval);
+  }
+
+  function toggleAutoRefresh() {
+    autoRefresh = !autoRefresh;
+    if (autoRefresh) {
+      autoRefreshIndicator.classList.remove('paused');
+      autoRefreshIndicator.innerHTML = '<span class="refresh-dot"></span> Auto-refresh ON';
+      if (isAtBottom) {
+        startAutoRefresh();
+      }
+    } else {
+      autoRefreshIndicator.classList.add('paused');
+      autoRefreshIndicator.innerHTML = '<span class="refresh-dot"></span> Auto-refresh OFF';
+      if (refreshTimer) {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+      }
+    }
+  }
+
+  function performSearch() {
+    searchKeyword = logSearchInput.value.trim();
+    if (searchKeyword) {
+      logSearchClear.style.display = 'inline-flex';
+      // Re-render current lines with highlighting
+      const lines = Array.from(logContent.querySelectorAll('.log-line')).map(el => el.textContent);
+      renderLogLines(lines, false);
+    } else {
+      clearSearch();
+    }
+  }
+
+  function clearSearch() {
+    searchKeyword = '';
+    logSearchInput.value = '';
+    logSearchClear.style.display = 'none';
+    // Re-render without highlighting
+    const lines = Array.from(logContent.querySelectorAll('.log-line')).map(el => el.textContent);
+    renderLogLines(lines, false);
+  }
+
+  // Event listeners
+  logViewer.addEventListener('scroll', checkScrollPosition);
+  logLoadMoreBtn.addEventListener('click', loadMoreLogs);
+  logRefreshBtn.addEventListener('click', refreshLogs);
+  logScrollBottomBtn.addEventListener('click', scrollToBottom);
+  logSettingsBtn.addEventListener('click', toggleAutoRefresh);
+  logSearchBtn.addEventListener('click', performSearch);
+  logSearchClear.addEventListener('click', clearSearch);
+  logSearchInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+      performSearch();
+    }
+  });
+
+  // Initialize
+  loadInitialLogs();
+  if (autoRefresh) {
+    startAutoRefresh();
+  }
+})();
