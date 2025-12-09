@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -28,6 +29,12 @@ type DashboardServer struct {
 	tmpl       *template.Template
 	snapshotMu sync.RWMutex
 	snapshot   state.Snapshot
+
+	// Check task management
+	checkMu      sync.RWMutex
+	checkRunning bool
+	checkCancel  context.CancelFunc
+	checkStatus  *CheckStatus
 }
 
 // Options configure the dashboard server.
@@ -65,6 +72,10 @@ func (s *DashboardServer) Start(ready chan<- string) error {
 	mux.HandleFunc("/api/check/latest", s.handleCheckLatest)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.HandleFunc("/api/logs", s.handleLogs)
+	// Check validation API endpoints
+	mux.HandleFunc("/api/check/start", s.handleCheckStart)
+	mux.HandleFunc("/api/check/stop", s.handleCheckStop)
+	mux.HandleFunc("/api/check/status", s.handleCheckStatus)
 	fileServer := http.FileServer(http.Dir(staticDir()))
 	mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
 		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/static")
@@ -581,4 +592,23 @@ func (s *DashboardServer) inferLogFilePath() string {
 
 	// No file found, return first candidate (will be created when logger initializes)
 	return candidates[0]
+}
+
+// CheckStatus holds the current status of a validation task
+type CheckStatus struct {
+	Running          bool      `json:"running"`
+	Mode             string    `json:"mode"`              // "sampling" or "full"
+	SampleSize       int       `json:"sampleSize"`        // Only for sampling mode
+	KeyPrefix        string    `json:"keyPrefix"`         // Key filter prefix
+	QPS              int       `json:"qps"`               // QPS limit
+	StartedAt        time.Time `json:"startedAt"`         //开始时间
+	Progress         float64   `json:"progress"`          // 0.0 - 1.0
+	CheckedKeys      int64     `json:"checkedKeys"`       // 已检查的 key 数量
+	TotalKeys        int64     `json:"totalKeys"`         // 预计总 key 数（采样模式为采样数，全量为总数）
+	ConsistentKeys   int64     `json:"consistentKeys"`    // 一致的 key 数量
+	InconsistentKeys int64     `json:"inconsistentKeys"`  // 不一致的 key 数量
+	ErrorCount       int64     `json:"errorCount"`        // 错误数量
+	Message          string    `json:"message"`           // 当前状态消息
+	ElapsedSeconds   float64   `json:"elapsedSeconds"`    // 已耗时（秒）
+	EstimatedSeconds float64   `json:"estimatedSeconds"`  // 预计总耗时（秒）
 }
