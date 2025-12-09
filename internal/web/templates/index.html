@@ -219,6 +219,53 @@
     </section>
 </div>
 
+<section class="card" id="live-logs-card" style="margin-top:24px;">
+    <div class="card-title">
+        Live Logs
+        <span class="log-auto-refresh-indicator" id="auto-refresh-indicator">
+            <span class="refresh-dot"></span> Auto-refresh ON
+        </span>
+    </div>
+
+    <div class="log-controls">
+        <div class="log-search">
+            <input type="text" id="log-search-input" placeholder="Search logs..." class="log-search-input">
+            <button id="log-search-btn" class="log-control-btn">
+                <span>🔍</span> Search
+            </button>
+            <button id="log-search-clear" class="log-control-btn" style="display:none;">
+                <span>✗</span> Clear
+            </button>
+        </div>
+        <div class="log-actions">
+            <button id="log-refresh-btn" class="log-control-btn">
+                <span>🔄</span> Refresh
+            </button>
+            <button id="log-scroll-bottom-btn" class="log-control-btn">
+                <span>↓</span> Scroll to Bottom
+            </button>
+            <button id="log-settings-btn" class="log-control-btn">
+                <span>⚙️</span> Settings
+            </button>
+        </div>
+    </div>
+
+    <div class="log-viewer" id="log-viewer">
+        <div class="log-content" id="log-content">
+            <div class="log-loading">Loading logs...</div>
+        </div>
+    </div>
+
+    <div class="log-footer">
+        <button id="log-load-more-btn" class="log-load-more-btn">
+            Load 50 More Lines
+        </button>
+        <div class="log-status" id="log-status">
+            Showing <span id="log-shown-count">0</span> of <span id="log-total-count">0</span> lines
+        </div>
+    </div>
+</section>
+
 <section class="card" id="check-validation-card" style="margin-top:24px;">
     <div class="card-title">📊 Data Validation</div>
 
@@ -302,53 +349,6 @@
                 <div class="check-stat-label">Elapsed</div>
                 <div class="check-stat-value" id="check-elapsed-time">0s</div>
             </div>
-        </div>
-    </div>
-</section>
-
-<section class="card" id="live-logs-card" style="margin-top:24px;">
-    <div class="card-title">
-        Live Logs
-        <span class="log-auto-refresh-indicator" id="auto-refresh-indicator">
-            <span class="refresh-dot"></span> Auto-refresh ON
-        </span>
-    </div>
-
-    <div class="log-controls">
-        <div class="log-search">
-            <input type="text" id="log-search-input" placeholder="Search logs..." class="log-search-input">
-            <button id="log-search-btn" class="log-control-btn">
-                <span>🔍</span> Search
-            </button>
-            <button id="log-search-clear" class="log-control-btn" style="display:none;">
-                <span>✗</span> Clear
-            </button>
-        </div>
-        <div class="log-actions">
-            <button id="log-refresh-btn" class="log-control-btn">
-                <span>🔄</span> Refresh
-            </button>
-            <button id="log-scroll-bottom-btn" class="log-control-btn">
-                <span>↓</span> Scroll to Bottom
-            </button>
-            <button id="log-settings-btn" class="log-control-btn">
-                <span>⚙️</span> Settings
-            </button>
-        </div>
-    </div>
-
-    <div class="log-viewer" id="log-viewer">
-        <div class="log-content" id="log-content">
-            <div class="log-loading">Loading logs...</div>
-        </div>
-    </div>
-
-    <div class="log-footer">
-        <button id="log-load-more-btn" class="log-load-more-btn">
-            Load 50 More Lines
-        </button>
-        <div class="log-status" id="log-status">
-            Showing <span id="log-shown-count">0</span> of <span id="log-total-count">0</span> lines
         </div>
     </div>
 </section>

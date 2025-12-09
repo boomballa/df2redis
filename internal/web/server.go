@@ -198,9 +198,12 @@ func (s *DashboardServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 		logPath = s.inferLogFilePath()
 	}
 
+	log.Printf("[dashboard] Reading logs from: %s (offset=%d, lines=%d)", logPath, offset, lines)
+
 	// 读取日志文件
 	content, err := readLogFile(logPath, offset, lines)
 	if err != nil {
+		log.Printf("[dashboard] Failed to read log file %s: %v", logPath, err)
 		writeJSON(w, map[string]interface{}{
 			"error": fmt.Sprintf("读取日志失败: %v", err),
 			"lines": []string{},
@@ -209,6 +212,8 @@ func (s *DashboardServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+
+	log.Printf("[dashboard] Successfully read %d lines from log file (total: %d)", len(content.Lines), content.TotalLines)
 
 	writeJSON(w, map[string]interface{}{
 		"lines":  content.Lines,
@@ -579,19 +584,29 @@ func (s *DashboardServer) inferLogFilePath() string {
 	// Pattern 3: fallback to default
 	candidates = append(candidates, filepath.Join(logDir, "df2redis.log"))
 
-	// Return first existing file
+	// Return first existing file (return absolute path for reliability)
 	for _, candidate := range candidates {
 		absPath, err := filepath.Abs(candidate)
 		if err != nil {
 			continue
 		}
 		if _, err := os.Stat(absPath); err == nil {
-			return candidate
+			log.Printf("[dashboard] Found log file: %s", absPath)
+			return absPath // Return absolute path
 		}
 	}
 
-	// No file found, return first candidate (will be created when logger initializes)
-	return candidates[0]
+	// No file found, return first candidate as absolute path
+	if len(candidates) > 0 {
+		absPath, err := filepath.Abs(candidates[0])
+		if err == nil {
+			log.Printf("[dashboard] No log file found, using fallback: %s", absPath)
+			return absPath
+		}
+		return candidates[0]
+	}
+
+	return filepath.Join(s.cfg.Log.Dir, "df2redis.log")
 }
 
 // CheckStatus holds the current status of a validation task
