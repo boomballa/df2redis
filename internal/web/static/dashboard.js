@@ -432,7 +432,7 @@
   const logRefreshBtn = document.getElementById('log-refresh-btn');
   const logScrollBottomBtn = document.getElementById('log-scroll-bottom-btn');
   const logJumpLatestBtn = document.getElementById('log-jump-latest-btn');
-  const logSettingsBtn = document.getElementById('log-settings-btn');
+  const logPauseResumeBtn = document.getElementById('log-pause-resume-btn');
   const logLoadMoreBtn = document.getElementById('log-load-more-btn');
   const autoRefreshIndicator = document.getElementById('auto-refresh-indicator');
   const logShownCount = document.getElementById('log-shown-count');
@@ -643,12 +643,14 @@
     if (autoRefresh) {
       autoRefreshIndicator.classList.remove('paused');
       autoRefreshIndicator.innerHTML = '<span class="refresh-dot"></span> Auto-refresh ON';
+      logPauseResumeBtn.innerHTML = '<span>⏸</span> Pause';
       if (isAtBottom) {
         startAutoRefresh();
       }
     } else {
       autoRefreshIndicator.classList.add('paused');
       autoRefreshIndicator.innerHTML = '<span class="refresh-dot"></span> Auto-refresh OFF';
+      logPauseResumeBtn.innerHTML = '<span>▶</span> Resume';
       if (refreshTimer) {
         clearInterval(refreshTimer);
         refreshTimer = null;
@@ -684,7 +686,7 @@
   logRefreshBtn.addEventListener('click', refreshLogs);
   logScrollBottomBtn.addEventListener('click', scrollToBottom);
   logJumpLatestBtn.addEventListener('click', jumpToLatest);
-  logSettingsBtn.addEventListener('click', toggleAutoRefresh);
+  logPauseResumeBtn.addEventListener('click', toggleAutoRefresh);
   logSearchBtn.addEventListener('click', performSearch);
   logSearchClear.addEventListener('click', clearSearch);
   logSearchInput.addEventListener('keypress', (e) => {
