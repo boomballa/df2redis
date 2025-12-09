@@ -46,6 +46,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 <footer>
 ```
 
+**重要：**
+- **不要在提交信息中添加 AI 生成标识**（如 "Generated with Claude Code"、"Co-Authored-By: Claude" 等）
+- 保持提交信息简洁专业，只包含技术内容
+
 **Type 类型：**
 - `feat`: 新功能
 - `fix`: 修复 bug
