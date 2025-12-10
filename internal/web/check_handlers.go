@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"path/filepath"
 	"time"
+
+	"df2redis/internal/executor/fullcheck"
 )
 
 // handleCheckStart handles POST /api/check/start
@@ -17,10 +21,11 @@ func (s *DashboardServer) handleCheckStart(w http.ResponseWriter, r *http.Reques
 
 	// Parse request body
 	var req struct {
-		Mode       string `json:"mode"`       // "sampling" or "full"
-		SampleSize int    `json:"sampleSize"` // For sampling mode
-		KeyPrefix  string `json:"keyPrefix"`  // Optional key filter
-		QPS        int    `json:"qps"`        // QPS limit
+		CompareMode  int    `json:"compareMode"`  // 1=全值, 2=长度, 3=Key轮廓, 4=智能
+		CompareTimes int    `json:"compareTimes"` // 比较轮次
+		QPS          int    `json:"qps"`          // QPS 限制
+		BatchCount   int    `json:"batchCount"`   // 批量大小
+		Parallel     int    `json:"parallel"`     // 并发度
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -31,24 +36,24 @@ func (s *DashboardServer) handleCheckStart(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Validate parameters
-	if req.Mode != "sampling" && req.Mode != "full" {
-		writeJSON(w, map[string]interface{}{
-			"success": false,
-			"message": "Invalid mode, must be 'sampling' or 'full'",
-		})
-		return
+	// 设置默认值
+	if req.CompareMode <= 0 {
+		req.CompareMode = 2 // 默认：长度比较
 	}
-
-	if req.Mode == "sampling" && req.SampleSize <= 0 {
-		req.SampleSize = 1000 // Default sample size
+	if req.CompareTimes <= 0 {
+		req.CompareTimes = 3 // 默认：3 轮
 	}
-
 	if req.QPS <= 0 {
-		req.QPS = 100 // Default QPS
+		req.QPS = 15000 // 默认：15000
+	}
+	if req.BatchCount <= 0 {
+		req.BatchCount = 256 // 默认：256
+	}
+	if req.Parallel <= 0 {
+		req.Parallel = 5 // 默认：5
 	}
 
-	// Check if a task is already running
+	// 检查是否已有任务运行
 	s.checkMu.Lock()
 	if s.checkRunning {
 		s.checkMu.Unlock()
@@ -59,25 +64,23 @@ func (s *DashboardServer) handleCheckStart(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Start new check task
+	// 标记为运行中
 	s.checkRunning = true
 	s.checkStatus = &CheckStatus{
-		Running:     true,
-		Mode:        req.Mode,
-		SampleSize:  req.SampleSize,
-		KeyPrefix:   req.KeyPrefix,
-		QPS:         req.QPS,
-		StartedAt:   time.Now(),
-		TotalKeys:   int64(req.SampleSize),
-		Message:     "Initializing validation task...",
+		Running:      true,
+		CompareMode:  req.CompareMode,
+		CompareTimes: req.CompareTimes,
+		QPS:          req.QPS,
+		StartedAt:    time.Now(),
+		Message:      "Initializing validation task...",
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s.checkCancel = cancel
 	s.checkMu.Unlock()
 
-	// Start check in background
-	go s.runCheckTask(ctx, req.Mode, req.SampleSize, req.KeyPrefix, req.QPS)
+	// 启动校验任务
+	go s.runRealCheckTask(ctx, req.CompareMode, req.CompareTimes, req.QPS, req.BatchCount, req.Parallel)
 
 	writeJSON(w, map[string]interface{}{
 		"success": true,
@@ -103,7 +106,7 @@ func (s *DashboardServer) handleCheckStop(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Cancel the running task
+	// 取消任务
 	if s.checkCancel != nil {
 		s.checkCancel()
 	}
@@ -133,30 +136,17 @@ func (s *DashboardServer) handleCheckStatus(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Calculate elapsed time
+	// 计算运行时间
 	status := *s.checkStatus
 	if status.Running {
 		status.ElapsedSeconds = time.Since(status.StartedAt).Seconds()
-
-		// Calculate progress
-		if status.TotalKeys > 0 {
-			status.Progress = float64(status.CheckedKeys) / float64(status.TotalKeys)
-			if status.Progress > 1.0 {
-				status.Progress = 1.0
-			}
-		}
-
-		// Estimate remaining time
-		if status.CheckedKeys > 0 && status.Progress > 0 {
-			status.EstimatedSeconds = status.ElapsedSeconds / status.Progress
-		}
 	}
 
 	writeJSON(w, status)
 }
 
-// runCheckTask simulates a validation task (MVP版本 - 模拟实现)
-func (s *DashboardServer) runCheckTask(ctx context.Context, mode string, sampleSize int, keyPrefix string, qps int) {
+// runRealCheckTask 运行真实的 redis-full-check 任务
+func (s *DashboardServer) runRealCheckTask(ctx context.Context, compareMode, compareTimes, qps, batchCount, parallel int) {
 	defer func() {
 		s.checkMu.Lock()
 		s.checkRunning = false
@@ -166,57 +156,73 @@ func (s *DashboardServer) runCheckTask(ctx context.Context, mode string, sampleS
 		s.checkMu.Unlock()
 	}()
 
-	totalKeys := int64(sampleSize)
-	if mode == "full" {
-		totalKeys = 100000 // 模拟全量总数
+	// 构建结果文件路径
+	stateDir := s.cfg.StateDir
+	if stateDir == "" {
+		stateDir = "state"
+	}
+	resultDB := filepath.Join(stateDir, "check_result.db")
+	resultFile := filepath.Join(stateDir, "check_result.txt")
+
+	// 创建进度通道
+	progressCh := make(chan fullcheck.Progress, 100)
+
+	// 创建校验器
+	checker := fullcheck.NewChecker(fullcheck.CheckConfig{
+		Binary:       "./bin/redis-full-check", // 相对于工作目录
+		SourceAddr:   s.cfg.Source.Addr,
+		SourcePass:   s.cfg.Source.Password,
+		TargetAddr:   s.cfg.Target.Seed,
+		TargetPass:   s.cfg.Target.Password,
+		CompareMode:  compareMode,
+		CompareTimes: compareTimes,
+		QPS:          qps,
+		BatchCount:   batchCount,
+		Parallel:     parallel,
+		ResultDB:     resultDB,
+		ResultFile:   resultFile,
+	}, progressCh)
+
+	// 启动进度更新协程
+	go s.updateCheckProgressFromChannel(progressCh)
+
+	// 执行校验
+	if err := checker.Run(ctx); err != nil {
+		log.Printf("[Check] 校验失败: %v", err)
+		s.updateCheckStatus(func(status *CheckStatus) {
+			status.Message = fmt.Sprintf("Validation failed: %v", err)
+			status.Running = false
+		})
+		return
 	}
 
-	tickInterval := time.Second / time.Duration(qps) // QPS 控制
-	ticker := time.NewTicker(tickInterval)
-	defer ticker.Stop()
-
-	s.updateCheckStatus(func(status *CheckStatus) {
-		status.TotalKeys = totalKeys
-		status.Message = "Validating keys..."
-	})
-
-	for i := int64(0); i < totalKeys; i++ {
-		select {
-		case <-ctx.Done():
-			s.updateCheckStatus(func(status *CheckStatus) {
-				status.Message = "Validation stopped"
-			})
-			return
-		case <-ticker.C:
-			// 模拟检查一个 key
-			s.updateCheckStatus(func(status *CheckStatus) {
-				status.CheckedKeys = i + 1
-
-				// 模拟结果：98% 一致，2% 不一致
-				if i%50 == 0 {
-					status.InconsistentKeys++
-				} else {
-					status.ConsistentKeys++
-				}
-
-				// 模拟极少错误
-				if i%500 == 0 && i > 0 {
-					status.ErrorCount++
-				}
-
-				status.Message = fmt.Sprintf("Checking key %d/%d...", i+1, totalKeys)
-			})
-		}
-	}
-
+	// 校验完成
 	s.updateCheckStatus(func(status *CheckStatus) {
 		status.Progress = 1.0
 		status.Message = "Validation completed"
 		status.Running = false
 	})
+
+	log.Println("[Check] 校验任务完成")
 }
 
-// updateCheckStatus safely updates check status
+// updateCheckProgressFromChannel 从进度通道更新状态
+func (s *DashboardServer) updateCheckProgressFromChannel(progressCh <-chan fullcheck.Progress) {
+	for progress := range progressCh {
+		s.updateCheckStatus(func(status *CheckStatus) {
+			status.Round = progress.Round
+			status.TotalKeys = progress.TotalKeys
+			status.CheckedKeys = progress.CheckedKeys
+			status.ConsistentKeys = progress.ConsistentKeys
+			status.InconsistentKeys = progress.ConflictKeys + progress.MissingKeys
+			status.ErrorCount = progress.ErrorCount
+			status.Progress = progress.Progress
+			status.Message = progress.Message
+		})
+	}
+}
+
+// updateCheckStatus 线程安全地更新校验状态
 func (s *DashboardServer) updateCheckStatus(fn func(*CheckStatus)) {
 	s.checkMu.Lock()
 	defer s.checkMu.Unlock()
