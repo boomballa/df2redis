@@ -824,12 +824,19 @@
       roundIndicator.textContent = `Round ${status.round}/${status.compareTimes}`;
     }
 
-    // Use per-round progress when available so the progress bar resets every round.
-    let rawProgress = status.roundProgress;
-    if (typeof rawProgress !== 'number') {
-      rawProgress = status.progress;
+    // Prefer deriving progress from checked/total to reflect the current round.
+    let progressValue = 0;
+    const checkedKeys = toNumber(status.checkedKeys || 0);
+    const totalKeys = toNumber(status.totalKeys || 0);
+    if (totalKeys > 0) {
+      progressValue = Math.max(0, Math.min(1, checkedKeys / totalKeys));
+    } else {
+      let rawProgress = status.roundProgress;
+      if (typeof rawProgress !== 'number') {
+        rawProgress = status.progress;
+      }
+      progressValue = Math.max(0, Math.min(1, toNumber(rawProgress || 0)));
     }
-    const progressValue = Math.max(0, Math.min(1, toNumber(rawProgress)));
     const progressPercent = progressValue * 100;
 
     const progressBar = document.getElementById('check-progress-bar');

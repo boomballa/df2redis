@@ -203,6 +203,7 @@ func (s *DashboardServer) runRealCheckTask(ctx context.Context, compareMode, com
 		status.RoundProgress = 1.0
 		status.Message = "Validation completed"
 		status.Running = false
+		status.ElapsedSeconds = time.Since(status.StartedAt).Seconds()
 		// Ensure final round is displayed
 		status.Round = status.CompareTimes
 	})
@@ -217,10 +218,19 @@ func (s *DashboardServer) updateCheckProgressFromChannel(progressCh <-chan fullc
 			status.Round = progress.Round
 			status.TotalKeys = progress.TotalKeys
 			status.CheckedKeys = progress.CheckedKeys
-			status.ConsistentKeys = progress.ConsistentKeys
-			status.InconsistentKeys = progress.ConflictKeys + progress.MissingKeys
 			status.ErrorCount = progress.ErrorCount
 			status.Message = progress.Message
+
+			inconsistent := progress.ConflictKeys + progress.MissingKeys
+			if inconsistent < 0 {
+				inconsistent = 0
+			}
+			status.InconsistentKeys = inconsistent
+			consistent := progress.CheckedKeys - inconsistent
+			if consistent < 0 {
+				consistent = 0
+			}
+			status.ConsistentKeys = consistent
 
 			// Track per-round progress separately.
 			roundProgress := progress.Progress
