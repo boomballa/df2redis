@@ -22,13 +22,13 @@ func parseClusterNodes(output string) ([]*NodeInfo, error) {
 
 		fields := strings.Fields(line)
 		if len(fields) < 8 {
-			return nil, fmt.Errorf("无效的 CLUSTER NODES 行: %s", line)
+			return nil, fmt.Errorf("invalid CLUSTER NODES line: %s", line)
 		}
 
 		node := &NodeInfo{
-			ID:    fields[0],
-			Addr:  normalizeAddr(fields[1]),
-			Flags: strings.Split(fields[2], ","),
+			ID:     fields[0],
+			Addr:   normalizeAddr(fields[1]),
+			Flags:  strings.Split(fields[2], ","),
 			Master: fields[3],
 		}
 
@@ -43,7 +43,7 @@ func parseClusterNodes(output string) ([]*NodeInfo, error) {
 
 			slotRange, err := parseSlotRange(slotField)
 			if err != nil {
-				return nil, fmt.Errorf("解析 slot 范围失败 '%s': %w", slotField, err)
+				return nil, fmt.Errorf("failed to parse slot range '%s': %w", slotField, err)
 			}
 
 			node.Slots = append(node.Slots, slotRange)
@@ -93,5 +93,5 @@ func parseSlotRange(s string) ([2]int, error) {
 		return [2]int{start, end}, nil
 	}
 
-	return [2]int{}, fmt.Errorf("无效的 slot 范围格式: %s", s)
+	return [2]int{}, fmt.Errorf("invalid slot range format: %s", s)
 }

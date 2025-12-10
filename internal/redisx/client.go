@@ -57,9 +57,9 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
 		if err := tcpConn.SetKeepAlive(true); err != nil {
 			// Non-fatal; log a warning and continue
-			fmt.Fprintf(os.Stderr, "警告: 无法启用 TCP KeepAlive: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Warning: failed to enable TCP KeepAlive: %v\n", err)
 		} else if err := tcpConn.SetKeepAlivePeriod(30 * time.Second); err != nil {
-			fmt.Fprintf(os.Stderr, "警告: 无法设置 KeepAlive 周期: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Warning: failed to set KeepAlive period: %v\n", err)
 		}
 	}
 

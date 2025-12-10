@@ -261,22 +261,22 @@
 
   function translateMessage(msg) {
     const translations = {
-      '准备启动复制器': 'Preparing replicator',
-      '正在连接 Dragonfly': 'Connecting to Dragonfly',
-      '接收 RDB 快照': 'Receiving RDB snapshot',
-      'Journal 增量重放': 'Replaying journal incrementally',
-      '复制器已停止': 'Replicator stopped',
-      '监听 Journal 流': 'Listening to journal stream',
-      '成功': 'success',
-      '跳过': 'skipped',
-      '失败': 'failed'
+      'Preparing replicator': 'Preparing replicator',
+      'Connecting to Dragonfly': 'Connecting to Dragonfly',
+      'Receiving RDB snapshot': 'Receiving RDB snapshot',
+      'Replaying journal incrementally': 'Replaying journal incrementally',
+      'Replicator stopped': 'Replicator stopped',
+      'Listening to journal stream': 'Listening to journal stream',
+      'success': 'success',
+      'skipped': 'skipped',
+      'failed': 'failed'
     };
 
     // Handle special patterns
     const patterns = [
-      { regex: /成功=(\d+)\s+跳过=(\d+)\s+失败=(\d+)/, template: 'success=$1 skipped=$2 failed=$3' },
-      { regex: /监听\s+Journal\s+流/, template: 'Listening to journal stream' },
-      { regex: /Journal\s+流监听/, template: 'Journal stream listening' }
+      { regex: /success=(\d+)\s+skipped=(\d+)\s+failed=(\d+)/i, template: 'success=$1 skipped=$2 failed=$3' },
+      { regex: /listening\s+to\s+journal\s+stream/i, template: 'Listening to journal stream' },
+      { regex: /journal\s+stream\s+listening/i, template: 'Journal stream listening' }
     ];
 
     for (const { regex, template } of patterns) {
@@ -345,7 +345,7 @@
     const hasFullSync = events.some(e => {
       const type = (e.Type || e.type || '').toLowerCase();
       const msg = (e.Message || e.message || '').toLowerCase();
-      return type.includes('full_sync') || msg.includes('rdb') || msg.includes('快照');
+      return type.includes('full_sync') || msg.includes('rdb') || msg.includes('snapshot');
     });
 
     const hasIncremental = events.some(e => {
@@ -816,7 +816,7 @@
 
   // Update UI with status
   function updateUI(status) {
-    if (!status || !status.running) return;
+    if (!status) return;
 
     // Update round indicator
     const roundIndicator = document.getElementById('check-round-indicator');
@@ -824,13 +824,28 @@
       roundIndicator.textContent = `Round ${status.round}/${status.compareTimes}`;
     }
 
-    // Update progress bar
-    const progress = (status.progress || 0) * 100;
-    document.getElementById('check-progress-bar').style.width = progress + '%';
-    document.getElementById('check-progress-percent').textContent = progress.toFixed(1) + '%';
+    // Use per-round progress when available so the progress bar resets every round.
+    let rawProgress = status.roundProgress;
+    if (typeof rawProgress !== 'number') {
+      rawProgress = status.progress;
+    }
+    const progressValue = Math.max(0, Math.min(1, toNumber(rawProgress)));
+    const progressPercent = progressValue * 100;
 
-    // Update status text
-    document.getElementById('check-status-text').textContent = status.message || 'Running...';
+    const progressBar = document.getElementById('check-progress-bar');
+    if (progressBar) {
+      progressBar.style.width = progressPercent + '%';
+    }
+    const progressLabel = document.getElementById('check-progress-percent');
+    if (progressLabel) {
+      progressLabel.textContent = progressPercent.toFixed(1) + '%';
+    }
+
+    // Update status text even after the task stops so the final result stays visible.
+    const statusLabel = document.getElementById('check-status-text');
+    if (statusLabel) {
+      statusLabel.textContent = status.message || (status.running ? 'Running...' : 'Idle');
+    }
 
     // Update stats
     document.getElementById('check-consistent-count').textContent = formatNumber(status.consistentKeys || 0);

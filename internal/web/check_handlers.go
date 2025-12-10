@@ -21,11 +21,11 @@ func (s *DashboardServer) handleCheckStart(w http.ResponseWriter, r *http.Reques
 
 	// Parse request body
 	var req struct {
-		CompareMode  int    `json:"compareMode"`  // 1=全值, 2=长度, 3=Key轮廓, 4=智能
-		CompareTimes int    `json:"compareTimes"` // 比较轮次
-		QPS          int    `json:"qps"`          // QPS 限制
-		BatchCount   int    `json:"batchCount"`   // 批量大小
-		Parallel     int    `json:"parallel"`     // 并发度
+		CompareMode  int `json:"compareMode"`  // 1=full value, 2=length, 3=key outline, 4=smart
+		CompareTimes int `json:"compareTimes"` // number of comparison rounds
+		QPS          int `json:"qps"`          // QPS limit
+		BatchCount   int `json:"batchCount"`   // batch size
+		Parallel     int `json:"parallel"`     // worker count
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -67,12 +67,13 @@ func (s *DashboardServer) handleCheckStart(w http.ResponseWriter, r *http.Reques
 	// Mark as running
 	s.checkRunning = true
 	s.checkStatus = &CheckStatus{
-		Running:      true,
-		CompareMode:  req.CompareMode,
-		CompareTimes: req.CompareTimes,
-		QPS:          req.QPS,
-		StartedAt:    time.Now(),
-		Message:      "Initializing validation task...",
+		Running:       true,
+		CompareMode:   req.CompareMode,
+		CompareTimes:  req.CompareTimes,
+		QPS:           req.QPS,
+		StartedAt:     time.Now(),
+		RoundProgress: 0,
+		Message:       "Initializing validation task...",
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -199,6 +200,7 @@ func (s *DashboardServer) runRealCheckTask(ctx context.Context, compareMode, com
 	// Validation completed
 	s.updateCheckStatus(func(status *CheckStatus) {
 		status.Progress = 1.0
+		status.RoundProgress = 1.0
 		status.Message = "Validation completed"
 		status.Running = false
 		// Ensure final round is displayed
@@ -220,19 +222,27 @@ func (s *DashboardServer) updateCheckProgressFromChannel(progressCh <-chan fullc
 			status.ErrorCount = progress.ErrorCount
 			status.Message = progress.Message
 
+			// Track per-round progress separately.
+			roundProgress := progress.Progress
+			if roundProgress < 0 {
+				roundProgress = 0
+			} else if roundProgress > 1 {
+				roundProgress = 1
+			}
+			status.RoundProgress = roundProgress
+
 			// Calculate overall progress across rounds
 			// Overall progress = (completed rounds + current round progress) / total rounds
 			if progress.CompareTimes > 0 && progress.Round > 0 {
 				completedRounds := float64(progress.Round - 1)
-				currentRoundProgress := progress.Progress
-				status.Progress = (completedRounds + currentRoundProgress) / float64(progress.CompareTimes)
+				status.Progress = (completedRounds + roundProgress) / float64(progress.CompareTimes)
 
 				// Ensure progress does not exceed 1.0
 				if status.Progress > 1.0 {
 					status.Progress = 1.0
 				}
 			} else {
-				status.Progress = progress.Progress
+				status.Progress = roundProgress
 			}
 		})
 	}

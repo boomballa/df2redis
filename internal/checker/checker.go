@@ -429,7 +429,7 @@ func (c *Checker) writeSummaryFile(summaryFile string, result *Result) error {
 	fmt.Fprintf(file, "      Data Consistency Check Summary\n")
 	fmt.Fprintf(file, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
 
-	fmt.Fprintf(file, "【Basic Information】\n")
+	fmt.Fprintf(file, "[Basic Information]\n")
 	fmt.Fprintf(file, "  • Check Time: %s\n", time.Now().Format("2006-01-02 15:04:05"))
 	fmt.Fprintf(file, "  • Check Mode: %s\n", c.getModeDescription())
 	fmt.Fprintf(file, "  • Source: %s\n", c.config.SourceAddr)
@@ -439,7 +439,7 @@ func (c *Checker) writeSummaryFile(summaryFile string, result *Result) error {
 	}
 	fmt.Fprintf(file, "\n")
 
-	fmt.Fprintf(file, "【Check Configuration】\n")
+	fmt.Fprintf(file, "[Check Configuration]\n")
 	fmt.Fprintf(file, "  • QPS Limit: %d\n", c.config.QPS)
 	fmt.Fprintf(file, "  • Parallelism: %d\n", c.config.Parallel)
 	fmt.Fprintf(file, "  • Compare Times: %d rounds\n", c.config.CompareTimes)
@@ -449,16 +449,16 @@ func (c *Checker) writeSummaryFile(summaryFile string, result *Result) error {
 	}
 	fmt.Fprintf(file, "\n")
 
-	fmt.Fprintf(file, "【Check Results】\n")
+	fmt.Fprintf(file, "[Check Results]\n")
 	fmt.Fprintf(file, "  • Duration: %s\n", result.Duration.Round(time.Second))
 	fmt.Fprintf(file, "  • Inconsistent Keys: %d\n", result.InconsistentKeys)
 	fmt.Fprintf(file, "\n")
 
 	if result.InconsistentKeys == 0 {
-		fmt.Fprintf(file, "【Conclusion】\n")
+		fmt.Fprintf(file, "[Conclusion]\n")
 		fmt.Fprintf(file, "  ✓ Data is fully consistent!\n\n")
 	} else {
-		fmt.Fprintf(file, "【Inconsistent Samples】\n")
+		fmt.Fprintf(file, "[Inconsistent Samples]\n")
 		if len(result.InconsistentSamples) > 0 {
 			sampleCount := len(result.InconsistentSamples)
 			if sampleCount > 20 {
@@ -474,11 +474,11 @@ func (c *Checker) writeSummaryFile(summaryFile string, result *Result) error {
 		}
 		fmt.Fprintf(file, "\n")
 
-		fmt.Fprintf(file, "【Conclusion】\n")
+		fmt.Fprintf(file, "[Conclusion]\n")
 		fmt.Fprintf(file, "  ⚠️  Data inconsistency detected, please check detailed result file\n\n")
 	}
 
-	fmt.Fprintf(file, "【Detailed Result Files】\n")
+	fmt.Fprintf(file, "[Detailed Result Files]\n")
 	fmt.Fprintf(file, "  • JSON File: %s\n", result.ResultFile)
 	fmt.Fprintf(file, "  • Summary File: %s\n", summaryFile)
 	fmt.Fprintf(file, "\n")

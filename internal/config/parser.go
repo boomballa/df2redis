@@ -23,7 +23,7 @@ func parseYAML(r io.Reader) (map[string]interface{}, error) {
 		return nil, err
 	}
 	if idx != len(lines) {
-		return nil, fmt.Errorf("存在无法解析的 YAML 内容 (第 %d 行)", idx+1)
+		return nil, fmt.Errorf("unparseable YAML content on line %d", idx+1)
 	}
 	return result, nil
 }
@@ -41,7 +41,7 @@ func readYAMLLines(r io.Reader) ([]yamlLine, error) {
 		}
 		indent := len(raw) - len(strings.TrimLeft(raw, " "))
 		if indent%2 != 0 {
-			return nil, fmt.Errorf("YAML 仅支持 2 个空格缩进 (第 %d 行)", lineNum)
+			return nil, fmt.Errorf("YAML only supports 2-space indentation (line %d)", lineNum)
 		}
 		lines = append(lines, yamlLine{indent: indent, content: strings.TrimSpace(raw)})
 	}
@@ -59,18 +59,18 @@ func parseMap(lines []yamlLine, idx int, indent int) (map[string]interface{}, in
 			break
 		}
 		if line.indent > indent {
-			return nil, idx, fmt.Errorf("缩进错误 (第 %d 行)", idx+1)
+			return nil, idx, fmt.Errorf("indentation error (line %d)", idx+1)
 		}
 		if strings.HasPrefix(strings.TrimSpace(line.content), "- ") {
-			return nil, idx, fmt.Errorf("序列条目不能直接出现在映射层级 (第 %d 行)", idx+1)
+			return nil, idx, fmt.Errorf("sequence entries cannot appear directly at the mapping level (line %d)", idx+1)
 		}
 		parts := strings.SplitN(line.content, ":", 2)
 		if len(parts) == 0 {
-			return nil, idx, fmt.Errorf("缺少 ':' (第 %d 行)", idx+1)
+			return nil, idx, fmt.Errorf("missing ':' (line %d)", idx+1)
 		}
 		key := strings.TrimSpace(parts[0])
 		if key == "" {
-			return nil, idx, fmt.Errorf("key 为空 (第 %d 行)", idx+1)
+			return nil, idx, fmt.Errorf("empty key (line %d)", idx+1)
 		}
 		var value interface{}
 		if len(parts) == 1 || strings.TrimSpace(parts[1]) == "" {
@@ -99,7 +99,7 @@ func parseMap(lines []yamlLine, idx int, indent int) (map[string]interface{}, in
 			idx++
 		}
 		if _, exists := result[key]; exists {
-			return nil, idx, fmt.Errorf("重复的 key '%s'", key)
+			return nil, idx, fmt.Errorf("duplicate key '%s'", key)
 		}
 		result[key] = value
 	}

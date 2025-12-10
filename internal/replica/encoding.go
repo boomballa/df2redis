@@ -60,14 +60,14 @@ func ReadPackedUint(r io.Reader) (uint64, error) {
 			}
 			return binary.BigEndian.Uint64(buf64), nil
 		}
-		return 0, fmt.Errorf("无效的 RDB 编码标记: 0x%02x", firstByte)
+		return 0, fmt.Errorf("invalid RDB length encoding marker: 0x%02x", firstByte)
 
 	case RDB_ENCVAL:
 		// 11|XXXXXX - special encoding (unsupported)
-		return 0, fmt.Errorf("不支持的 RDB 特殊编码: 0x%02x", firstByte)
+		return 0, fmt.Errorf("unsupported RDB special encoding: 0x%02x", firstByte)
 
 	default:
-		return 0, fmt.Errorf("未知的 RDB 编码类型: %d", typeField)
+		return 0, fmt.Errorf("unknown RDB length encoding type: %d", typeField)
 	}
 }
 
@@ -75,7 +75,7 @@ func ReadPackedUint(r io.Reader) (uint64, error) {
 func ReadPackedString(r io.Reader) (string, error) {
 	length, err := ReadPackedUint(r)
 	if err != nil {
-		return "", fmt.Errorf("读取字符串长度失败: %w", err)
+		return "", fmt.Errorf("failed to read string length: %w", err)
 	}
 
 	if length == 0 {
@@ -84,7 +84,7 @@ func ReadPackedString(r io.Reader) (string, error) {
 
 	buf := make([]byte, length)
 	if _, err := io.ReadFull(r, buf); err != nil {
-		return "", fmt.Errorf("读取字符串内容失败: %w", err)
+		return "", fmt.Errorf("failed to read string payload: %w", err)
 	}
 
 	return string(buf), nil

@@ -2,18 +2,18 @@
 
 set -e
 
-echo "🔧 开始下载 redis-full-check..."
+echo "🔧 Starting redis-full-check download..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# 确定项目根目录
+# Determine project root
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BIN_DIR="$PROJECT_ROOT/bin"
 
-# 创建 bin 目录
+# Create bin directory
 mkdir -p "$BIN_DIR"
 
-# 检测操作系统和架构
+# Detect operating system and architecture
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 
@@ -25,7 +25,7 @@ case "$OS" in
         OS_NAME="darwin"
         ;;
     *)
-        echo "❌ 不支持的操作系统: $OS"
+        echo "❌ Unsupported operating system: $OS"
         exit 1
         ;;
 esac
@@ -38,33 +38,33 @@ case "$ARCH" in
         ARCH_NAME="arm64"
         ;;
     *)
-        echo "❌ 不支持的架构: $ARCH"
+        echo "❌ Unsupported architecture: $ARCH"
         exit 1
         ;;
 esac
 
-echo "✓ 检测到系统: $OS_NAME $ARCH_NAME"
+echo "✓ Detected platform: $OS_NAME $ARCH_NAME"
 
-# Redis-full-check 下载 URL（从 Release 页面）
-# 注意：redis-full-check 可能没有预编译版本，需要从源码编译
+# Redis-full-check download instructions
+# NOTE: redis-full-check might not have prebuilt binaries, build from source
 echo ""
-echo "方式1: 从源码编译 (推荐)"
+echo "Method 1: Build from source (recommended)"
 echo "----------------------------------------"
 echo ""
-echo "由于 redis-full-check 没有提供预编译的 Release 版本，"
-echo "需要从源码编译。请按以下步骤操作："
+echo "redis-full-check does not publish prebuilt Release binaries,"
+echo "so you must compile it from source. Steps:"
 echo ""
-echo "1. 克隆仓库:"
+echo "1. Clone the repository:"
 echo "   git clone https://github.com/alibaba/RedisFullCheck.git"
 echo "   cd RedisFullCheck"
 echo ""
-echo "2. 编译 (需要 Go 1.16+):"
+echo "2. Build (requires Go 1.16+):"
 echo "   ./build.sh"
 echo ""
-echo "3. 复制二进制文件:"
+echo "3. Copy the binary:"
 echo "   cp bin/redis-full-check $BIN_DIR/"
 echo ""
-echo "或者在 Linux 服务器上执行以下一键命令:"
+echo "Or run the following one-liner on a Linux server:"
 echo "----------------------------------------"
 cat << 'LINUX_CMD'
 cd /tmp && \
@@ -74,17 +74,17 @@ cd RedisFullCheck && \
 cp bin/redis-full-check /path/to/df2redis/bin/ && \
 chmod +x /path/to/df2redis/bin/redis-full-check && \
 cd / && rm -rf /tmp/RedisFullCheck && \
-echo "✓ redis-full-check 安装成功"
+echo "✓ redis-full-check installed successfully"
 LINUX_CMD
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "⚠ 提示: 请手动在 Linux 服务器上编译 redis-full-check"
+echo "⚠ Note: Please compile redis-full-check manually on a Linux server"
 echo ""
-echo "完成后验证安装:"
+echo "Verify installation afterwards:"
 echo "  ./bin/redis-full-check --version"
 echo ""
-echo "使用示例:"
+echo "Usage example:"
 echo "  ./bin/df2redis check --config config.yaml"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

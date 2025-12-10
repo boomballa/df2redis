@@ -173,25 +173,25 @@ func (s *DashboardServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *DashboardServer) handleLogs(w http.ResponseWriter, r *http.Request) {
-	// 解析查询参数
+	// Parse query parameters
 	linesParam := r.URL.Query().Get("lines")
 	offsetParam := r.URL.Query().Get("offset")
 
-	lines := 100 // 默认 100 行
+	lines := 100 // default: 100 lines
 	if linesParam != "" {
 		if parsed, err := strconv.Atoi(linesParam); err == nil && parsed > 0 {
 			lines = parsed
 		}
 	}
 
-	offset := 0 // 默认从头开始
+	offset := 0 // default: start from beginning
 	if offsetParam != "" {
 		if parsed, err := strconv.Atoi(offsetParam); err == nil && parsed >= 0 {
 			offset = parsed
 		}
 	}
 
-	// 获取实际日志文件路径
+	// Determine actual log file path
 	logPath := logger.GetLogFilePath()
 	if logPath == "" {
 		// Fallback: infer log file path from config
@@ -200,14 +200,14 @@ func (s *DashboardServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[dashboard] Reading logs from: %s (offset=%d, lines=%d)", logPath, offset, lines)
 
-	// 读取日志文件
+	// Read log file
 	content, err := readLogFile(logPath, offset, lines)
 	if err != nil {
 		log.Printf("[dashboard] Failed to read log file %s: %v", logPath, err)
 		writeJSON(w, map[string]interface{}{
-			"error": fmt.Sprintf("读取日志失败: %v", err),
-			"lines": []string{},
-			"total": 0,
+			"error":  fmt.Sprintf("failed to read log file: %v", err),
+			"lines":  []string{},
+			"total":  0,
 			"offset": offset,
 		})
 		return
@@ -505,7 +505,7 @@ type logContent struct {
 }
 
 func readLogFile(path string, offset, count int) (*logContent, error) {
-	// 打开文件
+	// Open file
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
@@ -513,14 +513,14 @@ func readLogFile(path string, offset, count int) (*logContent, error) {
 
 	data, err := os.ReadFile(absPath)
 	if err != nil {
-		// 如果文件不存在，返回空内容而不是错误
+		// Return empty content instead of an error when file is missing
 		if os.IsNotExist(err) {
 			return &logContent{Lines: []string{}, TotalLines: 0}, nil
 		}
 		return nil, err
 	}
 
-	// 按行分割
+	// Split into lines
 	content := string(data)
 	allLines := strings.Split(strings.TrimRight(content, "\n"), "\n")
 	if len(allLines) == 1 && allLines[0] == "" {
@@ -529,7 +529,7 @@ func readLogFile(path string, offset, count int) (*logContent, error) {
 
 	totalLines := len(allLines)
 
-	// 计算切片范围
+	// Compute slice window
 	start := offset
 	if start > totalLines {
 		start = totalLines
@@ -540,7 +540,7 @@ func readLogFile(path string, offset, count int) (*logContent, error) {
 		end = totalLines
 	}
 
-	// 提取请求的行
+	// Extract requested lines
 	lines := []string{}
 	if start < end {
 		lines = allLines[start:end]
@@ -612,18 +612,19 @@ func (s *DashboardServer) inferLogFilePath() string {
 // CheckStatus holds the current status of a validation task
 type CheckStatus struct {
 	Running          bool      `json:"running"`
-	CompareMode      int       `json:"compareMode"`       // 1=全值, 2=长度, 3=Key轮廓, 4=智能
-	CompareTimes     int       `json:"compareTimes"`      // 比较轮次
-	Round            int       `json:"round"`             // 当前轮次
-	QPS              int       `json:"qps"`               // QPS limit
-	StartedAt        time.Time `json:"startedAt"`         // 开始时间
-	Progress         float64   `json:"progress"`          // 0.0 - 1.0
-	CheckedKeys      int64     `json:"checkedKeys"`       // 已检查的 key 数量
-	TotalKeys        int64     `json:"totalKeys"`         // 总 key 数
-	ConsistentKeys   int64     `json:"consistentKeys"`    // 一致的 key 数量
-	InconsistentKeys int64     `json:"inconsistentKeys"`  // 不一致的 key 数量
-	ErrorCount       int64     `json:"errorCount"`        // 错误数量
-	Message          string    `json:"message"`           // 当前状态消息
-	ElapsedSeconds   float64   `json:"elapsedSeconds"`    // 已耗时（秒）
-	EstimatedSeconds float64   `json:"estimatedSeconds"`  // 预计总耗时（秒）
+	CompareMode      int       `json:"compareMode"`      // 1=full value, 2=length, 3=key outline, 4=smart
+	CompareTimes     int       `json:"compareTimes"`     // number of comparison rounds
+	Round            int       `json:"round"`            // current round index
+	QPS              int       `json:"qps"`              // QPS limit
+	StartedAt        time.Time `json:"startedAt"`        // start time
+	Progress         float64   `json:"progress"`         // 0.0 - 1.0 overall progress
+	RoundProgress    float64   `json:"roundProgress"`    // current round progress 0.0 - 1.0
+	CheckedKeys      int64     `json:"checkedKeys"`      // number of checked keys
+	TotalKeys        int64     `json:"totalKeys"`        // total number of keys
+	ConsistentKeys   int64     `json:"consistentKeys"`   // count of consistent keys
+	InconsistentKeys int64     `json:"inconsistentKeys"` // count of inconsistent keys
+	ErrorCount       int64     `json:"errorCount"`       // error count
+	Message          string    `json:"message"`          // status message
+	ElapsedSeconds   float64   `json:"elapsedSeconds"`   // elapsed seconds
+	EstimatedSeconds float64   `json:"estimatedSeconds"` // estimated total seconds
 }

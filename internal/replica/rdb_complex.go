@@ -18,7 +18,7 @@ func (p *RDBParser) parseHash(typeByte byte) (*HashValue, error) {
 	case RDB_TYPE_HASH_ZIPLIST:
 		return p.parseHashZiplist()
 	default:
-		return nil, fmt.Errorf("不支持的 Hash 类型: %d", typeByte)
+		return nil, fmt.Errorf("unsupported hash encoding type: %d", typeByte)
 	}
 }
 
@@ -72,7 +72,7 @@ func (p *RDBParser) parseList(typeByte byte) (*ListValue, error) {
 	case 18: // Dragonfly reuses type 18 (former ZSET_LISTPACK) for short lists
 		return p.parseListListpack()
 	default:
-		return nil, fmt.Errorf("不支持的 List 类型: %d", typeByte)
+		return nil, fmt.Errorf("unsupported list encoding type: %d", typeByte)
 	}
 }
 
@@ -82,7 +82,7 @@ func (p *RDBParser) parseListListpack() (*ListValue, error) {
 	// 1. Read node count
 	nodeCount, _, err := p.readLength()
 	if err != nil {
-		return nil, fmt.Errorf("读取节点数量失败: %w", err)
+		return nil, fmt.Errorf("failed to read node count: %w", err)
 	}
 
 	var allElements []string
@@ -92,7 +92,7 @@ func (p *RDBParser) parseListListpack() (*ListValue, error) {
 		// 2.1 Container type (Quicklist 2 specific)
 		container, _, err := p.readLength()
 		if err != nil {
-			return nil, fmt.Errorf("读取 container 类型失败 (节点 %d): %w", i, err)
+			return nil, fmt.Errorf("failed to read container type (node %d): %w", i, err)
 		}
 
 		// container must be QUICKLIST_NODE_CONTAINER_PACKED (1) or QUICKLIST_NODE_CONTAINER_PLAIN (2)
@@ -100,19 +100,19 @@ func (p *RDBParser) parseListListpack() (*ListValue, error) {
 		// #define QUICKLIST_NODE_CONTAINER_PACKED 1
 		// #define QUICKLIST_NODE_CONTAINER_PLAIN 2
 		if container != 1 && container != 2 {
-			return nil, fmt.Errorf("无效的 container 类型: %d (节点 %d)", container, i)
+			return nil, fmt.Errorf("invalid container type: %d (node %d)", container, i)
 		}
 
 		// 2.2 Read listpack bytes
 		listpackBytes := p.readString()
 		if len(listpackBytes) == 0 {
-			return nil, fmt.Errorf("listpack 数据为空 (节点 %d)", i)
+			return nil, fmt.Errorf("listpack payload is empty (node %d)", i)
 		}
 
 		// 2.3 Decode listpack
 		entries, err := parseListpack([]byte(listpackBytes))
 		if err != nil {
-			return nil, fmt.Errorf("解析 listpack 失败 (节点 %d): %w", i, err)
+			return nil, fmt.Errorf("failed to parse listpack (node %d): %w", i, err)
 		}
 
 		allElements = append(allElements, entries...)
@@ -165,7 +165,7 @@ func (p *RDBParser) parseSet(typeByte byte) (*SetValue, error) {
 	case RDB_TYPE_SET_INTSET:
 		return p.parseSetIntset()
 	default:
-		return nil, fmt.Errorf("不支持的 Set 类型: %d", typeByte)
+		return nil, fmt.Errorf("unsupported set encoding type: %d", typeByte)
 	}
 }
 
@@ -209,7 +209,7 @@ func (p *RDBParser) parseZSet(typeByte byte) (*ZSetValue, error) {
 	case RDB_TYPE_ZSET_ZIPLIST:
 		return p.parseZSetZiplist()
 	default:
-		return nil, fmt.Errorf("不支持的 ZSet 类型: %d", typeByte)
+		return nil, fmt.Errorf("unsupported zset encoding type: %d", typeByte)
 	}
 }
 
@@ -275,7 +275,7 @@ func (p *RDBParser) readDouble() (float64, error) {
 // parseZiplist parses the layout [zlbytes][zltail][zllen][entries...][zlend=0xFF]
 func parseZiplist(data []byte) ([]string, error) {
 	if len(data) < 10 {
-		return nil, fmt.Errorf("ziplist 数据太短")
+		return nil, fmt.Errorf("ziplist payload too short")
 	}
 
 	// Skip header (4+4+2 bytes)
@@ -303,7 +303,7 @@ func parseZiplist(data []byte) ([]string, error) {
 // readZiplistEntry decodes a single ziplist entry
 func readZiplistEntry(data []byte) (string, int, error) {
 	if len(data) < 1 {
-		return "", 0, fmt.Errorf("ziplist entry 数据不足")
+		return "", 0, fmt.Errorf("ziplist entry does not have enough data")
 	}
 
 	offset := 0
@@ -316,7 +316,7 @@ func readZiplistEntry(data []byte) (string, int, error) {
 	}
 
 	if offset >= len(data) {
-		return "", 0, fmt.Errorf("ziplist entry 数据不足")
+		return "", 0, fmt.Errorf("ziplist entry does not have enough data")
 	}
 
 	// 2. Encoding byte
@@ -369,7 +369,7 @@ func readZiplistEntry(data []byte) (string, int, error) {
 		return strconv.Itoa(val - 1), offset, nil
 	}
 
-	return "", 0, fmt.Errorf("不支持的 ziplist encoding: 0x%02X", encoding)
+	return "", 0, fmt.Errorf("unsupported ziplist encoding: 0x%02X", encoding)
 }
 
 // ============ Listpack parsing ============
@@ -377,7 +377,7 @@ func readZiplistEntry(data []byte) (string, int, error) {
 // parseListpack handles [total_bytes:4][num_elements:2][entries...][lpend:0xFF]
 func parseListpack(data []byte) ([]string, error) {
 	if len(data) < 7 {
-		return nil, fmt.Errorf("listpack 数据太短: %d 字节", len(data))
+		return nil, fmt.Errorf("listpack payload too short: %d bytes", len(data))
 	}
 
 	// Parse header
@@ -385,7 +385,7 @@ func parseListpack(data []byte) ([]string, error) {
 	numElements := binary.LittleEndian.Uint16(data[4:6])
 
 	if int(totalBytes) != len(data) {
-		return nil, fmt.Errorf("listpack 大小不匹配: 期望 %d 字节，实际 %d 字节", totalBytes, len(data))
+		return nil, fmt.Errorf("listpack length mismatch: expect %d bytes, got %d bytes", totalBytes, len(data))
 	}
 
 	// Skip header and process entries
@@ -394,11 +394,11 @@ func parseListpack(data []byte) ([]string, error) {
 
 	for i := 0; i < int(numElements); i++ {
 		if offset >= len(data) {
-			return nil, fmt.Errorf("listpack entry %d: 数据不足", i)
+			return nil, fmt.Errorf("listpack entry %d lacks enough data", i)
 		}
 
 		if data[offset] == 0xFF {
-			return nil, fmt.Errorf("listpack entry %d: 意外的 EOF 标记", i)
+			return nil, fmt.Errorf("listpack entry %d encountered unexpected EOF marker", i)
 		}
 
 		// Read entry
@@ -413,7 +413,7 @@ func parseListpack(data []byte) ([]string, error) {
 
 	// Validate trailing EOF marker
 	if offset >= len(data) || data[offset] != 0xFF {
-		return nil, fmt.Errorf("listpack 缺少 EOF 标记")
+		return nil, fmt.Errorf("listpack missing EOF marker")
 	}
 
 	return entries, nil
@@ -422,7 +422,7 @@ func parseListpack(data []byte) ([]string, error) {
 // readListpackEntry decodes one listpack entry and returns (value, total size incl. backlen).
 func readListpackEntry(data []byte) (string, int, error) {
 	if len(data) < 2 {
-		return "", 0, fmt.Errorf("数据不足: 至少需要 2 字节")
+		return "", 0, fmt.Errorf("not enough data: need at least 2 bytes")
 	}
 
 	encoding := data[0]
@@ -438,19 +438,19 @@ func readListpackEntry(data []byte) (string, int, error) {
 		// 10xxxxxx - 6-bit string length (0-63 bytes)
 		length := int(encoding & 0x3F)
 		if 1+length > len(data) {
-			return "", 0, fmt.Errorf("6位字符串数据不足: 需要 %d 字节", 1+length)
+			return "", 0, fmt.Errorf("6-bit string lacks enough data: need %d bytes", 1+length)
 		}
 		value = string(data[1 : 1+length])
 		dataSize = 1 + length
 	} else if (encoding & 0xE0) == 0xC0 {
 		// 110xxxxx - 13-bit signed integer
 		if len(data) < 2 {
-			return "", 0, fmt.Errorf("13位整数数据不足")
+			return "", 0, fmt.Errorf("13-bit integer lacks enough data")
 		}
 		uval := uint64((encoding&0x1F)<<8) | uint64(data[1])
 		// Convert to signed integer (two's complement)
 		if uval >= (1 << 12) {
-			uval = (1<<13) - 1 - uval
+			uval = (1 << 13) - 1 - uval
 			value = strconv.FormatInt(-int64(uval)-1, 10)
 		} else {
 			value = strconv.FormatUint(uval, 10)
@@ -459,29 +459,29 @@ func readListpackEntry(data []byte) (string, int, error) {
 	} else if (encoding & 0xF0) == 0xE0 {
 		// 1110xxxx - 12-bit string length (0-4095 bytes)
 		if len(data) < 2 {
-			return "", 0, fmt.Errorf("12位字符串长度字节不足")
+			return "", 0, fmt.Errorf("12-bit string length field lacks enough data")
 		}
 		length := int((encoding&0x0F)<<8) | int(data[1])
 		if 2+length > len(data) {
-			return "", 0, fmt.Errorf("12位字符串数据不足: 需要 %d 字节", 2+length)
+			return "", 0, fmt.Errorf("12-bit string lacks enough data: need %d bytes", 2+length)
 		}
 		value = string(data[2 : 2+length])
 		dataSize = 2 + length
 	} else if encoding == 0xF0 {
 		// 32-bit string length
 		if len(data) < 5 {
-			return "", 0, fmt.Errorf("32位字符串长度字节不足")
+			return "", 0, fmt.Errorf("32-bit string length field lacks enough data")
 		}
 		length := int(binary.LittleEndian.Uint32(data[1:5]))
 		if 5+length > len(data) {
-			return "", 0, fmt.Errorf("32位字符串数据不足: 需要 %d 字节", 5+length)
+			return "", 0, fmt.Errorf("32-bit string lacks enough data: need %d bytes", 5+length)
 		}
 		value = string(data[5 : 5+length])
 		dataSize = 5 + length
 	} else if encoding == 0xF1 {
 		// 16-bit signed integer
 		if len(data) < 3 {
-			return "", 0, fmt.Errorf("16位整数数据不足")
+			return "", 0, fmt.Errorf("16-bit integer lacks enough data")
 		}
 		val := int16(binary.LittleEndian.Uint16(data[1:3]))
 		value = strconv.Itoa(int(val))
@@ -489,12 +489,12 @@ func readListpackEntry(data []byte) (string, int, error) {
 	} else if encoding == 0xF2 {
 		// 24-bit signed integer
 		if len(data) < 4 {
-			return "", 0, fmt.Errorf("24位整数数据不足")
+			return "", 0, fmt.Errorf("24-bit integer lacks enough data")
 		}
 		uval := uint64(data[1]) | uint64(data[2])<<8 | uint64(data[3])<<16
 		// Convert to signed integer
 		if uval >= (1 << 23) {
-			uval = (1<<24) - 1 - uval
+			uval = (1 << 24) - 1 - uval
 			value = strconv.FormatInt(-int64(uval)-1, 10)
 		} else {
 			value = strconv.FormatUint(uval, 10)
@@ -503,7 +503,7 @@ func readListpackEntry(data []byte) (string, int, error) {
 	} else if encoding == 0xF3 {
 		// 32-bit signed integer
 		if len(data) < 5 {
-			return "", 0, fmt.Errorf("32位整数数据不足")
+			return "", 0, fmt.Errorf("32-bit integer lacks enough data")
 		}
 		val := int32(binary.LittleEndian.Uint32(data[1:5]))
 		value = strconv.Itoa(int(val))
@@ -511,13 +511,13 @@ func readListpackEntry(data []byte) (string, int, error) {
 	} else if encoding == 0xF4 {
 		// 64-bit signed integer
 		if len(data) < 9 {
-			return "", 0, fmt.Errorf("64位整数数据不足")
+			return "", 0, fmt.Errorf("64-bit integer lacks enough data")
 		}
 		val := int64(binary.LittleEndian.Uint64(data[1:9]))
 		value = strconv.FormatInt(val, 10)
 		dataSize = 9
 	} else {
-		return "", 0, fmt.Errorf("不支持的 encoding: 0x%02X", encoding)
+		return "", 0, fmt.Errorf("unsupported listpack encoding: 0x%02X", encoding)
 	}
 
 	// Calculate backlen size
@@ -525,7 +525,7 @@ func readListpackEntry(data []byte) (string, int, error) {
 	totalSize := dataSize + backlenSize
 
 	if totalSize > len(data) {
-		return "", 0, fmt.Errorf("entry 总大小超出数据: 需要 %d 字节，剩余 %d 字节", totalSize, len(data))
+		return "", 0, fmt.Errorf("entry total size exceeds available data: need %d bytes, have %d bytes", totalSize, len(data))
 	}
 
 	return value, totalSize, nil
@@ -550,7 +550,7 @@ func lpEncodeBacklenSize(l int) int {
 // parseIntset decodes [encoding:4][length:4][contents...]
 func parseIntset(data []byte) ([]string, error) {
 	if len(data) < 8 {
-		return nil, fmt.Errorf("intset 数据太短")
+		return nil, fmt.Errorf("intset payload too short")
 	}
 
 	encoding := binary.LittleEndian.Uint32(data[0:4])
@@ -572,7 +572,7 @@ func parseIntset(data []byte) ([]string, error) {
 			val = int64(binary.LittleEndian.Uint64(data[offset : offset+8]))
 			offset += 8
 		default:
-			return nil, fmt.Errorf("不支持的 intset encoding: %d", encoding)
+			return nil, fmt.Errorf("unsupported intset encoding: %d", encoding)
 		}
 		members = append(members, strconv.FormatInt(val, 10))
 	}

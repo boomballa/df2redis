@@ -50,7 +50,7 @@ func Init(logDir string, level Level, logFilePrefix string, consoleEnabled bool)
 	once.Do(func() {
 		// Ensure log directory exists
 		if err := os.MkdirAll(logDir, 0755); err != nil {
-			initErr = fmt.Errorf("创建日志目录失败: %w", err)
+			initErr = fmt.Errorf("failed to create log directory: %w", err)
 			return
 		}
 
@@ -64,7 +64,7 @@ func Init(logDir string, level Level, logFilePrefix string, consoleEnabled bool)
 		// Open log file in truncate mode so each run starts fresh
 		logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 		if err != nil {
-			initErr = fmt.Errorf("打开日志文件失败: %w", err)
+			initErr = fmt.Errorf("failed to open log file: %w", err)
 			return
 		}
 

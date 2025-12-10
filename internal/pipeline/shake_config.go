@@ -15,13 +15,13 @@ import (
 func GenerateShakeConfigFile(cfg *config.Config, stateDir string) (string, error) {
 	snapshot := strings.TrimSpace(cfg.Migrate.SnapshotPath)
 	if snapshot == "" {
-		return "", fmt.Errorf("未找到 snapshotPath，无法生成 shake 配置")
+		return "", fmt.Errorf("snapshotPath not set; cannot generate shake config")
 	}
 	if stateDir == "" {
-		return "", fmt.Errorf("stateDir 未配置，无法生成 shake 配置")
+		return "", fmt.Errorf("stateDir not configured; cannot generate shake config")
 	}
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
-		return "", fmt.Errorf("创建 state 目录失败: %w", err)
+		return "", fmt.Errorf("failed to create state directory: %w", err)
 	}
 	path := filepath.Join(stateDir, "shake.generated.toml")
 	logPath := filepath.Join(stateDir, "shake.log")
@@ -76,7 +76,7 @@ empty_db_before_sync = false
 `, snapshot, targetCluster, cfg.Target.Seed, cfg.Target.Password, cfg.Target.TLS, stateDir, logPath)
 
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return "", fmt.Errorf("写入 shake 配置失败: %w", err)
+		return "", fmt.Errorf("failed to write shake config: %w", err)
 	}
 	cfg.Migrate.ShakeConfigFile = path
 	return path, nil

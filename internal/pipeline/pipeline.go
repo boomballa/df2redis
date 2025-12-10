@@ -67,7 +67,7 @@ func NewContext(runCtx context.Context, cfg *config.Config, store *state.Store) 
 		TLS:      cfg.Source.TLS,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("连接源库失败: %w", err)
+		return nil, fmt.Errorf("failed to connect to source: %w", err)
 	}
 
 	dialCtx2, cancel2 := context.WithTimeout(baseCtx, 5*time.Second)
@@ -79,7 +79,7 @@ func NewContext(runCtx context.Context, cfg *config.Config, store *state.Store) 
 	})
 	if err != nil {
 		sourceClient.Close()
-		return nil, fmt.Errorf("连接目标库失败: %w", err)
+		return nil, fmt.Errorf("failed to connect to target: %w", err)
 	}
 
 	return &Context{
@@ -123,27 +123,27 @@ func (p *Pipeline) Add(stage Stage) *Pipeline {
 // Run executes pipeline. Returns false once any stage fails.
 func (p *Pipeline) Run(ctx *Context) bool {
 	if ctx.State != nil {
-		_ = ctx.State.SetPipelineStatus("running", "迁移流程开始")
+		_ = ctx.State.SetPipelineStatus("running", "Migration pipeline started")
 	}
 	for _, stage := range p.stages {
-		log.Printf("开始执行阶段: %s", stage.Name())
+		log.Printf("Starting stage: %s", stage.Name())
 		if ctx.State != nil {
-			_ = ctx.State.UpdateStage(stage.Name(), string(StatusRunning), "进行中")
+			_ = ctx.State.UpdateStage(stage.Name(), string(StatusRunning), "In progress")
 		}
 		result := stage.Run(ctx)
-		log.Printf("阶段 %s 完成，状态=%s，备注=%s", stage.Name(), result.Status, result.Message)
+		log.Printf("Stage %s completed, status=%s, message=%s", stage.Name(), result.Status, result.Message)
 		if ctx.State != nil {
 			_ = ctx.State.UpdateStage(stage.Name(), string(result.Status), result.Message)
 		}
 		if result.Status == StatusFailed {
 			if ctx.State != nil {
-				_ = ctx.State.SetPipelineStatus("failed", fmt.Sprintf("阶段 %s 失败", stage.Name()))
+				_ = ctx.State.SetPipelineStatus("failed", fmt.Sprintf("Stage %s failed", stage.Name()))
 			}
 			return false
 		}
 	}
 	if ctx.State != nil {
-		_ = ctx.State.SetPipelineStatus("completed", "迁移流程完成")
+		_ = ctx.State.SetPipelineStatus("completed", "Migration pipeline completed")
 	}
 	return true
 }

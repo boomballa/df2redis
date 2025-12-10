@@ -105,79 +105,79 @@ func (r *Replicator) Start() error {
 	}
 
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	log.Println("🚀 启动 Dragonfly 复制器")
+	log.Println("🚀 Starting Dragonfly replicator")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	r.recordPipelineStatus("handshake", "正在连接 Dragonfly")
-	r.recordStage("replicator", "starting", "启动复制器")
+	r.recordPipelineStatus("handshake", "Connecting to Dragonfly")
+	r.recordStage("replicator", "starting", "Starting replicator")
 
 	// Connect to Dragonfly
 	if err := r.connect(); err != nil {
-		r.recordPipelineStatus("error", fmt.Sprintf("连接失败: %v", err))
-		return fmt.Errorf("连接失败: %w", err)
+		r.recordPipelineStatus("error", fmt.Sprintf("Connection failed: %v", err))
+		return fmt.Errorf("connection failed: %w", err)
 	}
 
 	// Perform handshake
 	if err := r.handshake(); err != nil {
-		r.recordPipelineStatus("error", fmt.Sprintf("握手失败: %v", err))
-		return fmt.Errorf("握手失败: %w", err)
+		r.recordPipelineStatus("error", fmt.Sprintf("Handshake failed: %v", err))
+		return fmt.Errorf("handshake failed: %w", err)
 	}
-	r.recordPipelineStatus("full_sync", "接收 RDB 快照")
+	r.recordPipelineStatus("full_sync", "Receiving RDB snapshot")
 	r.estimateSourceKeys()
 
 	// Initialize Redis client (auto-detects cluster/standalone)
 	log.Println("")
-	log.Println("🔗 连接到目标 Redis...")
+	log.Println("🔗 Connecting to target Redis...")
 	r.clusterClient = cluster.NewClusterClient(
 		r.cfg.Target.Seed,
 		r.cfg.Target.Password,
 		r.cfg.Target.TLS,
 	)
 	if err := r.clusterClient.Connect(); err != nil {
-		r.recordPipelineStatus("error", fmt.Sprintf("连接目标 Redis 失败: %v", err))
-		return fmt.Errorf("连接目标 Redis 失败: %w", err)
+		r.recordPipelineStatus("error", fmt.Sprintf("Failed to connect to target Redis: %v", err))
+		return fmt.Errorf("failed to connect to target Redis: %w", err)
 	}
 	r.estimateTargetKeys()
 
 	// Detect topology
 	topology := r.clusterClient.GetTopology()
 	if len(topology) > 0 {
-		log.Printf("  ✓ Redis Cluster 连接成功（%d 个主节点）", len(topology))
+		log.Printf("  ✓ Connected to Redis Cluster (%d masters)", len(topology))
 	} else {
-		log.Println("  ✓ Redis Standalone 连接成功")
+		log.Println("  ✓ Connected to Redis Standalone")
 	}
 
 	// Send DFLY SYNC to trigger the RDB transfer
 	if err := r.sendDflySync(); err != nil {
-		r.recordPipelineStatus("error", fmt.Sprintf("发送 DFLY SYNC 失败: %v", err))
-		return fmt.Errorf("发送 DFLY SYNC 失败: %w", err)
+		r.recordPipelineStatus("error", fmt.Sprintf("Sending DFLY SYNC failed: %v", err))
+		return fmt.Errorf("sending DFLY SYNC failed: %w", err)
 	}
 
 	// Receive snapshot in parallel
 	r.state = StateFullSync
 	if err := r.receiveSnapshot(); err != nil {
-		r.recordPipelineStatus("error", fmt.Sprintf("接收快照失败: %v", err))
-		return fmt.Errorf("接收快照失败: %w", err)
+		r.recordPipelineStatus("error", fmt.Sprintf("Snapshot reception failed: %v", err))
+		return fmt.Errorf("snapshot reception failed: %w", err)
 	}
 
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	log.Println("🎯 复制器启动成功！")
+	log.Println("🎯 Replicator started successfully!")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	r.recordPipelineStatus("incremental", "Journal 增量重放")
-	r.recordStage("replicator", "journal", "Journal 流监听")
+	r.recordPipelineStatus("incremental", "Replaying journal incrementally")
+	r.recordStage("replicator", "journal", "Listening to journal stream")
 
 	// Receive and parse the journal stream
 	if err := r.receiveJournal(); err != nil {
-		r.recordPipelineStatus("error", fmt.Sprintf("接收 Journal 流失败: %v", err))
-		return fmt.Errorf("接收 Journal 流失败: %w", err)
+		r.recordPipelineStatus("error", fmt.Sprintf("Journal stream reception failed: %v", err))
+		return fmt.Errorf("journal stream reception failed: %w", err)
 	}
-	r.recordPipelineStatus("completed", "Journal 流结束")
+	r.recordPipelineStatus("completed", "Journal stream finished")
 
 	return nil
 }
 
 // Stop halts replication
 func (r *Replicator) Stop() {
-	log.Println("⏸  停止复制器...")
+	log.Println("⏸  Stopping replicator...")
 
 	// Cancel the context first
 	r.cancel()
@@ -188,24 +188,24 @@ func (r *Replicator) Stop() {
 	}
 	for i, conn := range r.flowConns {
 		if conn != nil {
-			log.Printf("  • 关闭 FLOW-%d 连接", i)
+			log.Printf("  • Closing FLOW-%d connection", i)
 			conn.Close()
 		}
 	}
 
 	// Wait for Start() to finish (including checkpoint persistence)
-	log.Println("  • 等待所有 goroutine 退出...")
+	log.Println("  • Waiting for all goroutines to exit...")
 	<-r.done
 
 	r.state = StateStopped
-	r.recordPipelineStatus("stopped", "复制器已停止")
-	log.Println("✓ 复制器已停止")
+	r.recordPipelineStatus("stopped", "Replicator stopped")
+	log.Println("✓ Replicator stopped")
 }
 
 // connect creates the primary connection to Dragonfly for the handshake
 func (r *Replicator) connect() error {
 	r.state = StateConnecting
-	log.Printf("🔗 连接到 Dragonfly: %s", r.cfg.Source.Addr)
+	log.Printf("🔗 Connecting to Dragonfly: %s", r.cfg.Source.Addr)
 
 	dialCtx, cancel := context.WithTimeout(r.ctx, 10*time.Second)
 	defer cancel()
@@ -217,11 +217,11 @@ func (r *Replicator) connect() error {
 	})
 
 	if err != nil {
-		return fmt.Errorf("无法连接到 %s: %w", r.cfg.Source.Addr, err)
+		return fmt.Errorf("failed to connect to %s: %w", r.cfg.Source.Addr, err)
 	}
 
 	r.mainConn = client
-	log.Printf("✓ 主连接建立成功")
+	log.Printf("✓ Primary connection established")
 
 	return nil
 }
@@ -230,58 +230,58 @@ func (r *Replicator) connect() error {
 func (r *Replicator) handshake() error {
 	r.state = StateHandshaking
 	log.Println("")
-	log.Println("🤝 开始握手流程")
+	log.Println("🤝 Starting handshake")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	// Step 1: PING
-	log.Println("  [1/6] 发送 PING...")
+	log.Println("  [1/6] Sending PING...")
 	if err := r.sendPing(); err != nil {
 		return err
 	}
-	log.Println("  ✓ PONG 收到")
+	log.Println("  ✓ PONG received")
 
 	// Step 2: REPLCONF listening-port
-	log.Printf("  [2/6] 声明监听端口: %d...", r.listeningPort)
+	log.Printf("  [2/6] Declaring listening port: %d...", r.listeningPort)
 	if err := r.sendListeningPort(); err != nil {
 		return err
 	}
-	log.Println("  ✓ 端口已注册")
+	log.Println("  ✓ Listening port registered")
 
 	// Step 3: REPLCONF ip-address (optional)
 	if r.announceIP != "" {
-		log.Printf("  [3/6] 声明 IP 地址: %s...", r.announceIP)
+		log.Printf("  [3/6] Declaring IP address: %s...", r.announceIP)
 		if err := r.sendIPAddress(); err != nil {
-			log.Printf("  ⚠ IP 地址注册失败（主库可能是旧版本）: %v", err)
+			log.Printf("  ⚠ Failed to register IP address (primary may be older): %v", err)
 		} else {
-			log.Println("  ✓ IP 地址已注册")
+			log.Println("  ✓ IP address registered")
 		}
 	} else {
-		log.Println("  [3/6] 跳过 IP 地址声明")
+		log.Println("  [3/6] Skipping IP address declaration")
 	}
 
 	// Step 4: REPLCONF capa eof psync2
-	log.Println("  [4/6] 声明能力: eof psync2...")
+	log.Println("  [4/6] Declaring capabilities: eof psync2...")
 	if err := r.sendCapaEOF(); err != nil {
 		return err
 	}
-	log.Println("  ✓ 能力已声明")
+	log.Println("  ✓ Capabilities declared")
 
 	// Step 5: REPLCONF capa dragonfly
-	log.Println("  [5/6] 声明 Dragonfly 兼容性...")
+	log.Println("  [5/6] Declaring Dragonfly compatibility...")
 	if err := r.sendCapaDragonfly(); err != nil {
 		return err
 	}
-	log.Printf("  ✓ Dragonfly 版本: %s, Shard 数量: %d", r.masterInfo.Version, r.masterInfo.NumFlows)
+	log.Printf("  ✓ Dragonfly version: %s, shards: %d", r.masterInfo.Version, r.masterInfo.NumFlows)
 
 	// Step 6: establish FLOW connections
-	log.Printf("  [6/6] 建立 %d 个 FLOW...", r.masterInfo.NumFlows)
+	log.Printf("  [6/6] Establishing %d FLOW connections...", r.masterInfo.NumFlows)
 	if err := r.establishFlows(); err != nil {
 		return err
 	}
-	log.Printf("  ✓ 所有 FLOW 已建立")
+	log.Printf("  ✓ All FLOW connections established")
 
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	log.Println("✓ 握手完成")
+	log.Println("✓ Handshake complete")
 	log.Println("")
 
 	r.state = StatePreparation
@@ -292,12 +292,12 @@ func (r *Replicator) handshake() error {
 func (r *Replicator) sendPing() error {
 	resp, err := r.mainConn.Do("PING")
 	if err != nil {
-		return fmt.Errorf("PING 失败: %w", err)
+		return fmt.Errorf("PING failed: %w", err)
 	}
 
 	reply, err := redisx.ToString(resp)
 	if err != nil || reply != "PONG" {
-		return fmt.Errorf("期望 PONG，但收到: %v", resp)
+		return fmt.Errorf("expected PONG but received: %v", resp)
 	}
 
 	return nil
@@ -307,7 +307,7 @@ func (r *Replicator) sendPing() error {
 func (r *Replicator) sendListeningPort() error {
 	resp, err := r.mainConn.Do("REPLCONF", "listening-port", strconv.Itoa(r.listeningPort))
 	if err != nil {
-		return fmt.Errorf("REPLCONF listening-port 失败: %w", err)
+		return fmt.Errorf("REPLCONF listening-port failed: %w", err)
 	}
 
 	return r.expectOK(resp)
@@ -317,7 +317,7 @@ func (r *Replicator) sendListeningPort() error {
 func (r *Replicator) sendIPAddress() error {
 	resp, err := r.mainConn.Do("REPLCONF", "ip-address", r.announceIP)
 	if err != nil {
-		return fmt.Errorf("REPLCONF ip-address 失败: %w", err)
+		return fmt.Errorf("REPLCONF ip-address failed: %w", err)
 	}
 
 	return r.expectOK(resp)
@@ -327,7 +327,7 @@ func (r *Replicator) sendIPAddress() error {
 func (r *Replicator) sendCapaEOF() error {
 	resp, err := r.mainConn.Do("REPLCONF", "capa", "eof", "capa", "psync2")
 	if err != nil {
-		return fmt.Errorf("REPLCONF capa eof psync2 失败: %w", err)
+		return fmt.Errorf("REPLCONF capa eof psync2 failed: %w", err)
 	}
 
 	return r.expectOK(resp)
@@ -337,7 +337,7 @@ func (r *Replicator) sendCapaEOF() error {
 func (r *Replicator) sendCapaDragonfly() error {
 	resp, err := r.mainConn.Do("REPLCONF", "capa", "dragonfly")
 	if err != nil {
-		return fmt.Errorf("REPLCONF capa dragonfly 失败: %w", err)
+		return fmt.Errorf("REPLCONF capa dragonfly failed: %w", err)
 	}
 
 	// Parse response
@@ -351,16 +351,16 @@ func (r *Replicator) sendCapaDragonfly() error {
 		if str, err2 := redisx.ToString(resp); err2 == nil {
 			// Check if it is OK (older versions or vanilla Redis)
 			if str == "OK" {
-				return fmt.Errorf("目标是 Redis 或旧版本 Dragonfly（收到简单 OK 响应）")
+				return fmt.Errorf("Target is Redis or an older Dragonfly (received simple OK)")
 			}
-			return fmt.Errorf("目标不是 Dragonfly（收到未知响应: %s）", str)
+			return fmt.Errorf("Target is not Dragonfly (unexpected response: %s)", str)
 		}
-		return fmt.Errorf("无法解析 capa dragonfly 响应: %w", err)
+		return fmt.Errorf("failed to parse capa dragonfly response: %w", err)
 	}
 
 	// Validate length
 	if len(arr) < 4 {
-		return fmt.Errorf("Dragonfly 响应格式错误（长度不足，期望 4 个元素）: %v", arr)
+		return fmt.Errorf("Malformed Dragonfly response (expected 4 elements): %v", arr)
 	}
 
 	// Response layout: [master_id, sync_id, flow_count, version]
@@ -375,21 +375,21 @@ func (r *Replicator) sendCapaDragonfly() error {
 	// Element 2: number of flows
 	numFlows, err := strconv.Atoi(arr[2])
 	if err != nil {
-		return fmt.Errorf("无法解析 flow 数量: %s", arr[2])
+		return fmt.Errorf("failed to parse flow count: %s", arr[2])
 	}
 	r.masterInfo.NumFlows = numFlows
 
 	// Element 3: Dragonfly protocol version
 	version, err := strconv.Atoi(arr[3])
 	if err != nil {
-		return fmt.Errorf("无法解析协议版本: %s", arr[3])
+		return fmt.Errorf("failed to parse protocol version: %s", arr[3])
 	}
 	r.masterInfo.Version = DflyVersion(version)
 
-	log.Printf("  → 复制 ID: %s", r.masterInfo.ReplID[:8]+"...")
-	log.Printf("  → 同步会话: %s", r.masterInfo.SyncID)
-	log.Printf("  → Flow 数量: %d", r.masterInfo.NumFlows)
-	log.Printf("  → 协议版本: %s", r.masterInfo.Version)
+	log.Printf("  → Replication ID: %s", r.masterInfo.ReplID[:8]+"...")
+	log.Printf("  → Sync session: %s", r.masterInfo.SyncID)
+	log.Printf("  → Flow count: %d", r.masterInfo.NumFlows)
+	log.Printf("  → Protocol version: %s", r.masterInfo.Version)
 
 	return nil
 }
@@ -397,7 +397,7 @@ func (r *Replicator) sendCapaDragonfly() error {
 // establishFlows creates dedicated FLOW connections for each shard
 func (r *Replicator) establishFlows() error {
 	numFlows := r.masterInfo.NumFlows
-	log.Printf("    • 将建立 %d 个并行 FLOW 连接...", numFlows)
+	log.Printf("    • Establishing %d parallel FLOW connections...", numFlows)
 
 	r.flows = make([]FlowInfo, numFlows)
 	r.flowConns = make([]*redisx.Client, numFlows)
@@ -405,8 +405,8 @@ func (r *Replicator) establishFlows() error {
 
 	// Create independent TCP connections for each FLOW
 	for i := 0; i < numFlows; i++ {
-		log.Printf("    • 建立 FLOW-%d 独立连接...", i)
-		r.recordFlowStage(i, "connecting", "建立 FLOW 连接")
+		log.Printf("    • Establishing FLOW-%d dedicated connection...", i)
+		r.recordFlowStage(i, "connecting", "Establishing FLOW connection")
 
 		// 1. Create a new TCP connection
 		dialCtx, cancel := context.WithTimeout(r.ctx, 10*time.Second)
@@ -418,21 +418,21 @@ func (r *Replicator) establishFlows() error {
 		cancel()
 
 		if err != nil {
-			return fmt.Errorf("FLOW-%d 连接失败: %w", i, err)
+			return fmt.Errorf("FLOW-%d connection failed: %w", i, err)
 		}
 
 		r.flowConns[i] = flowConn
 
 		// 2. Send PING (optional, ensures the connection is alive)
 		if err := flowConn.Ping(); err != nil {
-			return fmt.Errorf("FLOW-%d PING 失败: %w", i, err)
+			return fmt.Errorf("FLOW-%d PING failed: %w", i, err)
 		}
 
 		// 3. Send DFLY FLOW to register this FLOW
 		// Command: DFLY FLOW <master_id> <sync_id> <flow_id>
 		resp, err := flowConn.Do("DFLY", "FLOW", r.masterInfo.ReplID, r.masterInfo.SyncID, strconv.Itoa(i))
 		if err != nil {
-			return fmt.Errorf("FLOW-%d 注册失败: %w", i, err)
+			return fmt.Errorf("FLOW-%d registration failed: %w", i, err)
 		}
 
 		// 4. Parse response: ["FULL", <eof_token>] or ["PARTIAL", <eof_token>]
@@ -440,7 +440,7 @@ func (r *Replicator) establishFlows() error {
 		if err != nil {
 			// Could be a simple OK string
 			if err := r.expectOK(resp); err != nil {
-				return fmt.Errorf("FLOW-%d 返回错误: %w", i, err)
+				return fmt.Errorf("FLOW-%d returned error: %w", i, err)
 			}
 			r.flows[i] = FlowInfo{
 				FlowID:   i,
@@ -450,7 +450,7 @@ func (r *Replicator) establishFlows() error {
 			}
 		} else {
 			if len(arr) < 2 {
-				return fmt.Errorf("FLOW-%d 响应格式错误，期望 2 个元素: %v", i, arr)
+				return fmt.Errorf("FLOW-%d response malformed, expected 2 elements: %v", i, arr)
 			}
 			syncType := arr[0]
 			eofToken := arr[1]
@@ -462,14 +462,14 @@ func (r *Replicator) establishFlows() error {
 				EOFToken: eofToken,
 			}
 
-			log.Printf("      → 同步类型: %s, EOF Token: %s...", syncType, eofToken[:min(8, len(eofToken))])
+			log.Printf("      → Sync type: %s, EOF Token: %s...", syncType, eofToken[:min(8, len(eofToken))])
 		}
 
-		log.Printf("    ✓ FLOW-%d 连接和注册完成", i)
-		r.recordFlowStage(i, "established", fmt.Sprintf("%s FLOW 已建立", r.flows[i].SyncType))
+		log.Printf("    ✓ FLOW-%d connection and registration complete", i)
+		r.recordFlowStage(i, "established", fmt.Sprintf("%s FLOW established", r.flows[i].SyncType))
 	}
 
-	log.Printf("    ✓ 所有 %d 个 FLOW 连接已建立", numFlows)
+	log.Printf("    ✓ All %d FLOW connections established", numFlows)
 	return nil
 }
 
@@ -492,21 +492,21 @@ func (r *Replicator) initFlowTracking(num int) {
 // Must be called only after every FLOW is established, otherwise Dragonfly will not send data.
 func (r *Replicator) sendDflySync() error {
 	log.Println("")
-	log.Println("🔄 发送 DFLY SYNC 触发数据传输...")
+	log.Println("🔄 Sending DFLY SYNC to trigger data transfer...")
 
 	// Send DFLY SYNC via the main connection
 	// Command: DFLY SYNC <sync_id>
 	resp, err := r.mainConn.Do("DFLY", "SYNC", r.masterInfo.SyncID)
 	if err != nil {
-		return fmt.Errorf("DFLY SYNC 失败: %w", err)
+		return fmt.Errorf("DFLY SYNC failed: %w", err)
 	}
 
 	// Expect OK
 	if err := r.expectOK(resp); err != nil {
-		return fmt.Errorf("DFLY SYNC 返回错误: %w", err)
+		return fmt.Errorf("DFLY SYNC returned error: %w", err)
 	}
 
-	log.Println("  ✓ DFLY SYNC 发送成功，RDB 数据传输已触发")
+	log.Println("  ✓ DFLY SYNC sent, RDB transfer triggered")
 	return nil
 }
 
@@ -514,11 +514,11 @@ func (r *Replicator) sendDflySync() error {
 func (r *Replicator) expectOK(resp interface{}) error {
 	reply, err := redisx.ToString(resp)
 	if err != nil {
-		return fmt.Errorf("期望 OK，但收到非字符串响应: %v", resp)
+		return fmt.Errorf("expected OK but received non-string response: %v", resp)
 	}
 
 	if reply != "OK" {
-		return fmt.Errorf("期望 OK，但收到: %s", reply)
+		return fmt.Errorf("expected OK but received: %s", reply)
 	}
 
 	return nil
@@ -529,15 +529,15 @@ func (r *Replicator) expectOK(resp interface{}) error {
 // EOF tokens are validated after STARTSTABLE is issued.
 func (r *Replicator) receiveSnapshot() error {
 	log.Println("")
-	log.Println("📦 开始并行接收和解析 RDB 快照...")
+	log.Println("📦 Starting parallel RDB snapshot reception and parsing...")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	numFlows := len(r.flows)
 	if numFlows == 0 {
-		return fmt.Errorf("没有可用的 FLOW")
+		return fmt.Errorf("no FLOW connection available")
 	}
 
-	log.Printf("  • 将使用 %d 个 FLOW 并行接收和解析 RDB 快照", numFlows)
+	log.Printf("  • Using %d FLOW connections to receive and parse the RDB snapshot", numFlows)
 
 	// Wait for all goroutines
 	var wg sync.WaitGroup
@@ -561,27 +561,27 @@ func (r *Replicator) receiveSnapshot() error {
 
 			flowConn := r.flowConns[flowID]
 			stats := statsMap[flowID]
-			r.recordFlowStage(flowID, "rdb", "接收 RDB 快照")
+			r.recordFlowStage(flowID, "rdb", "Receiving RDB snapshot")
 
-			log.Printf("  [FLOW-%d] 开始解析 RDB 数据...", flowID)
+			log.Printf("  [FLOW-%d] Starting to parse RDB data...", flowID)
 
 			// Create RDB parser
 			parser := NewRDBParser(flowConn, flowID)
 
 			// 1. Parse header
 			if err := parser.ParseHeader(); err != nil {
-				errChan <- fmt.Errorf("FLOW-%d: 解析 RDB 头部失败: %w", flowID, err)
-				r.recordFlowStage(flowID, "error", fmt.Sprintf("解析头部失败: %v", err))
+				errChan <- fmt.Errorf("FLOW-%d: failed to parse RDB header: %w", flowID, err)
+				r.recordFlowStage(flowID, "error", fmt.Sprintf("Failed to parse header: %v", err))
 				return
 			}
-			log.Printf("  [FLOW-%d] ✓ RDB 头部解析成功", flowID)
+			log.Printf("  [FLOW-%d] ✓ RDB header parsed successfully", flowID)
 
 			// 2. Parse entries
 			for {
 				// Observe cancellation
 				select {
 				case <-r.ctx.Done():
-					errChan <- fmt.Errorf("FLOW-%d: 快照接收被取消", flowID)
+					errChan <- fmt.Errorf("FLOW-%d: snapshot reception cancelled", flowID)
 					return
 				default:
 				}
@@ -590,16 +590,16 @@ func (r *Replicator) receiveSnapshot() error {
 				entry, err := parser.ParseNext()
 				if err != nil {
 					if err == io.EOF {
-						log.Printf("  [FLOW-%d] ✓ RDB 解析完成（成功=%d, 跳过=%d, 失败=%d）",
+						log.Printf("  [FLOW-%d] ✓ RDB parsing done (success=%d, skipped=%d, failed=%d)",
 							flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount)
 						r.recordFlowStage(flowID, "rdb_done",
-							fmt.Sprintf("成功=%d 跳过=%d 失败=%d", stats.KeyCount, stats.SkippedCount, stats.ErrorCount))
+							fmt.Sprintf("success=%d skipped=%d failed=%d", stats.KeyCount, stats.SkippedCount, stats.ErrorCount))
 						// FULLSYNC_END received, snapshot done.
 						// EOF tokens are read after STARTSTABLE.
 						return
 					}
-					errChan <- fmt.Errorf("FLOW-%d: 解析失败: %w", flowID, err)
-					r.recordFlowStage(flowID, "error", fmt.Sprintf("解析失败: %v", err))
+					errChan <- fmt.Errorf("FLOW-%d: parsing failed: %w", flowID, err)
+					r.recordFlowStage(flowID, "error", fmt.Sprintf("Parsing failed: %v", err))
 					return
 				}
 
@@ -613,11 +613,11 @@ func (r *Replicator) receiveSnapshot() error {
 
 				// Write entry into Redis
 				if err := r.writeRDBEntry(entry); err != nil {
-					log.Printf("  [FLOW-%d] ⚠ 写入失败 (key=%s): %v", flowID, entry.Key, err)
+					log.Printf("  [FLOW-%d] ⚠ Write failed (key=%s): %v", flowID, entry.Key, err)
 					statsMu.Lock()
 					stats.ErrorCount++
 					statsMu.Unlock()
-					r.recordFlowStage(flowID, "error", fmt.Sprintf("写入失败 key=%s", entry.Key))
+					r.recordFlowStage(flowID, "error", fmt.Sprintf("Write failed key=%s", entry.Key))
 				} else {
 					statsMu.Lock()
 					stats.KeyCount++
@@ -626,7 +626,7 @@ func (r *Replicator) receiveSnapshot() error {
 
 					// Log progress every 100 keys
 					if stats.KeyCount%100 == 0 {
-						log.Printf("  [FLOW-%d] • 已导入: %d 个键", flowID, stats.KeyCount)
+						log.Printf("  [FLOW-%d] • Imported %d keys", flowID, stats.KeyCount)
 					}
 				}
 			}
@@ -652,20 +652,20 @@ func (r *Replicator) receiveSnapshot() error {
 		totalKeys += stats.KeyCount
 		totalSkipped += stats.SkippedCount
 		totalErrors += stats.ErrorCount
-		log.Printf("  [FLOW-%d] 统计: 成功=%d, 跳过=%d, 失败=%d",
+		log.Printf("  [FLOW-%d] Stats: success=%d, skipped=%d, failed=%d",
 			flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount)
 	}
 
-	log.Printf("  ✓ RDB 全量导入完成: 总计 %d 个键, 跳过 %d 个（已过期）, 失败 %d 个",
+	log.Printf("  ✓ RDB full import complete: total %d keys, skipped %d (expired), failed %d",
 		totalKeys, totalSkipped, totalErrors)
 
 	// Dragonfly only sends EOF tokens after STARTSTABLE; reading before that causes a 60s timeout.
 	if err := r.sendStartStable(); err != nil {
-		return fmt.Errorf("切换稳定同步失败: %w", err)
+		return fmt.Errorf("Switching to stable sync failed: %w", err)
 	}
 
 	if err := r.verifyEofTokens(); err != nil {
-		return fmt.Errorf("验证 EOF Token 失败: %w", err)
+		return fmt.Errorf("EOF token verification failed: %w", err)
 	}
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	return nil
@@ -674,18 +674,18 @@ func (r *Replicator) receiveSnapshot() error {
 // sendStartStable issues DFLY STARTSTABLE on the main connection
 func (r *Replicator) sendStartStable() error {
 	log.Println("")
-	log.Println("🔄 切换到稳定同步模式...")
+	log.Println("🔄 Switching to stable sync mode...")
 
 	resp, err := r.mainConn.Do("DFLY", "STARTSTABLE", r.masterInfo.SyncID)
 	if err != nil {
-		return fmt.Errorf("DFLY STARTSTABLE 失败: %w", err)
+		return fmt.Errorf("DFLY STARTSTABLE failed: %w", err)
 	}
 
 	if err := r.expectOK(resp); err != nil {
-		return fmt.Errorf("DFLY STARTSTABLE 返回错误: %w", err)
+		return fmt.Errorf("DFLY STARTSTABLE returned error: %w", err)
 	}
 
-	log.Println("  ✓ 已切换到稳定同步模式")
+	log.Println("  ✓ Switched to stable sync mode")
 	r.state = StateStableSync
 	return nil
 }
@@ -697,7 +697,7 @@ func (r *Replicator) sendStartStable() error {
 //  3. EOF token - 40 bytes
 func (r *Replicator) verifyEofTokens() error {
 	log.Println("")
-	log.Println("🔐 验证 EOF Token...")
+	log.Println("🔐 Verifying EOF token...")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	numFlows := len(r.flowConns)
@@ -712,52 +712,52 @@ func (r *Replicator) verifyEofTokens() error {
 			expectedToken := r.flows[flowID].EOFToken
 			tokenLen := len(expectedToken)
 			if tokenLen == 0 {
-				errChan <- fmt.Errorf("FLOW-%d: 未获取到 EOF Token", flowID)
+				errChan <- fmt.Errorf("FLOW-%d: EOF token missing", flowID)
 				return
 			}
-			log.Printf("  [FLOW-%d] → 正在读取 EOF Token (%d 字节)...", flowID, tokenLen)
+			log.Printf("  [FLOW-%d] → Reading EOF token (%d bytes)...", flowID, tokenLen)
 
 			// 1. Skip metadata block (0xD3 + 8 bytes). Dragonfly sends it before EOF.
 			metadataBuf := make([]byte, 9) // 1 byte opcode + 8 bytes data
 			if _, err := io.ReadFull(flowConn, metadataBuf); err != nil {
-				errChan <- fmt.Errorf("FLOW-%d: 读取元数据失败: %w", flowID, err)
+				errChan <- fmt.Errorf("FLOW-%d: failed to read metadata: %w", flowID, err)
 				return
 			}
 
 			// 2. Read EOF opcode (0xFF)
 			opcodeBuf := make([]byte, 1)
 			if _, err := io.ReadFull(flowConn, opcodeBuf); err != nil {
-				errChan <- fmt.Errorf("FLOW-%d: 读取 EOF opcode 失败: %w", flowID, err)
+				errChan <- fmt.Errorf("FLOW-%d: failed to read EOF opcode: %w", flowID, err)
 				return
 			}
 			if opcodeBuf[0] != 0xFF {
-				errChan <- fmt.Errorf("FLOW-%d: 期望 EOF opcode 0xFF，实际收到 0x%02X", flowID, opcodeBuf[0])
+				errChan <- fmt.Errorf("FLOW-%d: expected EOF opcode 0xFF but got 0x%02X", flowID, opcodeBuf[0])
 				return
 			}
 
 			// 3. Read checksum (8 bytes)
 			checksumBuf := make([]byte, 8)
 			if _, err := io.ReadFull(flowConn, checksumBuf); err != nil {
-				errChan <- fmt.Errorf("FLOW-%d: 读取 checksum 失败: %w", flowID, err)
+				errChan <- fmt.Errorf("FLOW-%d: failed to read checksum: %w", flowID, err)
 				return
 			}
 
 			// 4. Read EOF token (40 bytes)
 			tokenBuf := make([]byte, 40)
 			if _, err := io.ReadFull(flowConn, tokenBuf); err != nil {
-				errChan <- fmt.Errorf("FLOW-%d: 读取 EOF token 失败: %w", flowID, err)
+				errChan <- fmt.Errorf("FLOW-%d: failed to read EOF token: %w", flowID, err)
 				return
 			}
 			receivedToken := string(tokenBuf)
 
 			// 5. Compare token
 			if receivedToken != expectedToken {
-				errChan <- fmt.Errorf("FLOW-%d: EOF token 不匹配\n  期望: %s\n  实际: %s",
+				errChan <- fmt.Errorf("FLOW-%d: EOF token mismatch\n  expected: %s\n  actual: %s",
 					flowID, expectedToken, receivedToken)
 				return
 			}
 
-			log.Printf("  [FLOW-%d] ✓ EOF Token 验证成功", flowID)
+			log.Printf("  [FLOW-%d] ✓ EOF token verified", flowID)
 		}(i)
 	}
 
@@ -769,7 +769,7 @@ func (r *Replicator) verifyEofTokens() error {
 		return err
 	}
 
-	log.Println("  ✓ 所有 FLOW 的 EOF Token 验证完成")
+	log.Println("  ✓ EOF token verification finished for all FLOW connections")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	return nil
 }
@@ -784,15 +784,15 @@ type FlowEntry struct {
 // receiveJournal consumes journal streams from all FLOW connections in parallel
 func (r *Replicator) receiveJournal() error {
 	log.Println("")
-	log.Println("📡 开始接收 Journal 流...")
+	log.Println("📡 Starting to receive journal stream...")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	numFlows := len(r.flowConns)
 	if numFlows == 0 {
-		return fmt.Errorf("没有可用的 FLOW 连接")
+		return fmt.Errorf("no FLOW connections available")
 	}
 
-	log.Printf("  • 并行监听所有 %d 个 FLOW", numFlows)
+	log.Printf("  • Listening to all %d FLOW connections in parallel", numFlows)
 
 	// Channel for entries from all FLOWs
 	entryChan := make(chan *FlowEntry, 100)
@@ -818,7 +818,7 @@ func (r *Replicator) receiveJournal() error {
 	for flowEntry := range entryChan {
 		// Handle errors
 		if flowEntry.Error != nil {
-			log.Printf("  ✗ FLOW-%d 错误: %v", flowEntry.FlowID, flowEntry.Error)
+			log.Printf("  ✗ FLOW-%d error: %v", flowEntry.FlowID, flowEntry.Error)
 			continue
 		}
 
@@ -840,7 +840,7 @@ func (r *Replicator) receiveJournal() error {
 		r.replayStats.mu.Unlock()
 
 		if err := r.replayCommand(flowEntry.FlowID, entry); err != nil {
-			log.Printf("  ✗ 重放失败: %v", err)
+			log.Printf("  ✗ Replay failed: %v", err)
 		}
 
 		// Attempt automatic checkpoint save
@@ -849,7 +849,7 @@ func (r *Replicator) receiveJournal() error {
 		// Log statistics every 50 entries
 		if entriesCount%50 == 0 {
 			r.replayStats.mu.Lock()
-			log.Printf("  📊 统计: 总计=%d, 成功=%d, 跳过=%d, 失败=%d",
+			log.Printf("  📊 Stats: total=%d, success=%d, skipped=%d, failed=%d",
 				r.replayStats.TotalCommands,
 				r.replayStats.ReplayedOK,
 				r.replayStats.Skipped,
@@ -858,21 +858,21 @@ func (r *Replicator) receiveJournal() error {
 			// Report per-FLOW stats
 			for fid, count := range flowStats {
 				lsn := r.replayStats.FlowLSNs[fid]
-				log.Printf("    FLOW-%d: %d 条, LSN=%d", fid, count, lsn)
+				log.Printf("    FLOW-%d: %d entries, LSN=%d", fid, count, lsn)
 			}
 			r.replayStats.mu.Unlock()
 		}
 	}
 
-	log.Println("  • 所有 FLOW 的 Journal 流已结束")
+	log.Println("  • Journal stream finished for all FLOW connections")
 
 	// Persist final checkpoint if enabled
 	if r.cfg.Checkpoint.Enabled {
-		log.Println("  💾 保存最终 checkpoint...")
+		log.Println("  💾 Saving final checkpoint...")
 		if err := r.saveCheckpoint(); err != nil {
-			log.Printf("  ⚠ 保存最终 checkpoint 失败: %v", err)
+			log.Printf("  ⚠ Failed to save final checkpoint: %v", err)
 		} else {
-			log.Println("  ✓ Checkpoint 已保存")
+			log.Println("  ✓ Checkpoint saved")
 		}
 	}
 
@@ -884,14 +884,14 @@ func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg
 	defer wg.Done()
 
 	reader := NewJournalReader(r.flowConns[flowID])
-	log.Printf("  [FLOW-%d] 开始接收 Journal 流", flowID)
-	r.recordFlowStage(flowID, "journal", "监听 Journal 流")
+	log.Printf("  [FLOW-%d] Starting journal stream reception", flowID)
+	r.recordFlowStage(flowID, "journal", "Listening to journal stream")
 
 	for {
 		// Observe cancellation
 		select {
 		case <-r.ctx.Done():
-			log.Printf("  [FLOW-%d] 收到停止信号", flowID)
+			log.Printf("  [FLOW-%d] Stop signal received", flowID)
 			return
 		default:
 		}
@@ -900,16 +900,16 @@ func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg
 		entry, err := reader.ReadEntry()
 		if err != nil {
 			if err == io.EOF {
-				log.Printf("  [FLOW-%d] Journal 流结束（EOF）", flowID)
-				r.recordFlowStage(flowID, "journal_done", "Journal 流结束")
+				log.Printf("  [FLOW-%d] Journal stream ended (EOF)", flowID)
+				r.recordFlowStage(flowID, "journal_done", "Journal stream finished")
 				return
 			}
 			// Send error to channel
 			entryChan <- &FlowEntry{
 				FlowID: flowID,
-				Error:  fmt.Errorf("读取失败: %w", err),
+				Error:  fmt.Errorf("read failed: %w", err),
 			}
-			r.recordFlowStage(flowID, "error", fmt.Sprintf("Journal 读取失败: %v", err))
+			r.recordFlowStage(flowID, "error", fmt.Sprintf("Journal read failed: %v", err))
 			return
 		}
 
@@ -1068,7 +1068,7 @@ func (r *Replicator) replayCommand(flowID int, entry *JournalEntry) error {
 			r.replayStats.mu.Lock()
 			r.replayStats.Failed++
 			r.replayStats.mu.Unlock()
-			return fmt.Errorf("处理过期键失败: %w", err)
+			return fmt.Errorf("Failed to process expired key: %w", err)
 		}
 		r.replayStats.mu.Lock()
 		r.replayStats.ReplayedOK++
@@ -1080,7 +1080,7 @@ func (r *Replicator) replayCommand(flowID int, entry *JournalEntry) error {
 		// Check for global commands
 		cmd := strings.ToUpper(entry.Command)
 		if isGlobalCommand(cmd) {
-			log.Printf("  ⚠ 跳过全局命令: %s（需要多分片协调）", cmd)
+			log.Printf("  ⚠ Skipping global command %s (requires multi-shard coordination)", cmd)
 			r.replayStats.mu.Lock()
 			r.replayStats.Skipped++
 			r.replayStats.mu.Unlock()
@@ -1092,7 +1092,7 @@ func (r *Replicator) replayCommand(flowID int, entry *JournalEntry) error {
 			r.replayStats.mu.Lock()
 			r.replayStats.Failed++
 			r.replayStats.mu.Unlock()
-			return fmt.Errorf("执行命令失败: %w", err)
+			return fmt.Errorf("Command execution failed: %w", err)
 		}
 
 		r.replayStats.mu.Lock()
@@ -1102,14 +1102,14 @@ func (r *Replicator) replayCommand(flowID int, entry *JournalEntry) error {
 		return nil
 
 	default:
-		return fmt.Errorf("未知的 opcode: %d", entry.Opcode)
+		return fmt.Errorf("Unknown opcode: %d", entry.Opcode)
 	}
 }
 
 // handleExpiredKey sets TTL for expired key events
 func (r *Replicator) handleExpiredKey(entry *JournalEntry) error {
 	if len(entry.Args) == 0 {
-		return fmt.Errorf("EXPIRED 命令缺少 key 参数")
+		return fmt.Errorf("EXPIRED command missing key argument")
 	}
 
 	key := entry.Args[0]
@@ -1166,7 +1166,7 @@ func (r *Replicator) saveCheckpoint() error {
 
 	// Save to file
 	if err := r.checkpointMgr.Save(cp); err != nil {
-		return fmt.Errorf("保存 checkpoint 失败: %w", err)
+		return fmt.Errorf("Failed to save checkpoint: %w", err)
 	}
 
 	r.lastCheckpointTime = time.Now()
@@ -1185,7 +1185,7 @@ func (r *Replicator) tryAutoSaveCheckpoint() {
 
 	if time.Since(r.lastCheckpointTime) >= r.checkpointInterval {
 		if err := r.saveCheckpoint(); err != nil {
-			log.Printf("  ⚠ 自动保存 checkpoint 失败: %v", err)
+			log.Printf("  ⚠ Automatic checkpoint save failed: %v", err)
 		}
 	}
 }
@@ -1203,12 +1203,12 @@ func (r *Replicator) checkKeyConflict(key string) (bool, error) {
 	// panic/skip: check if key exists
 	reply, err := r.clusterClient.Do("EXISTS", key)
 	if err != nil {
-		return false, fmt.Errorf("检查键存在性失败: %w", err)
+		return false, fmt.Errorf("Failed to check key existence: %w", err)
 	}
 
 	exists, ok := reply.(int64)
 	if !ok {
-		return false, fmt.Errorf("EXISTS 命令返回类型错误")
+		return false, fmt.Errorf("EXISTS command returned unexpected type")
 	}
 
 	if exists == 0 {
@@ -1217,12 +1217,12 @@ func (r *Replicator) checkKeyConflict(key string) (bool, error) {
 
 	// Key exists
 	if policy == "panic" {
-		log.Printf("  ⚠️ 检测到重复键: %s (policy=panic，程序终止)", key)
-		return false, fmt.Errorf("检测到重复键: %s", key)
+		log.Printf("  ⚠️ Duplicate key detected: %s (policy=panic, aborting)", key)
+		return false, fmt.Errorf("duplicate key detected: %s", key)
 	}
 
 	// policy == skip
-	log.Printf("  ⚠️ 跳过重复键: %s (policy=skip)", key)
+	log.Printf("  ⚠️ Skipping duplicate key: %s (policy=skip)", key)
 	return false, nil
 }
 
@@ -1254,7 +1254,7 @@ func (r *Replicator) writeRDBEntry(entry *RDBEntry) error {
 		return r.writeZSet(entry)
 
 	default:
-		return fmt.Errorf("暂不支持的 RDB 类型: %d", entry.Type)
+		return fmt.Errorf("unsupported RDB type: %d", entry.Type)
 	}
 }
 
@@ -1263,7 +1263,7 @@ func (r *Replicator) writeString(entry *RDBEntry) error {
 	// Extract value
 	strVal, ok := entry.Value.(*StringValue)
 	if !ok {
-		return fmt.Errorf("String 类型值转换失败")
+		return fmt.Errorf("failed to convert string value")
 	}
 
 	// Write value
@@ -1273,7 +1273,7 @@ func (r *Replicator) writeString(entry *RDBEntry) error {
 
 	_, err := r.clusterClient.Do("SET", entry.Key, strVal.Value)
 	if err != nil {
-		return fmt.Errorf("SET 命令失败: %w", err)
+		return fmt.Errorf("SET command failed: %w", err)
 	}
 
 	// Apply TTL if needed
@@ -1287,7 +1287,7 @@ func (r *Replicator) writeString(entry *RDBEntry) error {
 
 			_, err := r.clusterClient.Do("PEXPIRE", entry.Key, fmt.Sprintf("%d", remainingMs))
 			if err != nil {
-				return fmt.Errorf("PEXPIRE 命令失败: %w", err)
+				return fmt.Errorf("PEXPIRE command failed: %w", err)
 			}
 		}
 	}
@@ -1304,7 +1304,7 @@ func (r *Replicator) writeHash(entry *RDBEntry) error {
 	// Extract value
 	hashVal, ok := entry.Value.(*HashValue)
 	if !ok {
-		return fmt.Errorf("Hash 类型值转换失败")
+		return fmt.Errorf("failed to convert hash value")
 	}
 
 	// Remove existing key to avoid stale fields
@@ -1321,7 +1321,7 @@ func (r *Replicator) writeHash(entry *RDBEntry) error {
 			args = append(args, field, value)
 			log.Printf("  [DEBUG]   field=%s, value=%s", field, value)
 		}
-		log.Printf("  [DEBUG] 执行 HSET 命令，参数数量=%d", len(args))
+		log.Printf("  [DEBUG] Executing HSET with %d arguments", len(args))
 
 		r.rdbStats.mu.Lock()
 		r.rdbStats.Commands++
@@ -1329,11 +1329,11 @@ func (r *Replicator) writeHash(entry *RDBEntry) error {
 
 		_, err := r.clusterClient.Do("HSET", args...)
 		if err != nil {
-			return fmt.Errorf("HSET 命令失败: %w", err)
+			return fmt.Errorf("HSET command failed: %w", err)
 		}
-		log.Printf("  [DEBUG] HSET 命令执行成功")
+		log.Printf("  [DEBUG] HSET command succeeded")
 	} else {
-		log.Printf("  [DEBUG] 字段为空，跳过写入")
+		log.Printf("  [DEBUG] Field empty, skipping write")
 	}
 
 	// Apply TTL if needed
@@ -1346,7 +1346,7 @@ func (r *Replicator) writeHash(entry *RDBEntry) error {
 
 			_, err := r.clusterClient.Do("PEXPIRE", entry.Key, fmt.Sprintf("%d", remainingMs))
 			if err != nil {
-				return fmt.Errorf("PEXPIRE 命令失败: %w", err)
+				return fmt.Errorf("PEXPIRE command failed: %w", err)
 			}
 		}
 	}
@@ -1363,7 +1363,7 @@ func (r *Replicator) writeList(entry *RDBEntry) error {
 	// Extract value
 	listVal, ok := entry.Value.(*ListValue)
 	if !ok {
-		return fmt.Errorf("List 类型值转换失败")
+		return fmt.Errorf("failed to convert list value")
 	}
 
 	// Remove existing key
@@ -1385,7 +1385,7 @@ func (r *Replicator) writeList(entry *RDBEntry) error {
 
 		_, err := r.clusterClient.Do("RPUSH", args...)
 		if err != nil {
-			return fmt.Errorf("RPUSH 命令失败: %w", err)
+			return fmt.Errorf("RPUSH command failed: %w", err)
 		}
 	}
 
@@ -1399,7 +1399,7 @@ func (r *Replicator) writeList(entry *RDBEntry) error {
 
 			_, err := r.clusterClient.Do("PEXPIRE", entry.Key, fmt.Sprintf("%d", remainingMs))
 			if err != nil {
-				return fmt.Errorf("PEXPIRE 命令失败: %w", err)
+				return fmt.Errorf("PEXPIRE command failed: %w", err)
 			}
 		}
 	}
@@ -1416,7 +1416,7 @@ func (r *Replicator) writeSet(entry *RDBEntry) error {
 	// Extract value
 	setVal, ok := entry.Value.(*SetValue)
 	if !ok {
-		return fmt.Errorf("Set 类型值转换失败")
+		return fmt.Errorf("failed to convert set value")
 	}
 
 	// Remove existing key
@@ -1438,7 +1438,7 @@ func (r *Replicator) writeSet(entry *RDBEntry) error {
 
 		_, err := r.clusterClient.Do("SADD", args...)
 		if err != nil {
-			return fmt.Errorf("SADD 命令失败: %w", err)
+			return fmt.Errorf("SADD command failed: %w", err)
 		}
 	}
 
@@ -1452,7 +1452,7 @@ func (r *Replicator) writeSet(entry *RDBEntry) error {
 
 			_, err := r.clusterClient.Do("PEXPIRE", entry.Key, fmt.Sprintf("%d", remainingMs))
 			if err != nil {
-				return fmt.Errorf("PEXPIRE 命令失败: %w", err)
+				return fmt.Errorf("PEXPIRE command failed: %w", err)
 			}
 		}
 	}
@@ -1469,7 +1469,7 @@ func (r *Replicator) writeZSet(entry *RDBEntry) error {
 	// Extract value
 	zsetVal, ok := entry.Value.(*ZSetValue)
 	if !ok {
-		return fmt.Errorf("ZSet 类型值转换失败")
+		return fmt.Errorf("failed to convert zset value")
 	}
 
 	// Remove existing key
@@ -1491,7 +1491,7 @@ func (r *Replicator) writeZSet(entry *RDBEntry) error {
 
 		_, err := r.clusterClient.Do("ZADD", args...)
 		if err != nil {
-			return fmt.Errorf("ZADD 命令失败: %w", err)
+			return fmt.Errorf("ZADD command failed: %w", err)
 		}
 	}
 
@@ -1505,7 +1505,7 @@ func (r *Replicator) writeZSet(entry *RDBEntry) error {
 
 			_, err := r.clusterClient.Do("PEXPIRE", entry.Key, fmt.Sprintf("%d", remainingMs))
 			if err != nil {
-				return fmt.Errorf("PEXPIRE 命令失败: %w", err)
+				return fmt.Errorf("PEXPIRE command failed: %w", err)
 			}
 		}
 	}
@@ -1522,7 +1522,7 @@ func (r *Replicator) recordPipelineStatus(status, message string) {
 		return
 	}
 	if err := r.store.SetPipelineStatus(status, message); err != nil {
-		log.Printf("[state] 设置 Pipeline 状态失败: %v", err)
+		log.Printf("[state] Failed to set pipeline status: %v", err)
 	}
 }
 
@@ -1531,7 +1531,7 @@ func (r *Replicator) recordStage(name, status, message string) {
 		return
 	}
 	if err := r.store.UpdateStage(name, status, message); err != nil {
-		log.Printf("[state] 更新阶段 %s 失败: %v", name, err)
+		log.Printf("[state] Failed to update stage %s: %v", name, err)
 	}
 }
 
@@ -1545,12 +1545,12 @@ func (r *Replicator) estimateSourceKeys() {
 	}
 	reply, err := r.mainConn.Do("INFO", "keyspace")
 	if err != nil {
-		log.Printf("[state] 获取源端 key 数量失败: %v", err)
+		log.Printf("[state] Failed to fetch source key count: %v", err)
 		return
 	}
 	info, err := redisx.ToString(reply)
 	if err != nil {
-		log.Printf("[state] 解析源端 keyspace 失败: %v", err)
+		log.Printf("[state] Failed to parse source keyspace: %v", err)
 		return
 	}
 	total := parseKeyspaceInfo(info)
@@ -1607,7 +1607,7 @@ func (r *Replicator) estimateTargetKeys() {
 		return nil
 	})
 	if err != nil {
-		log.Printf("[state] 获取目标端 key 数量失败: %v", err)
+		log.Printf("[state] Failed to fetch target key count: %v", err)
 		return
 	}
 	r.metricsMu.Lock()

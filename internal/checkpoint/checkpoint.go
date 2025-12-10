@@ -46,13 +46,13 @@ func (m *Manager) Load() (*Checkpoint, error) {
 	// Read file
 	data, err := ioutil.ReadFile(m.filePath)
 	if err != nil {
-		return nil, fmt.Errorf("读取检查点文件失败: %w", err)
+		return nil, fmt.Errorf("failed to read checkpoint file: %w", err)
 	}
 
 	// Decode JSON
 	var cp Checkpoint
 	if err := json.Unmarshal(data, &cp); err != nil {
-		return nil, fmt.Errorf("解析检查点 JSON 失败: %w", err)
+		return nil, fmt.Errorf("failed to parse checkpoint JSON: %w", err)
 	}
 
 	return &cp, nil
@@ -72,24 +72,24 @@ func (m *Manager) Save(cp *Checkpoint) error {
 	// Encode JSON
 	data, err := json.MarshalIndent(cp, "", "  ")
 	if err != nil {
-		return fmt.Errorf("序列化检查点 JSON 失败: %w", err)
+		return fmt.Errorf("failed to serialize checkpoint JSON: %w", err)
 	}
 
 	// Ensure directory exists
 	dir := filepath.Dir(m.filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("创建目录失败: %w", err)
+		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
 	// Atomic write: temp file + rename
 	tmpFile := m.filePath + ".tmp"
 	if err := ioutil.WriteFile(tmpFile, data, 0644); err != nil {
-		return fmt.Errorf("写入临时文件失败: %w", err)
+		return fmt.Errorf("failed to write temporary file: %w", err)
 	}
 
 	if err := os.Rename(tmpFile, m.filePath); err != nil {
 		os.Remove(tmpFile) // cleanup best effort
-		return fmt.Errorf("重命名文件失败: %w", err)
+		return fmt.Errorf("failed to rename checkpoint file: %w", err)
 	}
 
 	return nil
@@ -101,7 +101,7 @@ func (m *Manager) Delete() error {
 	defer m.mu.Unlock()
 
 	if err := os.Remove(m.filePath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("删除检查点文件失败: %w", err)
+		return fmt.Errorf("failed to delete checkpoint file: %w", err)
 	}
 
 	return nil

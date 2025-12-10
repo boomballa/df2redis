@@ -15,7 +15,7 @@ import (
 func (p *RDBParser) readStringFull() (string, error) {
 	length, special, err := p.readLength()
 	if err != nil {
-		return "", fmt.Errorf("读取字符串长度失败: %w", err)
+		return "", fmt.Errorf("failed to read string length: %w", err)
 	}
 
 	if special {
@@ -30,7 +30,7 @@ func (p *RDBParser) readStringFull() (string, error) {
 
 	buf := make([]byte, length)
 	if _, err := io.ReadFull(p.reader, buf); err != nil {
-		return "", fmt.Errorf("读取字符串数据失败: %w", err)
+		return "", fmt.Errorf("failed to read string data: %w", err)
 	}
 
 	return string(buf), nil
@@ -68,7 +68,7 @@ func (p *RDBParser) readStringEncoded(encoding uint64) (string, error) {
 		return p.readLZFString()
 
 	default:
-		return "", fmt.Errorf("不支持的字符串编码: %d", encoding)
+		return "", fmt.Errorf("unsupported string encoding: %d", encoding)
 	}
 }
 
@@ -95,25 +95,25 @@ func (p *RDBParser) readLZFString() (string, error) {
 	// 1. Compressed length
 	compressedLen, _, err := p.readLength()
 	if err != nil {
-		return "", fmt.Errorf("读取压缩长度失败: %w", err)
+		return "", fmt.Errorf("failed to read compressed length: %w", err)
 	}
 
 	// 2. Original length
 	originalLen, _, err := p.readLength()
 	if err != nil {
-		return "", fmt.Errorf("读取原始长度失败: %w", err)
+		return "", fmt.Errorf("failed to read original length: %w", err)
 	}
 
 	// 3. Compressed payload
 	compressedData := make([]byte, compressedLen)
 	if _, err := io.ReadFull(p.reader, compressedData); err != nil {
-		return "", fmt.Errorf("读取压缩数据失败: %w", err)
+		return "", fmt.Errorf("failed to read compressed data: %w", err)
 	}
 
 	// 4. Decompress (requires an LZF implementation; unused if Dragonfly avoids LZF)
 	decompressed, err := lzfDecompress(compressedData, int(originalLen))
 	if err != nil {
-		return "", fmt.Errorf("LZF 解压缩失败: %w (提示: 可能需要安装 LZF 库)", err)
+		return "", fmt.Errorf("LZF decompression failed: %w (hint: ensure LZF library is available)", err)
 	}
 
 	return string(decompressed), nil
@@ -134,7 +134,7 @@ func lzfDecompress(src []byte, dstLen int) ([]byte, error) {
 			// Literal bytes
 			count := int(ctrl) + 1
 			if srcIdx+count > len(src) || dstIdx+count > dstLen {
-				return nil, fmt.Errorf("LZF 数据损坏")
+				return nil, fmt.Errorf("LZF data corruption detected")
 			}
 			copy(dst[dstIdx:], src[srcIdx:srcIdx+count])
 			srcIdx += count
@@ -144,7 +144,7 @@ func lzfDecompress(src []byte, dstLen int) ([]byte, error) {
 			length := int(ctrl >> 5)
 			if length == 7 {
 				if srcIdx >= len(src) {
-					return nil, fmt.Errorf("LZF 数据损坏")
+					return nil, fmt.Errorf("LZF data corruption detected")
 				}
 				length += int(src[srcIdx])
 				srcIdx++
@@ -152,14 +152,14 @@ func lzfDecompress(src []byte, dstLen int) ([]byte, error) {
 			length += 2
 
 			if srcIdx >= len(src) {
-				return nil, fmt.Errorf("LZF 数据损坏")
+				return nil, fmt.Errorf("LZF data corruption detected")
 			}
 			offset := int(ctrl&0x1f)<<8 | int(src[srcIdx])
 			srcIdx++
 			offset++
 
 			if dstIdx < offset || dstIdx+length > dstLen {
-				return nil, fmt.Errorf("LZF 数据损坏")
+				return nil, fmt.Errorf("LZF data corruption detected")
 			}
 
 			// Copy referenced bytes
@@ -171,7 +171,7 @@ func lzfDecompress(src []byte, dstLen int) ([]byte, error) {
 	}
 
 	if dstIdx != dstLen {
-		return nil, fmt.Errorf("LZF 解压后长度不匹配: 期望 %d, 实际 %d", dstLen, dstIdx)
+		return nil, fmt.Errorf("LZF decompressed length mismatch: expect %d, got %d", dstLen, dstIdx)
 	}
 
 	return dst, nil

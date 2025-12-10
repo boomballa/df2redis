@@ -57,7 +57,7 @@ func Execute(args []string) int {
 		fmt.Println("df2redis 0.1.0-dev")
 		return 0
 	default:
-		log.Printf("未知子命令: %s", args[0])
+		log.Printf("Unknown subcommand: %s", args[0])
 		printUsage()
 		return 1
 	}
@@ -69,10 +69,10 @@ func runPrepare(args []string) int {
 		return errorToExitCode(err)
 	}
 	if err := cfg.EnsureStateDir(); err != nil {
-		log.Printf("创建状态目录失败: %v", err)
+		log.Printf("Failed to create state directory: %v", err)
 		return 1
 	}
-	log.Printf("🛠️ 准备阶段完成:\n  📂 stateDir  : %s\n  📝 statusFile: %s",
+	log.Printf("🛠️ Preparation complete:\n  📂 stateDir  : %s\n  📝 statusFile: %s",
 		cfg.ResolveStateDir(), cfg.StatusFilePath())
 	return 0
 }
@@ -84,34 +84,34 @@ func runMigrate(args []string) int {
 	var dryRun bool
 	var showPort int
 	var showAddr string
-	fs.StringVar(&configPath, "config", "", "配置文件路径 (YAML)")
-	fs.StringVar(&configPath, "c", "", "配置文件路径 (YAML)")
-	fs.BoolVar(&dryRun, "dry-run", false, "仅校验配置，不执行真实迁移")
-	fs.IntVar(&showPort, "show", 0, "启动内置仪表盘并监听指定端口 (例如 --show 8080)")
-	fs.StringVar(&showAddr, "show-addr", "", "启动内置仪表盘并监听指定地址 (例如 --show-addr 0.0.0.0:8080)")
+	fs.StringVar(&configPath, "config", "", "Configuration file path (YAML)")
+	fs.StringVar(&configPath, "c", "", "Configuration file path (YAML)")
+	fs.BoolVar(&dryRun, "dry-run", false, "Validate configuration only without running migration")
+	fs.IntVar(&showPort, "show", 0, "Start embedded dashboard on the given port (e.g. --show 8080)")
+	fs.StringVar(&showAddr, "show-addr", "", "Start embedded dashboard on the given address (e.g. --show-addr 0.0.0.0:8080)")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
 		}
-		log.Printf("解析参数失败: %v", err)
+		log.Printf("Failed to parse arguments: %v", err)
 		return 1
 	}
 	if configPath == "" {
-		log.Println("必须提供 --config")
+		log.Println("The --config flag is required")
 		fs.Usage()
 		return 2
 	}
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		log.Printf("配置加载失败: %v", err)
+		log.Printf("Failed to load config: %v", err)
 		return 2
 	}
-	log.Printf("✅ 配置加载成功:\n%s", cfg.PrettySummary())
+	log.Printf("✅ Config loaded:\n%s", cfg.PrettySummary())
 
 	if dryRun {
-		log.Println("🚧 dry-run 模式：仅校验配置，不执行真实迁移。")
+		log.Println("🚧 Dry-run mode: configuration only; no migration will run.")
 		return 0
 	}
 
@@ -119,7 +119,7 @@ func runMigrate(args []string) int {
 	defer stopSignals()
 
 	if err := cfg.EnsureStateDir(); err != nil {
-		log.Printf("创建状态目录失败: %v", err)
+		log.Printf("Failed to create state directory: %v", err)
 		return 1
 	}
 
@@ -131,12 +131,12 @@ func runMigrate(args []string) int {
 			if showPort > 0 {
 				showAddr = fmt.Sprintf("%s:%d", showAddr, showPort)
 			} else {
-				log.Printf("show-addr 必须包含端口，例如 0.0.0.0:8080")
+				log.Printf("show-addr must include a port, e.g. 0.0.0.0:8080")
 				return 2
 			}
 		}
 		if _, _, err := net.SplitHostPort(showAddr); err != nil {
-			log.Printf("show-addr 格式不合法: %v", err)
+			log.Printf("Invalid show-addr format: %v", err)
 			return 2
 		}
 		dashboardAddr = showAddr
@@ -164,7 +164,7 @@ func runMigrate(args []string) int {
 
 	ctxObj, err := pipeline.NewContext(runCtx, cfg, store)
 	if err != nil {
-		log.Printf("初始化上下文失败: %v", err)
+		log.Printf("Failed to initialize context: %v", err)
 		return 1
 	}
 	defer ctxObj.Close()
@@ -177,11 +177,11 @@ func runMigrate(args []string) int {
 		Add(pipeline.NewIncrementalPlaceholderStage())
 
 	if ok := pl.Run(ctxObj); !ok {
-		log.Println("迁移管线执行失败，详情见日志。")
+		log.Println("Migration pipeline failed; see logs for details.")
 		return 1
 	}
 
-	log.Println("迁移管线执行结束。")
+	log.Println("Migration pipeline finished.")
 	return 0
 }
 
@@ -193,18 +193,18 @@ func runColdImport(args []string) int {
 	var shakeBinary string
 	var shakeConfig string
 	var shakeArgs string
-	fs.StringVar(&configPath, "config", "", "配置文件路径 (YAML)")
-	fs.StringVar(&configPath, "c", "", "配置文件路径 (YAML)")
-	fs.StringVar(&rdbPath, "rdb", "", "已有 RDB 文件路径（覆盖 migrate.snapshotPath）")
-	fs.StringVar(&shakeBinary, "shake-binary", "", "redis-shake 可执行文件路径（覆盖 migrate.shakeBinary）")
-	fs.StringVar(&shakeConfig, "shake-conf", "", "redis-shake 配置文件路径（覆盖 migrate.shakeConfigFile）")
-	fs.StringVar(&shakeArgs, "shake-args", "", "redis-shake 启动参数（覆盖 migrate.shakeArgs）")
+	fs.StringVar(&configPath, "config", "", "Configuration file path (YAML)")
+	fs.StringVar(&configPath, "c", "", "Configuration file path (YAML)")
+	fs.StringVar(&rdbPath, "rdb", "", "Existing RDB file path (overrides migrate.snapshotPath)")
+	fs.StringVar(&shakeBinary, "shake-binary", "", "redis-shake binary path (overrides migrate.shakeBinary)")
+	fs.StringVar(&shakeConfig, "shake-conf", "", "redis-shake config file (overrides migrate.shakeConfigFile)")
+	fs.StringVar(&shakeArgs, "shake-args", "", "redis-shake runtime args (overrides migrate.shakeArgs)")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
 		}
-		log.Printf("解析参数失败: %v", err)
+		log.Printf("Failed to parse arguments: %v", err)
 		return 1
 	}
 	if configPath == "" {
@@ -230,7 +230,7 @@ func runColdImport(args []string) int {
 	}
 
 	if err := cfg.EnsureStateDir(); err != nil {
-		log.Printf("创建 state 目录失败: %v", err)
+		log.Printf("Failed to create state directory: %v", err)
 		return 1
 	}
 
@@ -238,33 +238,33 @@ func runColdImport(args []string) int {
 	cfg.Migrate = migrateCfg
 
 	if cfg.Migrate.SnapshotPath == "" {
-		log.Println("migrate.snapshotPath 未配置")
+		log.Println("migrate.snapshotPath is not configured")
 		return 2
 	}
 	if cfg.Migrate.ShakeBinary == "" {
-		log.Println("migrate.shakeBinary 未配置")
+		log.Println("migrate.shakeBinary is not configured")
 		return 2
 	}
 
 	if err := initLogger(cfg, "cold-import"); err != nil {
-		log.Printf("初始化日志系统失败: %v", err)
+		log.Printf("Failed to initialize logging: %v", err)
 		return 1
 	}
 	defer logger.Close()
 
 	if _, err := os.Stat(cfg.Migrate.SnapshotPath); err != nil {
-		logger.Error("RDB 文件不可用: %v", err)
+		logger.Error("RDB file unavailable: %v", err)
 		return 1
 	}
 	if _, err := os.Stat(cfg.Migrate.ShakeBinary); err != nil {
-		logger.Error("redis-shake 可执行文件不可用: %v", err)
+		logger.Error("redis-shake binary unavailable: %v", err)
 		return 1
 	}
 
 	if strings.TrimSpace(cfg.Migrate.ShakeArgs) == "" && strings.TrimSpace(cfg.Migrate.ShakeConfigFile) == "" {
 		path, err := pipeline.GenerateShakeConfigFile(cfg, cfg.ResolveStateDir())
 		if err != nil {
-			logger.Error("生成 redis-shake 配置失败: %v", err)
+			logger.Error("Failed to generate redis-shake config: %v", err)
 			return 1
 		}
 		logger.Console("🛠️ Generated redis-shake config: %s", path)
@@ -272,7 +272,7 @@ func runColdImport(args []string) int {
 
 	importer, err := shake.NewImporter(cfg.Migrate, cfg.Target)
 	if err != nil {
-		logger.Error("初始化 redis-shake 失败: %v", err)
+		logger.Error("Failed to initialize redis-shake: %v", err)
 		return 1
 	}
 
@@ -283,7 +283,7 @@ func runColdImport(args []string) int {
 	logger.Console("⚠️ Existing data on the target may be overwritten")
 
 	if err := importer.Run(context.Background()); err != nil {
-		logger.Error("cold-import 失败: %v", err)
+		logger.Error("cold-import failed: %v", err)
 		return 1
 	}
 	logger.Console("✅ Cold import completed")
@@ -298,7 +298,7 @@ func runStatus(args []string) int {
 	store := state.NewStore(cfg.StatusFilePath())
 	snap, err := store.Load()
 	if err != nil {
-		log.Printf("读取状态文件失败: %v", err)
+		log.Printf("Failed to read status file: %v", err)
 		return 1
 	}
 	log.Printf("📊 pipeline=%s updatedAt=%s", snap.PipelineStatus, snap.UpdatedAt.Format(time.RFC3339))
@@ -326,15 +326,15 @@ func runRollback(args []string) int {
 		return errorToExitCode(err)
 	}
 	store := state.NewStore(cfg.StatusFilePath())
-	if err := store.SetPipelineStatus("rolling_back", "开始回滚流程"); err != nil {
-		log.Printf("更新状态失败: %v", err)
+	if err := store.SetPipelineStatus("rolling_back", "Starting rollback process"); err != nil {
+		log.Printf("Failed to update status: %v", err)
 		return 1
 	}
-	if err := store.SetPipelineStatus("rolled_back", "回滚已标记，待人工切回"); err != nil {
-		log.Printf("更新状态失败: %v", err)
+	if err := store.SetPipelineStatus("rolled_back", "Rollback marked; awaiting manual cutover"); err != nil {
+		log.Printf("Failed to update status: %v", err)
 		return 1
 	}
-	log.Printf("↩️ 已写入回滚标记，stateDir=%s", cfg.ResolveStateDir())
+	log.Printf("↩️ Rollback marker written, stateDir=%s", cfg.ResolveStateDir())
 	return 0
 }
 
@@ -345,15 +345,15 @@ func runDashboard(args []string) int {
 		configPath string
 		addr       string
 	)
-	fs.StringVar(&configPath, "config", "", "配置文件路径 (YAML)")
-	fs.StringVar(&configPath, "c", "", "配置文件路径 (YAML)")
-	fs.StringVar(&addr, "addr", "", "仪表盘监听地址（留空使用配置文件 dashboard.addr）")
+	fs.StringVar(&configPath, "config", "", "Configuration file path (YAML)")
+	fs.StringVar(&configPath, "c", "", "Configuration file path (YAML)")
+	fs.StringVar(&addr, "addr", "", "Dashboard listen address (defaults to dashboard.addr when empty)")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
 		}
-		log.Printf("解析参数失败: %v", err)
+		log.Printf("Failed to parse arguments: %v", err)
 		return 1
 	}
 	if configPath == "" {
@@ -363,7 +363,7 @@ func runDashboard(args []string) int {
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		log.Printf("配置加载失败: %v", err)
+		log.Printf("Failed to load config: %v", err)
 		return 2
 	}
 	if addr == "" {
@@ -377,7 +377,7 @@ func runDashboard(args []string) int {
 		Store: store,
 	})
 	if err != nil {
-		log.Printf("初始化 dashboard 失败: %v", err)
+		log.Printf("Failed to initialize dashboard: %v", err)
 		return 1
 	}
 
@@ -421,18 +421,18 @@ func loadConfigFromArgs(cmd string, args []string) (*config.Config, error) {
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
 	var configPath string
-	fs.StringVar(&configPath, "config", "", "配置文件路径 (YAML)")
-	fs.StringVar(&configPath, "c", "", "配置文件路径 (YAML)")
+	fs.StringVar(&configPath, "config", "", "Configuration file path (YAML)")
+	fs.StringVar(&configPath, "c", "", "Configuration file path (YAML)")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return nil, flag.ErrHelp
 		}
-		return nil, fmt.Errorf("解析参数失败: %w", err)
+		return nil, fmt.Errorf("Failed to parse arguments: %w", err)
 	}
 	if configPath == "" {
 		fs.Usage()
-		return nil, fmt.Errorf("必须提供 --config")
+		return nil, fmt.Errorf("The --config flag is required")
 	}
 
 	cfg, err := config.Load(configPath)
@@ -446,7 +446,7 @@ func errorToExitCode(err error) int {
 	if err == flag.ErrHelp {
 		return 0
 	}
-	log.Printf("命令执行失败: %v", err)
+	log.Printf("Command execution failed: %v", err)
 	return 1
 }
 
@@ -456,16 +456,16 @@ func runReplicate(args []string) int {
 	var configPath string
 	var dashboardAddr string
 	var taskNameFlag string
-	fs.StringVar(&configPath, "config", "", "配置文件路径 (YAML)")
-	fs.StringVar(&configPath, "c", "", "配置文件路径 (YAML)")
-	fs.StringVar(&dashboardAddr, "dashboard-addr", "", "内置仪表盘监听地址（留空则使用配置文件，设为空字符串以禁用）")
-	fs.StringVar(&taskNameFlag, "task-name", "", "任务名（用于日志前缀，可覆盖配置文件）")
+	fs.StringVar(&configPath, "config", "", "Configuration file path (YAML)")
+	fs.StringVar(&configPath, "c", "", "Configuration file path (YAML)")
+	fs.StringVar(&dashboardAddr, "dashboard-addr", "", "Embedded dashboard listen address (empty to use config, set to empty string to disable)")
+	fs.StringVar(&taskNameFlag, "task-name", "", "Task name (used for log prefix; overrides config file)")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
 		}
-		log.Printf("解析参数失败: %v", err)
+		log.Printf("Failed to parse arguments: %v", err)
 		return 1
 	}
 	if configPath == "" {
@@ -484,11 +484,11 @@ func runReplicate(args []string) int {
 		dashboardAddr = cfg.Dashboard.Addr
 	}
 	store := state.NewStore(cfg.StatusFilePath())
-	_ = store.SetPipelineStatus("starting", "准备启动复制器")
+	_ = store.SetPipelineStatus("starting", "Preparing to start replicator")
 
 	// Initialize logging
 	if err := initLogger(cfg, "replicate"); err != nil {
-		log.Printf("初始化日志系统失败: %v", err)
+		log.Printf("Failed to initialize logging: %v", err)
 		return 1
 	}
 	defer logger.Close()
@@ -583,37 +583,37 @@ func runCheck(args []string) int {
 		logLevel        string
 		maxKeys         int
 	)
-	fs.StringVar(&configPath, "config", "", "配置文件路径 (YAML)")
-	fs.StringVar(&configPath, "c", "", "配置文件路径 (YAML)")
-	fs.StringVar(&mode, "mode", "outline", "校验模式: full/length/outline/smart")
-	fs.IntVar(&qps, "qps", 500, "QPS 限制")
-	fs.IntVar(&parallel, "parallel", 4, "并发度")
-	fs.StringVar(&resultDir, "result-dir", "./check-results", "结果输出目录")
-	fs.StringVar(&binary, "binary", "redis-full-check", "redis-full-check 二进制文件路径")
-	fs.StringVar(&filterList, "filter", "", "Key 过滤列表，支持前缀匹配 (例如: 'user:*|session:*')")
-	fs.IntVar(&compareTimes, "compare-times", 3, "对比轮次")
-	fs.IntVar(&interval, "interval", 5, "每轮对比间隔(秒)")
-	fs.IntVar(&bigKeyThreshold, "big-key-threshold", 524288, "大key阈值(字节)，仅smart模式生效")
-	fs.StringVar(&logFile, "log-file", "", "日志文件路径")
-	fs.StringVar(&logLevel, "log-level", "info", "日志级别: debug/info/warn/error")
-	fs.IntVar(&maxKeys, "max-keys", 0, "最大校验key数量 (0表示不限制)")
+	fs.StringVar(&configPath, "config", "", "Configuration file path (YAML)")
+	fs.StringVar(&configPath, "c", "", "Configuration file path (YAML)")
+	fs.StringVar(&mode, "mode", "outline", "Validation mode: full/length/outline/smart")
+	fs.IntVar(&qps, "qps", 500, "QPS limit")
+	fs.IntVar(&parallel, "parallel", 4, "Parallelism")
+	fs.StringVar(&resultDir, "result-dir", "./check-results", "Result output directory")
+	fs.StringVar(&binary, "binary", "redis-full-check", "redis-full-check binary path")
+	fs.StringVar(&filterList, "filter", "", "Key filter list with prefix matching (e.g. 'user:*|session:*')")
+	fs.IntVar(&compareTimes, "compare-times", 3, "Number of comparison rounds")
+	fs.IntVar(&interval, "interval", 5, "Interval between rounds (seconds)")
+	fs.IntVar(&bigKeyThreshold, "big-key-threshold", 524288, "Big-key threshold in bytes (smart mode only)")
+	fs.StringVar(&logFile, "log-file", "", "Log file path")
+	fs.StringVar(&logLevel, "log-level", "info", "Log level: debug/info/warn/error")
+	fs.IntVar(&maxKeys, "max-keys", 0, "Maximum keys to validate (0 = unlimited)")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
 		}
-		log.Printf("解析参数失败: %v", err)
+		log.Printf("Failed to parse arguments: %v", err)
 		return 1
 	}
 	if configPath == "" {
-		log.Println("必须提供 --config")
+		log.Println("The --config flag is required")
 		fs.Usage()
 		return 2
 	}
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		log.Printf("配置加载失败: %v", err)
+		log.Printf("Failed to load config: %v", err)
 		return 2
 	}
 
@@ -629,7 +629,7 @@ func runCheck(args []string) int {
 	case "smart":
 		checkerMode = checker.ModeSmartBigKey
 	default:
-		log.Printf("未知的校验模式: %s", mode)
+		log.Printf("Unknown validation mode: %s", mode)
 		return 2
 	}
 
@@ -660,7 +660,7 @@ func runCheck(args []string) int {
 	ctx := context.Background()
 	result, err := c.Run(ctx)
 	if err != nil {
-		log.Printf("校验执行失败: %v", err)
+		log.Printf("Validation failed: %v", err)
 		return 1
 	}
 
@@ -677,24 +677,24 @@ func runCheck(args []string) int {
 
 func printUsage() {
 	binary := filepath.Base(os.Args[0])
-	fmt.Printf(`df2redis - Dragonfly → Redis 迁移工具 (原型)
+	fmt.Printf(`df2redis - Dragonfly → Redis migration tool (prototype)
 
-用法:
+Usage:
   %[1]s <command> [options]
 
-可用命令:
-  prepare    预先检查环境、依赖与配置
-  migrate    执行迁移流程 (支持 --dry-run)
-  cold-import 一次性使用 redis-shake 将 RDB 导入目标 Redis
-  replicate  启动 Dragonfly 复制器（测试握手）
-  check      数据一致性校验（基于 redis-full-check）
-  status     查看当前迁移状态
-  rollback   执行回滚到 Dragonfly 的流程
-  dashboard  启动独立仪表盘
-  help       显示此帮助
-  version    显示版本信息
+Available commands:
+  prepare    Pre-check environment, dependencies, and config
+  migrate    Run the migration pipeline (supports --dry-run)
+  cold-import Use redis-shake once to import an RDB into target Redis
+  replicate  Start the Dragonfly replicator (handshake test)
+  check      Validate data consistency (redis-full-check)
+  status     Show current migration status
+  rollback   Trigger rollback back to Dragonfly
+  dashboard  Launch standalone dashboard
+  help       Show this help
+  version    Show version info
 
-示例:
+Examples:
   %[1]s migrate --config examples/migrate.sample.yaml --dry-run
   %[1]s replicate --config examples/migrate.sample.yaml
   %[1]s check --config examples/migrate.sample.yaml --mode outline
@@ -715,7 +715,7 @@ func initLogger(cfg *config.Config, mode string) error {
 
 	// Initialize logger
 	if err := logger.Init(logDir, level, logFilePrefix, cfg.Log.ConsoleEnabledValue()); err != nil {
-		return fmt.Errorf("初始化日志器失败: %w", err)
+		return fmt.Errorf("Failed to initialize logger: %w", err)
 	}
 	log.SetOutput(logger.Writer())
 

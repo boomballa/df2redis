@@ -42,14 +42,14 @@ func (op JournalOpcode) String() string {
 
 // JournalEntry captures a parsed journal record
 type JournalEntry struct {
-	Opcode    JournalOpcode
-	DbIndex   uint64   // database index for SELECT
-	TxID      uint64   // transaction ID
-	ShardCnt  uint64   // shard count
-	LSN       uint64   // log sequence number
-	Command   string   // command name
-	Args      []string // command arguments
-	RawData   []byte   // raw payload (for debugging)
+	Opcode   JournalOpcode
+	DbIndex  uint64   // database index for SELECT
+	TxID     uint64   // transaction ID
+	ShardCnt uint64   // shard count
+	LSN      uint64   // log sequence number
+	Command  string   // command name
+	Args     []string // command arguments
+	RawData  []byte   // raw payload (for debugging)
 }
 
 // String pretty-prints the entry
@@ -99,7 +99,7 @@ func (jr *JournalReader) ReadEntry() (*JournalEntry, error) {
 		if err == io.EOF {
 			return nil, err
 		}
-		return nil, fmt.Errorf("读取 opcode 失败: %w", err)
+		return nil, fmt.Errorf("failed to read opcode: %w", err)
 	}
 	entry.Opcode = JournalOpcode(opcodeBuf[0])
 
@@ -109,7 +109,7 @@ func (jr *JournalReader) ReadEntry() (*JournalEntry, error) {
 		// SELECT: only read dbid
 		dbid, err := ReadPackedUint(jr.reader)
 		if err != nil {
-			return nil, fmt.Errorf("读取 SELECT dbid 失败: %w", err)
+			return nil, fmt.Errorf("failed to read SELECT dbid: %w", err)
 		}
 		entry.DbIndex = dbid
 		return entry, nil
@@ -118,7 +118,7 @@ func (jr *JournalReader) ReadEntry() (*JournalEntry, error) {
 		// LSN marker
 		lsn, err := ReadPackedUint(jr.reader)
 		if err != nil {
-			return nil, fmt.Errorf("读取 LSN 失败: %w", err)
+			return nil, fmt.Errorf("failed to read LSN: %w", err)
 		}
 		entry.LSN = lsn
 		return entry, nil
@@ -131,25 +131,25 @@ func (jr *JournalReader) ReadEntry() (*JournalEntry, error) {
 		// COMMAND/EXPIRED: txid + shard count + payload
 		txid, err := ReadPackedUint(jr.reader)
 		if err != nil {
-			return nil, fmt.Errorf("读取 txid 失败: %w", err)
+			return nil, fmt.Errorf("failed to read txid: %w", err)
 		}
 		entry.TxID = txid
 
 		shardCnt, err := ReadPackedUint(jr.reader)
 		if err != nil {
-			return nil, fmt.Errorf("读取 shard_cnt 失败: %w", err)
+			return nil, fmt.Errorf("failed to read shard_cnt: %w", err)
 		}
 		entry.ShardCnt = shardCnt
 
 		// Parse payload
 		if err := jr.readPayload(entry); err != nil {
-			return nil, fmt.Errorf("读取 payload 失败: %w", err)
+			return nil, fmt.Errorf("failed to read payload: %w", err)
 		}
 
 		return entry, nil
 
 	default:
-		return nil, fmt.Errorf("未知的 opcode: %d", entry.Opcode)
+		return nil, fmt.Errorf("unknown opcode: %d", entry.Opcode)
 	}
 }
 
@@ -162,7 +162,7 @@ func (jr *JournalReader) readPayload(entry *JournalEntry) error {
 	// 1. Element count (command + args)
 	numElems, err := ReadPackedUint(jr.reader)
 	if err != nil {
-		return fmt.Errorf("读取参数数量失败: %w", err)
+		return fmt.Errorf("failed to read argument count: %w", err)
 	}
 
 	if numElems == 0 {
@@ -173,14 +173,14 @@ func (jr *JournalReader) readPayload(entry *JournalEntry) error {
 	// 2. Total command size (unused placeholder for potential validation)
 	totalSize, err := ReadPackedUint(jr.reader)
 	if err != nil {
-		return fmt.Errorf("读取总命令大小失败: %w", err)
+		return fmt.Errorf("failed to read total command size: %w", err)
 	}
 	_ = totalSize
 
 	// 3. Command name
 	cmd, err := ReadPackedString(jr.reader)
 	if err != nil {
-		return fmt.Errorf("读取命令名失败: %w", err)
+		return fmt.Errorf("failed to read command name: %w", err)
 	}
 	entry.Command = cmd
 
@@ -190,7 +190,7 @@ func (jr *JournalReader) readPayload(entry *JournalEntry) error {
 		for i := 0; i < int(numElems-1); i++ {
 			arg, err := ReadPackedString(jr.reader)
 			if err != nil {
-				return fmt.Errorf("读取参数[%d]失败: %w", i, err)
+				return fmt.Errorf("failed to read argument[%d]: %w", i, err)
 			}
 			entry.Args[i] = arg
 		}
