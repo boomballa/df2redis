@@ -831,11 +831,7 @@
     if (totalKeys > 0) {
       progressValue = Math.max(0, Math.min(1, checkedKeys / totalKeys));
     } else {
-      let rawProgress = status.roundProgress;
-      if (typeof rawProgress !== 'number') {
-        rawProgress = status.progress;
-      }
-      progressValue = Math.max(0, Math.min(1, toNumber(rawProgress || 0)));
+      progressValue = deriveRoundProgress(status);
     }
     const progressPercent = progressValue * 100;
 
@@ -859,6 +855,23 @@
     document.getElementById('check-inconsistent-count').textContent = formatNumber(status.inconsistentKeys || 0);
     document.getElementById('check-error-count').textContent = formatNumber(status.errorCount || 0);
     document.getElementById('check-elapsed-time').textContent = formatElapsedTime(status.elapsedSeconds || 0);
+  }
+
+  function deriveRoundProgress(status) {
+    let raw = status.roundProgress;
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
+      return Math.max(0, Math.min(1, raw));
+    }
+
+    const overall = toNumber(status.progress || 0);
+    const totalRounds = toNumber(status.compareTimes || 0);
+    const round = toNumber(status.round || 0);
+    if (totalRounds > 0 && round > 0) {
+      const fraction = overall * totalRounds - (round - 1);
+      return Math.max(0, Math.min(1, fraction));
+    }
+
+    return Math.max(0, Math.min(1, overall));
   }
 
   function formatElapsedTime(seconds) {
