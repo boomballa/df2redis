@@ -36,24 +36,24 @@ func (s *DashboardServer) handleCheckStart(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// 设置默认值
+	// Set default values
 	if req.CompareMode <= 0 {
-		req.CompareMode = 2 // 默认：长度比较
+		req.CompareMode = 2 // Default: length comparison
 	}
 	if req.CompareTimes <= 0 {
-		req.CompareTimes = 3 // 默认：3 轮
+		req.CompareTimes = 3 // Default: 3 rounds
 	}
 	if req.QPS <= 0 {
-		req.QPS = 5000 // 默认：5000（降低以减少对源库和目标库的压力）
+		req.QPS = 5000 // Default: 5000 (reduced to lower pressure on source and target)
 	}
 	if req.BatchCount <= 0 {
-		req.BatchCount = 256 // 默认：256
+		req.BatchCount = 256 // Default: 256
 	}
 	if req.Parallel <= 0 {
-		req.Parallel = 2 // 默认：2（降低并发以减少资源消耗）
+		req.Parallel = 2 // Default: 2 (reduced parallelism to save resources)
 	}
 
-	// 检查是否已有任务运行
+	// Check if a task is already running
 	s.checkMu.Lock()
 	if s.checkRunning {
 		s.checkMu.Unlock()
@@ -64,7 +64,7 @@ func (s *DashboardServer) handleCheckStart(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// 标记为运行中
+	// Mark as running
 	s.checkRunning = true
 	s.checkStatus = &CheckStatus{
 		Running:      true,
@@ -79,7 +79,7 @@ func (s *DashboardServer) handleCheckStart(w http.ResponseWriter, r *http.Reques
 	s.checkCancel = cancel
 	s.checkMu.Unlock()
 
-	// 启动校验任务
+	// Start validation task
 	go s.runRealCheckTask(ctx, req.CompareMode, req.CompareTimes, req.QPS, req.BatchCount, req.Parallel)
 
 	writeJSON(w, map[string]interface{}{
@@ -106,7 +106,7 @@ func (s *DashboardServer) handleCheckStop(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// 取消任务
+	// Cancel task
 	if s.checkCancel != nil {
 		s.checkCancel()
 	}
@@ -136,7 +136,7 @@ func (s *DashboardServer) handleCheckStatus(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// 计算运行时间
+	// Calculate running time
 	status := *s.checkStatus
 	if status.Running {
 		status.ElapsedSeconds = time.Since(status.StartedAt).Seconds()
@@ -145,7 +145,7 @@ func (s *DashboardServer) handleCheckStatus(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, status)
 }
 
-// runRealCheckTask 运行真实的 redis-full-check 任务
+// runRealCheckTask runs real redis-full-check task
 func (s *DashboardServer) runRealCheckTask(ctx context.Context, compareMode, compareTimes, qps, batchCount, parallel int) {
 	defer func() {
 		s.checkMu.Lock()
@@ -156,7 +156,7 @@ func (s *DashboardServer) runRealCheckTask(ctx context.Context, compareMode, com
 		s.checkMu.Unlock()
 	}()
 
-	// 构建结果文件路径
+	// Build result file paths
 	stateDir := s.cfg.StateDir
 	if stateDir == "" {
 		stateDir = "state"
@@ -164,12 +164,12 @@ func (s *DashboardServer) runRealCheckTask(ctx context.Context, compareMode, com
 	resultDB := filepath.Join(stateDir, "check_result.db")
 	resultFile := filepath.Join(stateDir, "check_result.txt")
 
-	// 创建进度通道
+	// Create progress channel
 	progressCh := make(chan fullcheck.Progress, 100)
 
-	// 创建校验器
+	// Create checker
 	checker := fullcheck.NewChecker(fullcheck.CheckConfig{
-		Binary:       "./bin/redis-full-check", // 相对于工作目录
+		Binary:       "./bin/redis-full-check", // Relative to working directory
 		SourceAddr:   s.cfg.Source.Addr,
 		SourcePass:   s.cfg.Source.Password,
 		TargetAddr:   s.cfg.Target.Seed,
@@ -183,12 +183,12 @@ func (s *DashboardServer) runRealCheckTask(ctx context.Context, compareMode, com
 		ResultFile:   resultFile,
 	}, progressCh)
 
-	// 启动进度更新协程
+	// Start progress update goroutine
 	go s.updateCheckProgressFromChannel(progressCh)
 
-	// 执行校验
+	// Execute validation
 	if err := checker.Run(ctx); err != nil {
-		log.Printf("[Check] 校验失败: %v", err)
+		log.Printf("[Check] Validation failed: %v", err)
 		s.updateCheckStatus(func(status *CheckStatus) {
 			status.Message = fmt.Sprintf("Validation failed: %v", err)
 			status.Running = false
@@ -196,19 +196,19 @@ func (s *DashboardServer) runRealCheckTask(ctx context.Context, compareMode, com
 		return
 	}
 
-	// 校验完成
+	// Validation completed
 	s.updateCheckStatus(func(status *CheckStatus) {
 		status.Progress = 1.0
 		status.Message = "Validation completed"
 		status.Running = false
-		// 确保显示最终轮次
+		// Ensure final round is displayed
 		status.Round = status.CompareTimes
 	})
 
-	log.Println("[Check] 校验任务完成")
+	log.Println("[Check] Validation task completed")
 }
 
-// updateCheckProgressFromChannel 从进度通道更新状态
+// updateCheckProgressFromChannel updates status from progress channel
 func (s *DashboardServer) updateCheckProgressFromChannel(progressCh <-chan fullcheck.Progress) {
 	for progress := range progressCh {
 		s.updateCheckStatus(func(status *CheckStatus) {
@@ -218,13 +218,27 @@ func (s *DashboardServer) updateCheckProgressFromChannel(progressCh <-chan fullc
 			status.ConsistentKeys = progress.ConsistentKeys
 			status.InconsistentKeys = progress.ConflictKeys + progress.MissingKeys
 			status.ErrorCount = progress.ErrorCount
-			status.Progress = progress.Progress
 			status.Message = progress.Message
+
+			// Calculate overall progress across rounds
+			// Overall progress = (completed rounds + current round progress) / total rounds
+			if progress.CompareTimes > 0 && progress.Round > 0 {
+				completedRounds := float64(progress.Round - 1)
+				currentRoundProgress := progress.Progress
+				status.Progress = (completedRounds + currentRoundProgress) / float64(progress.CompareTimes)
+
+				// Ensure progress does not exceed 1.0
+				if status.Progress > 1.0 {
+					status.Progress = 1.0
+				}
+			} else {
+				status.Progress = progress.Progress
+			}
 		})
 	}
 }
 
-// updateCheckStatus 线程安全地更新校验状态
+// updateCheckStatus thread-safe check status update
 func (s *DashboardServer) updateCheckStatus(fn func(*CheckStatus)) {
 	s.checkMu.Lock()
 	defer s.checkMu.Unlock()
