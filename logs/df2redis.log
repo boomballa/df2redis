@@ -1,10 +1,10 @@
-2025-12-09 10:30:15 [INFO] df2redis 启动
-2025-12-09 10:30:16 [INFO] 配置文件: examples/migrate.sample.yaml
-2025-12-09 10:30:17 [INFO] 源库: dragonfly@10.46.128.12:7380
-2025-12-09 10:30:18 [INFO] 目标: redis-cluster@10.180.50.231:6379
-2025-12-09 10:30:19 [DEBUG] 连接源库...
-2025-12-09 10:30:20 [INFO] 源库连接成功
-2025-12-09 10:30:21 [WARN] RDB 文件较大，导入可能需要时间
-2025-12-09 10:30:22 [INFO] 开始导入快照...
-2025-12-09 10:30:23 [ERROR] 测试错误消息
-2025-12-09 10:30:24 [INFO] 导入进度: 10%
+2025-12-09 10:30:15 [INFO] df2redis started
+2025-12-09 10:30:16 [INFO] Config file: examples/migrate.sample.yaml
+2025-12-09 10:30:17 [INFO] Source: dragonfly@10.46.128.12:7380
+2025-12-09 10:30:18 [INFO] Target: redis-cluster@10.180.50.231:6379
+2025-12-09 10:30:19 [DEBUG] Connecting to source...
+2025-12-09 10:30:20 [INFO] Source connected
+2025-12-09 10:30:21 [WARN] RDB file is large; import may take time
+2025-12-09 10:30:22 [INFO] Starting snapshot import...
+2025-12-09 10:30:23 [ERROR] Test error message
+2025-12-09 10:30:24 [INFO] Import progress: 10%

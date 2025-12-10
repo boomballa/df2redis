@@ -115,7 +115,7 @@ type ValidationError struct {
 
 func (e *ValidationError) Error() string {
 	builder := strings.Builder{}
-	builder.WriteString("配置校验失败:")
+	builder.WriteString("Configuration validation failed:")
 	if e.Path != "" {
 		builder.WriteString(" ")
 		builder.WriteString(e.Path)
@@ -130,16 +130,16 @@ func (e *ValidationError) Error() string {
 // Load reads configuration file.
 func Load(path string) (*Config, error) {
 	if path == "" {
-		return nil, fmt.Errorf("配置文件路径为空")
+		return nil, fmt.Errorf("configuration file path is empty")
 	}
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return nil, fmt.Errorf("解析配置路径失败: %w", err)
+		return nil, fmt.Errorf("failed to resolve config path: %w", err)
 	}
 
 	file, err := os.Open(absPath)
 	if err != nil {
-		return nil, fmt.Errorf("无法打开配置文件 %s: %w", absPath, err)
+		return nil, fmt.Errorf("failed to open config file %s: %w", absPath, err)
 	}
 	defer file.Close()
 
@@ -150,11 +150,11 @@ func Load(path string) (*Config, error) {
 
 	data, err := json.Marshal(raw)
 	if err != nil {
-		return nil, fmt.Errorf("序列化配置失败: %w", err)
+		return nil, fmt.Errorf("failed to serialize config: %w", err)
 	}
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("反序列化配置失败: %w", err)
+		return nil, fmt.Errorf("failed to deserialize config: %w", err)
 	}
 
 	cfg.path = absPath
@@ -216,16 +216,16 @@ func (c *Config) Validate() error {
 	var errs []string
 
 	if c.Source.Addr == "" {
-		errs = append(errs, "source.addr 必填")
+		errs = append(errs, "source.addr is required")
 	}
 	if c.Target.Seed == "" {
-		errs = append(errs, "target.seed 必填")
+		errs = append(errs, "target.seed is required")
 	}
 	if c.Migrate.SnapshotPath == "" {
-		errs = append(errs, "migrate.snapshotPath 必填 (RDB 文件路径)")
+		errs = append(errs, "migrate.snapshotPath is required (RDB file path)")
 	}
 	if c.Migrate.ShakeBinary == "" {
-		errs = append(errs, "migrate.shakeBinary 必填 (redis-shake 可执行文件路径)")
+		errs = append(errs, "migrate.shakeBinary is required (redis-shake binary path)")
 	}
 	// When neither shakeArgs nor shakeConfigFile is provided a config file will be generated
 

@@ -33,20 +33,20 @@ func (p *RDBParser) ParseHeader() error {
 	// 1. Read magic header "REDIS0009"
 	magic := make([]byte, 9)
 	if _, err := io.ReadFull(p.reader, magic); err != nil {
-		return fmt.Errorf("读取 RDB magic 失败: %w", err)
+		return fmt.Errorf("failed to read RDB magic: %w", err)
 	}
 
 	// Verify magic string
 	expectedMagic := "REDIS0009"
 	if string(magic) != expectedMagic {
-		return fmt.Errorf("无效的 RDB magic: 期望 %s, 实际 %s", expectedMagic, string(magic))
+		return fmt.Errorf("invalid RDB magic: expect %s, got %s", expectedMagic, string(magic))
 	}
 
 	// 2. Skip AUX fields (0xFA + key + value) until we hit a non-0xFA opcode
 	for {
 		opcode, err := p.peekByte()
 		if err != nil {
-			return fmt.Errorf("读取 opcode 失败: %w", err)
+			return fmt.Errorf("failed to read opcode: %w", err)
 		}
 
 		if opcode != RDB_OPCODE_AUX {
@@ -77,7 +77,7 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			// TTL encoded as 8-byte little-endian milliseconds
 			p.expireMs, err = p.readInt64()
 			if err != nil {
-				return nil, fmt.Errorf("读取过期时间失败: %w", err)
+				return nil, fmt.Errorf("failed to read expiration time: %w", err)
 			}
 			continue
 
@@ -85,7 +85,7 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			// TTL encoded as 4-byte little-endian seconds
 			expireSec, err := p.readInt32()
 			if err != nil {
-				return nil, fmt.Errorf("读取过期时间失败: %w", err)
+				return nil, fmt.Errorf("failed to read expiration time: %w", err)
 			}
 			p.expireMs = int64(expireSec) * 1000
 			continue
@@ -94,7 +94,7 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			// Switch database
 			dbIndex, _, err := p.readLength()
 			if err != nil {
-				return nil, fmt.Errorf("读取 db 索引失败: %w", err)
+				return nil, fmt.Errorf("failed to read db index: %w", err)
 			}
 			p.currentDB = int(dbIndex)
 			continue
@@ -103,7 +103,7 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			// Dragonfly-specific JOURNAL_OFFSET marker, discard 8-byte offset
 			offset := make([]byte, 8)
 			if _, err := io.ReadFull(p.reader, offset); err != nil {
-				return nil, fmt.Errorf("读取 JOURNAL_OFFSET 失败: %w", err)
+				return nil, fmt.Errorf("failed to read JOURNAL_OFFSET: %w", err)
 			}
 			// Continue to the next opcode
 			continue
@@ -112,7 +112,7 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			// Dragonfly FULLSYNC_END marker, followed by eight zero bytes
 			zeros := make([]byte, 8)
 			if _, err := io.ReadFull(p.reader, zeros); err != nil {
-				return nil, fmt.Errorf("读取 FULLSYNC_END 后缀失败: %w", err)
+				return nil, fmt.Errorf("failed to read FULLSYNC_END suffix: %w", err)
 			}
 
 			// Signal the caller that full sync is complete so it can verify EOF tokens, etc.
@@ -122,7 +122,7 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			// RDB terminator; drop 8-byte checksum
 			checksum := make([]byte, 8)
 			if _, err := io.ReadFull(p.reader, checksum); err != nil {
-				return nil, fmt.Errorf("读取 EOF checksum 失败: %w", err)
+				return nil, fmt.Errorf("failed to read EOF checksum: %w", err)
 			}
 			return nil, io.EOF
 
@@ -171,11 +171,11 @@ func (p *RDBParser) parseKeyValue(typeByte byte) (*RDBEntry, error) {
 
 	default:
 		// Unknown module/stream etc.
-		return nil, fmt.Errorf("暂不支持的 RDB 类型: %d (key=%s)", typeByte, key)
+		return nil, fmt.Errorf("unsupported RDB type: %d (key=%s)", typeByte, key)
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("解析值失败 (type=%d, key=%s): %w", typeByte, key, err)
+		return nil, fmt.Errorf("failed to parse value (type=%d, key=%s): %w", typeByte, key, err)
 	}
 
 	// Reset expiration tracking
@@ -279,7 +279,7 @@ func (p *RDBParser) readLength() (uint64, bool, error) {
 		return uint64(firstByte & 0x3F), true, nil
 	}
 
-	return 0, false, fmt.Errorf("无效的长度编码类型: %d", typeField)
+	return 0, false, fmt.Errorf("invalid length encoding type: %d", typeField)
 }
 
 // readString reads an RDB string by delegating to rdb_string.go

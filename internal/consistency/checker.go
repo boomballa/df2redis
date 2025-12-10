@@ -19,11 +19,11 @@ func CompareStringValues(source, target *redisx.Client, keys []string) ([]Mismat
 	for _, key := range keys {
 		srcVal, err := source.GetString(key)
 		if err != nil {
-			return nil, fmt.Errorf("源库读取 %s 失败: %w", key, err)
+			return nil, fmt.Errorf("failed to read %s from source: %w", key, err)
 		}
 		tgtVal, err := target.GetString(key)
 		if err != nil {
-			return nil, fmt.Errorf("目标库读取 %s 失败: %w", key, err)
+			return nil, fmt.Errorf("failed to read %s from target: %w", key, err)
 		}
 		if srcVal != tgtVal {
 			mismatches = append(mismatches, Mismatch{
