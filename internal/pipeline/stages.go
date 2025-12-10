@@ -26,29 +26,29 @@ func NewPrecheckStage() Stage {
 			}
 			for _, check := range checks {
 				if check.path == "" {
-					return Result{Status: StatusFailed, Message: fmt.Sprintf("%s 未配置", check.desc)}
+					return Result{Status: StatusFailed, Message: fmt.Sprintf("%s is not configured", check.desc)}
 				}
 				if check.desc == "RDB snapshot" && bool(ctx.Config.Migrate.AutoBgsave) {
 					continue
 				}
 				if _, err := os.Stat(check.path); err != nil {
-					return Result{Status: StatusFailed, Message: fmt.Sprintf("%s 不存在: %v", check.desc, err)}
+					return Result{Status: StatusFailed, Message: fmt.Sprintf("%s does not exist: %v", check.desc, err)}
 				}
 			}
 			if cfg := strings.TrimSpace(ctx.Config.Migrate.ShakeConfigFile); cfg != "" {
 				if _, err := os.Stat(cfg); err != nil {
-					return Result{Status: StatusFailed, Message: fmt.Sprintf("redis-shake 配置文件不存在: %v", err)}
+					return Result{Status: StatusFailed, Message: fmt.Sprintf("redis-shake config file not found: %v", err)}
 				}
 			} else if strings.TrimSpace(ctx.Config.Migrate.ShakeArgs) == "" {
 				// Later stages will auto-generate a shake config
 			}
 			if err := ctx.SourceRedis.Ping(); err != nil {
-				return Result{Status: StatusFailed, Message: fmt.Sprintf("源库不可用: %v", err)}
+				return Result{Status: StatusFailed, Message: fmt.Sprintf("Source endpoint unavailable: %v", err)}
 			}
 			if err := ctx.TargetRedis.Ping(); err != nil {
-				return Result{Status: StatusFailed, Message: fmt.Sprintf("目标库不可用: %v", err)}
+				return Result{Status: StatusFailed, Message: fmt.Sprintf("Target endpoint unavailable: %v", err)}
 			}
-			return Result{Status: StatusSuccess, Message: "依赖校验通过"}
+			return Result{Status: StatusSuccess, Message: "Dependency check passed"}
 		},
 	}
 }
@@ -64,7 +64,7 @@ func NewShakeConfigStage() Stage {
 
 			// Skip generation when user provided custom settings that are not auto paths
 			if hasArgs || (cfgPath != "" && cfgPath != generatedPath) {
-				return Result{Status: StatusSkipped, Message: "已提供 shakeConfigFile 或 shakeArgs，跳过生成"}
+				return Result{Status: StatusSkipped, Message: "shakeConfigFile or shakeArgs provided; skipping generation"}
 			}
 
 			path, err := GenerateShakeConfigFile(ctx.Config, ctx.StateDir)
@@ -74,7 +74,7 @@ func NewShakeConfigStage() Stage {
 			if ctx.Importer != nil {
 				ctx.Importer.SetConfigFile(path)
 			}
-			return Result{Status: StatusSuccess, Message: fmt.Sprintf("shake 配置已生成: %s", path)}
+			return Result{Status: StatusSuccess, Message: fmt.Sprintf("shake config generated: %s", path)}
 		},
 	}
 }
@@ -85,7 +85,7 @@ func NewBgsaveStage() Stage {
 		name: "bgsave",
 		run: func(ctx *Context) Result {
 			if !bool(ctx.Config.Migrate.AutoBgsave) {
-				return Result{Status: StatusSkipped, Message: "未开启 autoBgsave，跳过"}
+				return Result{Status: StatusSkipped, Message: "autoBgsave disabled; skipping"}
 			}
 			startVal, err := ctx.SourceRedis.Do("LASTSAVE")
 			var last int64
@@ -93,13 +93,13 @@ func NewBgsaveStage() Stage {
 				last, _ = redisx.ToInt64(startVal)
 			}
 			if _, err := ctx.SourceRedis.Do("BGSAVE"); err != nil {
-				return Result{Status: StatusFailed, Message: fmt.Sprintf("触发 BGSAVE 失败: %v", err)}
+				return Result{Status: StatusFailed, Message: fmt.Sprintf("Failed to trigger BGSAVE: %v", err)}
 			}
 			timeout := time.Duration(ctx.Config.Migrate.BgsaveTimeout) * time.Second
 			deadline := time.Now().Add(timeout)
 			for {
 				if time.Now().After(deadline) {
-					return Result{Status: StatusFailed, Message: fmt.Sprintf("BGSAVE 超时（%ds）", ctx.Config.Migrate.BgsaveTimeout)}
+					return Result{Status: StatusFailed, Message: fmt.Sprintf("BGSAVE timed out (%ds)", ctx.Config.Migrate.BgsaveTimeout)}
 				}
 				time.Sleep(2 * time.Second)
 				val, err := ctx.SourceRedis.Do("LASTSAVE")
@@ -111,7 +111,7 @@ func NewBgsaveStage() Stage {
 					continue
 				}
 				if ts > last {
-					return Result{Status: StatusSuccess, Message: fmt.Sprintf("BGSAVE 完成，LASTSAVE=%d", ts)}
+					return Result{Status: StatusSuccess, Message: fmt.Sprintf("BGSAVE completed, LASTSAVE=%d", ts)}
 				}
 			}
 		},
@@ -137,7 +137,7 @@ func NewImportStage() Stage {
 			if ctx.State != nil {
 				_ = ctx.State.RecordMetric("import.duration.seconds", duration.Seconds())
 			}
-			return Result{Status: StatusSuccess, Message: fmt.Sprintf("全量导入完成，用时 %.2fs", duration.Seconds())}
+			return Result{Status: StatusSuccess, Message: fmt.Sprintf("Full import completed in %.2fs", duration.Seconds())}
 		},
 	}
 }
@@ -147,7 +147,7 @@ func NewIncrementalPlaceholderStage() Stage {
 	return StageFunc{
 		name: "incremental-sync",
 		run: func(ctx *Context) Result {
-			return Result{Status: StatusSkipped, Message: "增量同步（Dragonfly journal 流）尚未实现"}
+			return Result{Status: StatusSkipped, Message: "Incremental sync (Dragonfly journal stream) not implemented"}
 		},
 	}
 }

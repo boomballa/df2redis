@@ -22,7 +22,7 @@ type Importer struct {
 // NewImporter builds an importer instance.
 func NewImporter(cfg config.MigrateConfig, target config.TargetConfig) (*Importer, error) {
 	if cfg.ShakeBinary == "" {
-		return nil, errors.New("shakeBinary 未配置")
+		return nil, errors.New("shakeBinary is not configured")
 	}
 	return &Importer{cfg: cfg, target: target}, nil
 }
@@ -45,10 +45,10 @@ func (i *Importer) Run(ctx context.Context) error {
 
 	start := time.Now()
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("启动 redis-shake 失败: %w", err)
+		return fmt.Errorf("failed to start redis-shake: %w", err)
 	}
 	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("redis-shake 退出异常: %w", err)
+		return fmt.Errorf("redis-shake exited unexpectedly: %w", err)
 	}
 	_ = start
 	return nil
@@ -58,7 +58,7 @@ func (i *Importer) buildArgs() ([]string, error) {
 	// If user provides full args, respect as-is.
 	rawArgs := strings.TrimSpace(i.cfg.ShakeArgs)
 	if rawArgs == "" && i.cfg.ShakeConfigFile == "" {
-		return nil, errors.New("shakeArgs 或 shakeConfigFile 必须提供其一，以描述导入参数")
+		return nil, errors.New("either shakeArgs or shakeConfigFile must be provided to describe import parameters")
 	}
 	args := []string{}
 	if i.cfg.ShakeConfigFile != "" {

@@ -64,7 +64,7 @@ func (c *ClusterClient) Connect() error {
 	// 1. Connect to the seed node
 	seedClient, err := c.connectNode(c.seedAddr)
 	if err != nil {
-		return fmt.Errorf("连接 seed 节点失败: %w", err)
+		return fmt.Errorf("failed to connect to seed node: %w", err)
 	}
 
 	// 2. Execute CLUSTER NODES to detect cluster mode
@@ -81,18 +81,18 @@ func (c *ClusterClient) Connect() error {
 			c.mu.Unlock()
 			return nil
 		}
-		return fmt.Errorf("执行 CLUSTER NODES 失败: %w", err)
+		return fmt.Errorf("failed to execute CLUSTER NODES: %w", err)
 	}
 
 	// 3. Parse topology data
 	nodesStr, err := redisx.ToString(resp)
 	if err != nil {
-		return fmt.Errorf("解析 CLUSTER NODES 响应失败: %w", err)
+		return fmt.Errorf("failed to parse CLUSTER NODES response: %w", err)
 	}
 
 	topology, err := parseClusterNodes(nodesStr)
 	if err != nil {
-		return fmt.Errorf("解析拓扑信息失败: %w", err)
+		return fmt.Errorf("failed to parse cluster topology: %w", err)
 	}
 
 	// 4. Build the slot map
@@ -119,7 +119,7 @@ func (c *ClusterClient) Connect() error {
 		if node.Addr != c.seedAddr {
 			client, err := c.connectNode(node.Addr)
 			if err != nil {
-				return fmt.Errorf("连接节点 %s 失败: %w", node.Addr, err)
+				return fmt.Errorf("failed to connect to node %s: %w", node.Addr, err)
 			}
 			c.nodes[node.Addr] = client
 		}
@@ -139,7 +139,7 @@ func (c *ClusterClient) connectNode(addr string) (*redisx.Client, error) {
 		TLS:      c.useTLS,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("连接节点失败: %w", err)
+		return nil, fmt.Errorf("failed to connect to node: %w", err)
 	}
 
 	return client, nil
@@ -161,7 +161,7 @@ func (c *ClusterClient) Do(cmd string, args ...string) (interface{}, error) {
 	// Standalone execution
 	if !isCluster {
 		if standaloneClient == nil {
-			return nil, fmt.Errorf("单机客户端未初始化")
+			return nil, fmt.Errorf("standalone client not initialized")
 		}
 		return standaloneClient.Do(cmd, interfaceArgs...)
 	}
@@ -175,7 +175,7 @@ func (c *ClusterClient) Do(cmd string, args ...string) (interface{}, error) {
 	c.mu.RUnlock()
 
 	if !ok || client == nil {
-		return nil, fmt.Errorf("未找到 slot %d 对应的节点", slot)
+		return nil, fmt.Errorf("no node found for slot %d", slot)
 	}
 
 	// Forward command
