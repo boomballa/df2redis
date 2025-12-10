@@ -707,37 +707,36 @@
   const checkStartBtn = document.getElementById('check-start-btn');
   const checkStopBtn = document.getElementById('check-stop-btn');
   const checkProgressPanel = document.getElementById('check-progress-panel');
-  const checkModeRadios = document.querySelectorAll('input[name="check-mode"]');
-  const samplingOptions = document.getElementById('sampling-options');
+  const checkCompareModeSelect = document.getElementById('check-compare-mode');
+  const checkCompareTimesInput = document.getElementById('check-compare-times');
+  const checkQPSInput = document.getElementById('check-qps');
+  const checkBatchCountInput = document.getElementById('check-batch-count');
+  const checkParallelInput = document.getElementById('check-parallel');
 
   if (!checkStartBtn) return;
 
   let pollTimer = null;
   let isRunning = false;
 
-  // Toggle sampling options based on mode
-  checkModeRadios.forEach(radio => {
-    radio.addEventListener('change', (e) => {
-      if (e.target.value === 'full') {
-        samplingOptions.style.display = 'none';
-      } else {
-        samplingOptions.style.display = 'flex';
-      }
-    });
-  });
-
   // Start validation
   checkStartBtn.addEventListener('click', async () => {
-    const mode = document.querySelector('input[name="check-mode"]:checked').value;
-    const sampleSize = parseInt(document.getElementById('check-sample-size').value) || 1000;
-    const keyPrefix = document.getElementById('check-key-prefix').value.trim();
-    const qps = parseInt(document.getElementById('check-qps').value) || 100;
+    const compareMode = parseInt(checkCompareModeSelect.value) || 2;
+    const compareTimes = parseInt(checkCompareTimesInput.value) || 3;
+    const qps = parseInt(checkQPSInput.value) || 15000;
+    const batchCount = parseInt(checkBatchCountInput.value) || 256;
+    const parallel = parseInt(checkParallelInput.value) || 5;
 
     try {
       const res = await fetch('/api/check/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, sampleSize, keyPrefix, qps })
+        body: JSON.stringify({
+          compareMode,
+          compareTimes,
+          qps,
+          batchCount,
+          parallel
+        })
       });
 
       const data = await res.json();
@@ -802,6 +801,12 @@
   // Update UI with status
   function updateUI(status) {
     if (!status || !status.running) return;
+
+    // Update round indicator
+    const roundIndicator = document.getElementById('check-round-indicator');
+    if (roundIndicator && status.round && status.compareTimes) {
+      roundIndicator.textContent = `Round ${status.round}/${status.compareTimes}`;
+    }
 
     // Update progress bar
     const progress = (status.progress || 0) * 100;

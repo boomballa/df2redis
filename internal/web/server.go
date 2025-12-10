@@ -612,14 +612,14 @@ func (s *DashboardServer) inferLogFilePath() string {
 // CheckStatus holds the current status of a validation task
 type CheckStatus struct {
 	Running          bool      `json:"running"`
-	Mode             string    `json:"mode"`              // "sampling" or "full"
-	SampleSize       int       `json:"sampleSize"`        // Only for sampling mode
-	KeyPrefix        string    `json:"keyPrefix"`         // Key filter prefix
+	CompareMode      int       `json:"compareMode"`       // 1=全值, 2=长度, 3=Key轮廓, 4=智能
+	CompareTimes     int       `json:"compareTimes"`      // 比较轮次
+	Round            int       `json:"round"`             // 当前轮次
 	QPS              int       `json:"qps"`               // QPS limit
-	StartedAt        time.Time `json:"startedAt"`         //开始时间
+	StartedAt        time.Time `json:"startedAt"`         // 开始时间
 	Progress         float64   `json:"progress"`          // 0.0 - 1.0
 	CheckedKeys      int64     `json:"checkedKeys"`       // 已检查的 key 数量
-	TotalKeys        int64     `json:"totalKeys"`         // 预计总 key 数（采样模式为采样数，全量为总数）
+	TotalKeys        int64     `json:"totalKeys"`         // 总 key 数
 	ConsistentKeys   int64     `json:"consistentKeys"`    // 一致的 key 数量
 	InconsistentKeys int64     `json:"inconsistentKeys"`  // 不一致的 key 数量
 	ErrorCount       int64     `json:"errorCount"`        // 错误数量
