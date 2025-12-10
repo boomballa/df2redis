@@ -718,6 +718,22 @@
   let pollTimer = null;
   let isRunning = false;
 
+  // Helper functions
+  function toNumber(val) {
+    if (typeof val === 'number') return val;
+    const num = Number(val);
+    return Number.isNaN(num) ? 0 : num;
+  }
+
+  function formatNumber(val) {
+    const num = toNumber(val);
+    if (Number.isNaN(num)) return val;
+    if (Math.abs(num) >= 1000) {
+      return num.toLocaleString();
+    }
+    return num.toFixed(0);
+  }
+
   // Start validation
   checkStartBtn.addEventListener('click', async () => {
     const compareMode = parseInt(checkCompareModeSelect.value) || 2;
