@@ -145,11 +145,12 @@ func (c *Checker) buildArgs() []string {
 func (c *Checker) parseOutput(r io.Reader) {
 	scanner := bufio.NewScanner(r)
 
-	// 正则表达式
-	roundRE := regexp.MustCompile(`start (\d+)th time compare`)
-	keyScanRE := regexp.MustCompile(`KeyScan (\d+)/(\d+)`)
-	conflictRE := regexp.MustCompile(`(\d+) key\(s\) conflict`)
-	missingRE := regexp.MustCompile(`(\d+) key\(s\) lack`)
+	// 正则表达式 - 匹配多种可能的格式
+	roundRE := regexp.MustCompile(`start (\d+)(?:th|st|nd|rd) time compare`)
+	keyScanRE := regexp.MustCompile(`KeyScan[:\s]+(\d+)[/\s]+(\d+)`)
+	scanProgressRE := regexp.MustCompile(`(\d+)\s*/\s*(\d+)`)  // 通用进度格式
+	conflictRE := regexp.MustCompile(`(\d+)\s+key\(s\)\s+conflict`)
+	missingRE := regexp.MustCompile(`(\d+)\s+key\(s\)\s+lack`)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -160,6 +161,7 @@ func (c *Checker) parseOutput(r io.Reader) {
 		// 解析轮次
 		if matches := roundRE.FindStringSubmatch(line); len(matches) > 1 {
 			if round, err := strconv.Atoi(matches[1]); err == nil {
+				log.Printf("[redis-full-check] Detected Round: %d", round)
 				c.updateProgress(func(p *Progress) {
 					p.Round = round
 					p.Message = fmt.Sprintf("Round %d: Scanning keys...", round)
@@ -167,11 +169,12 @@ func (c *Checker) parseOutput(r io.Reader) {
 			}
 		}
 
-		// 解析扫描进度
+		// 解析扫描进度 - 优先匹配 KeyScan 格式
 		if matches := keyScanRE.FindStringSubmatch(line); len(matches) > 2 {
 			checked, _ := strconv.ParseInt(matches[1], 10, 64)
 			total, _ := strconv.ParseInt(matches[2], 10, 64)
 
+			log.Printf("[redis-full-check] Progress: %d/%d", checked, total)
 			c.updateProgress(func(p *Progress) {
 				p.CheckedKeys = checked
 				p.TotalKeys = total
@@ -180,11 +183,28 @@ func (c *Checker) parseOutput(r io.Reader) {
 				}
 				p.Message = fmt.Sprintf("Scanned %d/%d keys", checked, total)
 			})
+		} else if strings.Contains(line, "scan") || strings.Contains(line, "Scan") {
+			// 尝试通用进度格式
+			if matches := scanProgressRE.FindStringSubmatch(line); len(matches) > 2 {
+				checked, _ := strconv.ParseInt(matches[1], 10, 64)
+				total, _ := strconv.ParseInt(matches[2], 10, 64)
+
+				if total > 0 && checked <= total {
+					log.Printf("[redis-full-check] Generic progress: %d/%d", checked, total)
+					c.updateProgress(func(p *Progress) {
+						p.CheckedKeys = checked
+						p.TotalKeys = total
+						p.Progress = float64(checked) / float64(total)
+						p.Message = fmt.Sprintf("Scanned %d/%d keys", checked, total)
+					})
+				}
+			}
 		}
 
 		// 解析冲突统计
 		if matches := conflictRE.FindStringSubmatch(line); len(matches) > 1 {
 			if conflicts, err := strconv.ParseInt(matches[1], 10, 64); err == nil {
+				log.Printf("[redis-full-check] Conflicts: %d", conflicts)
 				c.updateProgress(func(p *Progress) {
 					p.ConflictKeys = conflicts
 				})
@@ -194,6 +214,7 @@ func (c *Checker) parseOutput(r io.Reader) {
 		// 解析缺失统计
 		if matches := missingRE.FindStringSubmatch(line); len(matches) > 1 {
 			if missing, err := strconv.ParseInt(matches[1], 10, 64); err == nil {
+				log.Printf("[redis-full-check] Missing: %d", missing)
 				c.updateProgress(func(p *Progress) {
 					p.MissingKeys = missing
 				})
@@ -201,7 +222,8 @@ func (c *Checker) parseOutput(r io.Reader) {
 		}
 
 		// 检测完成
-		if strings.Contains(line, "all finish") {
+		if strings.Contains(line, "all finish") || strings.Contains(line, "finish") {
+			log.Println("[redis-full-check] Detected completion")
 			c.updateProgress(func(p *Progress) {
 				p.Progress = 1.0
 				p.Message = "Validation completed"
