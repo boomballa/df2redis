@@ -14,36 +14,37 @@ import (
 	"sync"
 )
 
-// CheckConfig 校验配置
+// CheckConfig validation configuration
 type CheckConfig struct {
-	Binary       string // redis-full-check 二进制路径
-	SourceAddr   string // 源地址
-	SourcePass   string // 源密码
-	TargetAddr   string // 目标地址
-	TargetPass   string // 目标密码
-	CompareMode  int    // 比较模式：1=全值, 2=长度, 3=Key轮廓, 4=智能
-	CompareTimes int    // 比较轮次
-	QPS          int    // QPS 限制
-	BatchCount   int    // 批量大小
-	Parallel     int    // 并发度
-	ResultDB     string // SQLite 结果文件路径
-	ResultFile   string // 文本结果文件路径
+	Binary       string // redis-full-check binary path
+	SourceAddr   string // Source address
+	SourcePass   string // Source password
+	TargetAddr   string // Target address
+	TargetPass   string // Target password
+	CompareMode  int    // Compare mode: 1=full value, 2=length, 3=key outline, 4=smart
+	CompareTimes int    // Number of compare rounds
+	QPS          int    // QPS limit
+	BatchCount   int    // Batch size
+	Parallel     int    // Parallel workers
+	ResultDB     string // SQLite result file path
+	ResultFile   string // Text result file path
 }
 
-// Progress 进度信息
+// Progress validation progress information
 type Progress struct {
-	Round          int     // 当前轮次
-	TotalKeys      int64   // 总 key 数
-	CheckedKeys    int64   // 已检查 key 数
-	ConsistentKeys int64   // 一致 key 数
-	ConflictKeys   int64   // 冲突 key 数
-	MissingKeys    int64   // 缺失 key 数
-	ErrorCount     int64   // 错误数
-	Progress       float64 // 进度百分比
-	Message        string  // 状态消息
+	Round          int     // Current round
+	CompareTimes   int     // Total rounds
+	TotalKeys      int64   // Total keys
+	CheckedKeys    int64   // Checked keys
+	ConsistentKeys int64   // Consistent keys
+	ConflictKeys   int64   // Conflict keys
+	MissingKeys    int64   // Missing keys
+	ErrorCount     int64   // Error count
+	Progress       float64 // Progress percentage
+	Message        string  // Status message
 }
 
-// Checker redis-full-check 执行器
+// Checker redis-full-check executor
 type Checker struct {
 	config     CheckConfig
 	progressCh chan<- Progress
@@ -51,7 +52,7 @@ type Checker struct {
 	stats      Progress
 }
 
-// NewChecker 创建校验器
+// NewChecker creates a new validation checker
 func NewChecker(config CheckConfig, progressCh chan<- Progress) *Checker {
 	return &Checker{
 		config:     config,
@@ -59,31 +60,31 @@ func NewChecker(config CheckConfig, progressCh chan<- Progress) *Checker {
 	}
 }
 
-// Run 执行校验
+// Run executes validation
 func (c *Checker) Run(ctx context.Context) error {
 	args := c.buildArgs()
 
-	log.Printf("[redis-full-check] 启动校验: %s %v", c.config.Binary, args)
+	log.Printf("[redis-full-check] Starting validation: %s %v", c.config.Binary, args)
 
 	cmd := exec.CommandContext(ctx, c.config.Binary, args...)
 
-	// 捕获输出
+	// Capture output
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("创建 stdout 管道失败: %w", err)
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return fmt.Errorf("创建 stderr 管道失败: %w", err)
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
 
-	// 启动进程
+	// Start process
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("启动 redis-full-check 失败: %w", err)
+		return fmt.Errorf("failed to start redis-full-check: %w", err)
 	}
 
-	// 并行解析输出
+	// Parse output in parallel
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -97,25 +98,25 @@ func (c *Checker) Run(ctx context.Context) error {
 		c.parseOutput(stderr)
 	}()
 
-	// 等待进程结束
+	// Wait for process to exit
 	errChan := make(chan error, 1)
 	go func() {
 		errChan <- cmd.Wait()
 	}()
 
-	// 等待输出解析完成
+	// Wait for output parsing to complete
 	wg.Wait()
 
-	// 检查进程退出状态
+	// Check process exit status
 	if err := <-errChan; err != nil {
-		return fmt.Errorf("redis-full-check 执行失败: %w", err)
+		return fmt.Errorf("redis-full-check execution failed: %w", err)
 	}
 
-	log.Println("[redis-full-check] 校验完成")
+	log.Println("[redis-full-check] Validation completed")
 	return nil
 }
 
-// buildArgs 构建命令行参数
+// buildArgs builds command line arguments
 func (c *Checker) buildArgs() []string {
 	args := []string{
 		"--source", c.config.SourceAddr,
@@ -127,10 +128,10 @@ func (c *Checker) buildArgs() []string {
 		"--parallel", strconv.Itoa(c.config.Parallel),
 		"--db", c.config.ResultDB,
 		"--result", c.config.ResultFile,
-		"--metric", // 输出指标
+		"--metric", // Output metrics
 	}
 
-	// 添加密码（如果有）
+	// Add passwords if provided
 	if c.config.SourcePass != "" {
 		args = append(args, "--sourcepassword", c.config.SourcePass)
 	}
@@ -141,35 +142,38 @@ func (c *Checker) buildArgs() []string {
 	return args
 }
 
-// parseOutput 解析输出并更新进度
+// parseOutput parses output and updates progress
 func (c *Checker) parseOutput(r io.Reader) {
 	scanner := bufio.NewScanner(r)
 
-	// 正则表达式 - 匹配多种可能的格式
+	// Regular expressions - match various possible formats
 	roundRE := regexp.MustCompile(`start (\d+)(?:th|st|nd|rd) time compare`)
 	keyScanRE := regexp.MustCompile(`KeyScan[:\s]+(\d+)[/\s]+(\d+)`)
-	scanProgressRE := regexp.MustCompile(`(\d+)\s*/\s*(\d+)`)  // 通用进度格式
+	scanProgressRE := regexp.MustCompile(`(\d+)\s*/\s*(\d+)`)  // Generic progress format
 	conflictRE := regexp.MustCompile(`(\d+)\s+key\(s\)\s+conflict`)
 	missingRE := regexp.MustCompile(`(\d+)\s+key\(s\)\s+lack`)
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// 输出到日志
+		// Output to log
 		log.Printf("[redis-full-check] %s", line)
 
-		// 解析轮次
+		// Parse round number
 		if matches := roundRE.FindStringSubmatch(line); len(matches) > 1 {
 			if round, err := strconv.Atoi(matches[1]); err == nil {
 				log.Printf("[redis-full-check] Detected Round: %d", round)
 				c.updateProgress(func(p *Progress) {
 					p.Round = round
 					p.Message = fmt.Sprintf("Round %d: Scanning keys...", round)
+					// Reset progress when new round starts (but keep previous statistics)
+					p.CheckedKeys = 0
+					p.Progress = 0
 				})
 			}
 		}
 
-		// 解析扫描进度 - 优先匹配 KeyScan 格式
+		// Parse scan progress - prioritize KeyScan format
 		if matches := keyScanRE.FindStringSubmatch(line); len(matches) > 2 {
 			checked, _ := strconv.ParseInt(matches[1], 10, 64)
 			total, _ := strconv.ParseInt(matches[2], 10, 64)
@@ -184,7 +188,7 @@ func (c *Checker) parseOutput(r io.Reader) {
 				p.Message = fmt.Sprintf("Scanned %d/%d keys", checked, total)
 			})
 		} else if strings.Contains(line, "scan") || strings.Contains(line, "Scan") {
-			// 尝试通用进度格式
+			// Try generic progress format
 			if matches := scanProgressRE.FindStringSubmatch(line); len(matches) > 2 {
 				checked, _ := strconv.ParseInt(matches[1], 10, 64)
 				total, _ := strconv.ParseInt(matches[2], 10, 64)
@@ -201,7 +205,7 @@ func (c *Checker) parseOutput(r io.Reader) {
 			}
 		}
 
-		// 解析冲突统计
+		// Parse conflict statistics
 		if matches := conflictRE.FindStringSubmatch(line); len(matches) > 1 {
 			if conflicts, err := strconv.ParseInt(matches[1], 10, 64); err == nil {
 				log.Printf("[redis-full-check] Conflicts: %d", conflicts)
@@ -211,7 +215,7 @@ func (c *Checker) parseOutput(r io.Reader) {
 			}
 		}
 
-		// 解析缺失统计
+		// Parse missing statistics
 		if matches := missingRE.FindStringSubmatch(line); len(matches) > 1 {
 			if missing, err := strconv.ParseInt(matches[1], 10, 64); err == nil {
 				log.Printf("[redis-full-check] Missing: %d", missing)
@@ -221,9 +225,9 @@ func (c *Checker) parseOutput(r io.Reader) {
 			}
 		}
 
-		// 检测完成
-		if strings.Contains(line, "all finish") || strings.Contains(line, "finish") {
-			log.Println("[redis-full-check] Detected completion")
+		// Detect completion (only detect explicit completion signal to avoid misjudging end of each round)
+		if strings.Contains(line, "all finish") {
+			log.Println("[redis-full-check] Detected completion: all finish")
 			c.updateProgress(func(p *Progress) {
 				p.Progress = 1.0
 				p.Message = "Validation completed"
@@ -232,39 +236,41 @@ func (c *Checker) parseOutput(r io.Reader) {
 	}
 }
 
-// updateProgress 线程安全地更新进度
+// updateProgress thread-safe progress update
 func (c *Checker) updateProgress(fn func(*Progress)) {
 	c.mu.Lock()
 	fn(&c.stats)
+	// Ensure CompareTimes is always set
+	c.stats.CompareTimes = c.config.CompareTimes
 	stats := c.stats
 	c.mu.Unlock()
 
-	// 发送进度更新
+	// Send progress update
 	if c.progressCh != nil {
 		select {
 		case c.progressCh <- stats:
 		default:
-			// 不阻塞
+			// Non-blocking
 		}
 	}
 }
 
-// ParseResultFile 解析文本结果文件
+// ParseResultFile parses text result file
 func ParseResultFile(path string) (*CheckSummary, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
 	}
 
-	// TODO: 实现文本文件解析
-	// 格式：db\tdiff-type\tkey\tfield
+	// TODO: Implement text file parsing
+	// Format: db\tdiff-type\tkey\tfield
 
 	return &CheckSummary{
 		FilePath: absPath,
 	}, nil
 }
 
-// CheckSummary 校验摘要
+// CheckSummary validation summary
 type CheckSummary struct {
 	FilePath       string
 	TotalConflicts int64
