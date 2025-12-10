@@ -32,8 +32,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 沟通语言
 - **IMPORTANT**: 必须使用中文回答用户的所有问题和进行日常交流
-- 代码注释保持中文（与项目现有风格一致）
-- 错误信息和日志输出使用中文
+- **代码注释必须使用英文**（Code comments MUST be in English）
+- **日志消息必须使用英文**（Log messages MUST be in English）
+- **错误信息必须使用英文**（Error messages MUST be in English）
 
 ### Git 提交规范
 当完成重要的里程碑功能时，需要提供符合规范的英文 Git 提交信息。遵循 Conventional Commits 规范：
@@ -390,7 +391,8 @@ The following features are planned but not yet implemented:
 
 ## Code Style Notes
 
-- Chinese comments and log messages are used throughout (project convention)
+- **Code comments MUST be in English** (IMPORTANT: all code comments, including struct field comments, function comments, and inline comments must be written in English)
+- Log messages use Chinese format (project convention)
 - Error messages use Chinese format: `fmt.Errorf("连接源库失败: %w", err)`
 - Stage names use kebab-case: "precheck", "shake-config", "incremental-sync"
 - Configuration fields use camelCase in YAML: `autoBgsave`, `bgsaveTimeoutSeconds`
