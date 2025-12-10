@@ -44,13 +44,13 @@ func (s *DashboardServer) handleCheckStart(w http.ResponseWriter, r *http.Reques
 		req.CompareTimes = 3 // 默认：3 轮
 	}
 	if req.QPS <= 0 {
-		req.QPS = 15000 // 默认：15000
+		req.QPS = 5000 // 默认：5000（降低以减少对源库和目标库的压力）
 	}
 	if req.BatchCount <= 0 {
 		req.BatchCount = 256 // 默认：256
 	}
 	if req.Parallel <= 0 {
-		req.Parallel = 5 // 默认：5
+		req.Parallel = 2 // 默认：2（降低并发以减少资源消耗）
 	}
 
 	// 检查是否已有任务运行
@@ -201,6 +201,8 @@ func (s *DashboardServer) runRealCheckTask(ctx context.Context, compareMode, com
 		status.Progress = 1.0
 		status.Message = "Validation completed"
 		status.Running = false
+		// 确保显示最终轮次
+		status.Round = status.CompareTimes
 	})
 
 	log.Println("[Check] 校验任务完成")

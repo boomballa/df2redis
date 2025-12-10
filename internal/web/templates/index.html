@@ -285,33 +285,33 @@
                     <option value="4">Smart (Auto)</option>
                     <option value="3">Key Outline (Fastest)</option>
                 </select>
-                <span class="check-hint">比较精度：长度对比（快速）、全值对比（精确）、智能（自适应）</span>
+                <span class="check-hint">Comparison precision: length, full value, smart, or key outline</span>
             </div>
             <div class="check-form-group">
                 <label class="check-label" for="check-compare-times">Compare Rounds</label>
                 <input type="number" id="check-compare-times" class="check-input" value="3" min="1" max="10">
-                <span class="check-hint">迭代轮次：多轮验证处理同步延迟</span>
+                <span class="check-hint">Number of validation rounds to handle sync delays</span>
             </div>
         </div>
 
         <div class="check-form-row">
             <div class="check-form-group">
                 <label class="check-label" for="check-qps">QPS Limit</label>
-                <input type="number" id="check-qps" class="check-input" value="15000" min="1" max="50000">
-                <span class="check-hint">每秒查询数限制</span>
+                <input type="number" id="check-qps" class="check-input" value="5000" min="1" max="50000">
+                <span class="check-hint">Max queries per second</span>
             </div>
             <div class="check-form-group">
                 <label class="check-label" for="check-batch-count">Batch Size</label>
                 <input type="number" id="check-batch-count" class="check-input" value="256" min="1" max="10000">
-                <span class="check-hint">每批次 key 数量</span>
+                <span class="check-hint">Number of keys per batch</span>
             </div>
         </div>
 
         <div class="check-form-row">
             <div class="check-form-group">
                 <label class="check-label" for="check-parallel">Parallel</label>
-                <input type="number" id="check-parallel" class="check-input" value="5" min="1" max="100">
-                <span class="check-hint">并发 goroutine 数量</span>
+                <input type="number" id="check-parallel" class="check-input" value="2" min="1" max="100">
+                <span class="check-hint">Number of concurrent workers</span>
             </div>
         </div>
 
