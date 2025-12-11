@@ -68,7 +68,11 @@ func (p *RDBParser) readStringEncoded(encoding uint64) (string, error) {
 		return p.readLZFString()
 
 	default:
-		return "", fmt.Errorf("unsupported string encoding: %d", encoding)
+		// Check if this might be a Dragonfly-specific encoding
+		if encoding >= 4 && encoding <= 15 {
+			return "", fmt.Errorf("unsupported string encoding: %d (possible Dragonfly extension - please report this)", encoding)
+		}
+		return "", fmt.Errorf("unsupported string encoding: %d (invalid encoding value)", encoding)
 	}
 }
 

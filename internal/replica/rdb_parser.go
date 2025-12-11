@@ -2,16 +2,21 @@ package replica
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
 	"time"
+
+	"github.com/pierrec/lz4/v4"
 )
 
 // RDBParser streams and decodes RDB payloads
 type RDBParser struct {
-	reader *bufio.Reader
-	flowID int
+	reader         *bufio.Reader // current active reader
+	originalReader *bufio.Reader // original network stream
+	flowID         int
 
 	// State tracked during parsing
 	currentDB int   // current database index
@@ -20,11 +25,13 @@ type RDBParser struct {
 
 // NewRDBParser creates a parser bound to a reader
 func NewRDBParser(reader io.Reader, flowID int) *RDBParser {
+	bufReader := bufio.NewReader(reader)
 	return &RDBParser{
-		reader:    bufio.NewReader(reader),
-		flowID:    flowID,
-		currentDB: 0,
-		expireMs:  0,
+		reader:         bufReader,
+		originalReader: bufReader,
+		flowID:         flowID,
+		currentDB:      0,
+		expireMs:       0,
 	}
 }
 
@@ -127,13 +134,41 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			return nil, io.EOF
 
 		case RDB_OPCODE_AUX:
-			// Ignore AUX fields
-			_ = p.readString() // key
-			_ = p.readString() // value
+			// Read AUX key
+			auxKey, err := p.readStringFull()
+			if err != nil {
+				return nil, fmt.Errorf("failed to read AUX key: %w", err)
+			}
+			// Read AUX value
+			auxValue, err := p.readStringFull()
+			if err != nil {
+				return nil, fmt.Errorf("failed to read AUX value for key '%s': %w", auxKey, err)
+			}
+			log.Printf("  [FLOW-%d] AUX: %s = %s", p.flowID, auxKey, auxValue)
+			continue
+
+		case RDB_OPCODE_COMPRESSED_LZ4_BLOB_START:
+			// Dragonfly LZ4 compressed blob start
+			log.Printf("  [FLOW-%d] ✓ LZ4 compressed blob detected", p.flowID)
+			if err := p.handleCompressedBlob(); err != nil {
+				return nil, fmt.Errorf("failed to handle LZ4 compressed blob: %w", err)
+			}
+			continue
+
+		case RDB_OPCODE_COMPRESSED_BLOB_END:
+			// Compressed blob end, switch back to original stream
+			log.Printf("  [FLOW-%d] ✓ Compressed blob end, switching back to original stream", p.flowID)
+			if err := p.handleCompressedBlobEnd(); err != nil {
+				return nil, fmt.Errorf("failed to handle compressed blob end: %w", err)
+			}
 			continue
 
 		default:
 			// Data type opcode; parse the key/value pair
+			// Check if this looks like a valid RDB type (< 30) or a misaligned read
+			if opcode >= 30 && opcode < 0xC0 {
+				log.Printf("  [FLOW-%d] ⚠ Warning: opcode 0x%02X (%d) is unusually high for an RDB type, possible stream corruption", p.flowID, opcode, opcode)
+			}
 			return p.parseKeyValue(opcode)
 		}
 	}
@@ -280,6 +315,48 @@ func (p *RDBParser) readLength() (uint64, bool, error) {
 	}
 
 	return 0, false, fmt.Errorf("invalid length encoding type: %d", typeField)
+}
+
+// handleCompressedBlob handles LZ4 compressed blob (opcode 0xCA)
+func (p *RDBParser) handleCompressedBlob() error {
+	// Read compressed data as a length-prefixed string
+	compressedData, err := p.readStringFull()
+	if err != nil {
+		return fmt.Errorf("failed to read compressed data: %w", err)
+	}
+
+	compressedLen := len(compressedData)
+	log.Printf("  [FLOW-%d] Decompressing LZ4 blob (%d bytes compressed)", p.flowID, compressedLen)
+
+	// Decompress using LZ4
+	// LZ4 format: uncompressed size is not stored, we need to decompress into a buffer
+	// Try with 4x the compressed size as initial estimate
+	decompressed := make([]byte, compressedLen*4)
+	n, err := lz4.UncompressBlock([]byte(compressedData), decompressed)
+	if err != nil {
+		// If buffer is too small, try with larger buffer
+		decompressed = make([]byte, compressedLen*10)
+		n, err = lz4.UncompressBlock([]byte(compressedData), decompressed)
+		if err != nil {
+			return fmt.Errorf("LZ4 decompression failed: %w", err)
+		}
+	}
+
+	decompressed = decompressed[:n]
+	log.Printf("  [FLOW-%d] ✓ Decompressed %d bytes → %d bytes (ratio: %.2fx)",
+		p.flowID, compressedLen, n, float64(n)/float64(compressedLen))
+
+	// Switch to reading from decompressed buffer
+	p.reader = bufio.NewReader(bytes.NewReader(decompressed))
+
+	return nil
+}
+
+// handleCompressedBlobEnd handles compressed blob end marker (opcode 0xCB)
+func (p *RDBParser) handleCompressedBlobEnd() error {
+	// Switch back to original network stream
+	p.reader = p.originalReader
+	return nil
 }
 
 // readString reads an RDB string by delegating to rdb_string.go
