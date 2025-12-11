@@ -326,25 +326,19 @@ func (p *RDBParser) handleCompressedBlob() error {
 	}
 
 	compressedLen := len(compressedData)
-	log.Printf("  [FLOW-%d] Decompressing LZ4 blob (%d bytes compressed)", p.flowID, compressedLen)
+	log.Printf("  [FLOW-%d] Decompressing LZ4 Frame blob (%d bytes compressed)", p.flowID, compressedLen)
 
-	// Decompress using LZ4
-	// LZ4 format: uncompressed size is not stored, we need to decompress into a buffer
-	// Try with 4x the compressed size as initial estimate
-	decompressed := make([]byte, compressedLen*4)
-	n, err := lz4.UncompressBlock([]byte(compressedData), decompressed)
+	// Decompress using LZ4 Frame format (not Block format)
+	// Dragonfly uses LZ4F_compressFrame which produces Frame format with embedded metadata
+	reader := lz4.NewReader(bytes.NewReader([]byte(compressedData)))
+	decompressed, err := io.ReadAll(reader)
 	if err != nil {
-		// If buffer is too small, try with larger buffer
-		decompressed = make([]byte, compressedLen*10)
-		n, err = lz4.UncompressBlock([]byte(compressedData), decompressed)
-		if err != nil {
-			return fmt.Errorf("LZ4 decompression failed: %w", err)
-		}
+		return fmt.Errorf("LZ4 Frame decompression failed: %w", err)
 	}
 
-	decompressed = decompressed[:n]
+	decompressedLen := len(decompressed)
 	log.Printf("  [FLOW-%d] ✓ Decompressed %d bytes → %d bytes (ratio: %.2fx)",
-		p.flowID, compressedLen, n, float64(n)/float64(compressedLen))
+		p.flowID, compressedLen, decompressedLen, float64(decompressedLen)/float64(compressedLen))
 
 	// Switch to reading from decompressed buffer
 	p.reader = bufio.NewReader(bytes.NewReader(decompressed))
