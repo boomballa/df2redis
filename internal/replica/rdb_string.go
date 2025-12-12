@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+
+	lzf "github.com/zhuyie/golzf"
 )
 
 // readStringFull implements full RDB string decoding (see readString stub in rdb_parser.go).
@@ -123,61 +125,16 @@ func (p *RDBParser) readLZFString() (string, error) {
 	return string(decompressed), nil
 }
 
-// lzfDecompress provides a lightweight LZF decoder.
-// For production use consider github.com/zhuyie/golzf or similar.
+// lzfDecompress uses the golzf library for LZF decompression.
 func lzfDecompress(src []byte, dstLen int) ([]byte, error) {
 	dst := make([]byte, dstLen)
-	srcIdx := 0
-	dstIdx := 0
-
-	for srcIdx < len(src) {
-		ctrl := src[srcIdx]
-		srcIdx++
-
-		if ctrl < 32 {
-			// Literal bytes
-			count := int(ctrl) + 1
-			if srcIdx+count > len(src) || dstIdx+count > dstLen {
-				return nil, fmt.Errorf("LZF data corruption detected")
-			}
-			copy(dst[dstIdx:], src[srcIdx:srcIdx+count])
-			srcIdx += count
-			dstIdx += count
-		} else {
-			// Back reference
-			length := int(ctrl >> 5)
-			if length == 7 {
-				if srcIdx >= len(src) {
-					return nil, fmt.Errorf("LZF data corruption detected")
-				}
-				length += int(src[srcIdx])
-				srcIdx++
-			}
-			length += 2
-
-			if srcIdx >= len(src) {
-				return nil, fmt.Errorf("LZF data corruption detected")
-			}
-			offset := int(ctrl&0x1f)<<8 | int(src[srcIdx])
-			srcIdx++
-			offset++
-
-			if dstIdx < offset || dstIdx+length > dstLen {
-				return nil, fmt.Errorf("LZF data corruption detected")
-			}
-
-			// Copy referenced bytes
-			for i := 0; i < length; i++ {
-				dst[dstIdx] = dst[dstIdx-offset]
-				dstIdx++
-			}
-		}
+	n, err := lzf.Decompress(src, dst)
+	if err != nil {
+		return nil, fmt.Errorf("LZF decompression failed: %w", err)
 	}
-
-	if dstIdx != dstLen {
-		return nil, fmt.Errorf("LZF decompressed length mismatch: expect %d, got %d", dstLen, dstIdx)
+	if n != dstLen {
+		return nil, fmt.Errorf("LZF decompressed length mismatch: expect %d, got %d", dstLen, n)
 	}
-
 	return dst, nil
 }
 
