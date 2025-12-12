@@ -13,10 +13,11 @@ const (
 	RDB_OPCODE_EOF = 0xFF // EOF + 8-byte checksum
 
 	// Dragonfly custom opcodes
-	RDB_OPCODE_JOURNAL_OFFSET            = 0xD3 // JOURNAL_OFFSET marker
-	RDB_OPCODE_FULLSYNC_END              = 0xC8 // FULLSYNC_END marker
-	RDB_OPCODE_COMPRESSED_LZ4_BLOB_START = 202  // 0xCA - LZ4 compressed blob start
-	RDB_OPCODE_COMPRESSED_BLOB_END       = 203  // 0xCB - Compressed blob end
+	RDB_OPCODE_JOURNAL_OFFSET             = 0xD3 // JOURNAL_OFFSET marker
+	RDB_OPCODE_FULLSYNC_END               = 0xC8 // FULLSYNC_END marker
+	RDB_OPCODE_COMPRESSED_ZSTD_BLOB_START = 201  // 0xC9 - ZSTD compressed blob start
+	RDB_OPCODE_COMPRESSED_LZ4_BLOB_START  = 202  // 0xCA - LZ4 compressed blob start
+	RDB_OPCODE_COMPRESSED_BLOB_END        = 203  // 0xCB - Compressed blob end
 
 	// AUX field
 	RDB_OPCODE_AUX = 0xFA // AUX field
