@@ -165,10 +165,9 @@ func (r *Replicator) Start() error {
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	log.Println("🎯 Replicator started successfully!")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	r.recordPipelineStatus("incremental", "Replaying journal incrementally")
-	r.recordStage("replicator", "journal", "Listening to journal stream")
 
 	// Receive and parse the journal stream
+	// Note: Pipeline status will be updated to "incremental" when journal stream starts
 	if err := r.receiveJournal(); err != nil {
 		r.recordPipelineStatus("error", fmt.Sprintf("Journal stream reception failed: %v", err))
 		return fmt.Errorf("journal stream reception failed: %w", err)
@@ -789,6 +788,10 @@ func (r *Replicator) receiveJournal() error {
 	log.Println("")
 	log.Println("📡 Starting to receive journal stream...")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+	// Update pipeline status to incremental now that journal streaming is starting
+	r.recordPipelineStatus("incremental", "Replaying journal incrementally")
+	r.recordStage("replicator", "journal", "Listening to journal stream")
 
 	numFlows := len(r.flowConns)
 	if numFlows == 0 {
