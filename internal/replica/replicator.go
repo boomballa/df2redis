@@ -1700,15 +1700,17 @@ func (r *Replicator) recordFlowLSN(flowID int, lsn uint64) {
 	r.metrics.Set(state.MetricIncrementalLSNApplied, float64(max))
 	r.metrics.Set(state.MetricIncrementalLagMs, 0)
 
-	// Update operation statistics (RDB + Journal)
+	// Update operation statistics
 	r.replayStats.mu.Lock()
 	r.rdbStats.mu.Lock()
 
-	totalOps := r.rdbStats.Commands + r.replayStats.TotalCommands
-	totalSuccess := r.rdbStats.Commands + r.replayStats.ReplayedOK
+	// RDB phase metrics (snapshot import only)
+	r.metrics.Set(state.MetricRdbOpsTotal, float64(r.rdbStats.Commands))
+	r.metrics.Set(state.MetricRdbOpsSuccess, float64(r.rdbStats.Commands))
 
-	r.metrics.Set(state.MetricIncrementalOpsTotal, float64(totalOps))
-	r.metrics.Set(state.MetricIncrementalOpsSuccess, float64(totalSuccess))
+	// Incremental phase metrics (journal streaming only)
+	r.metrics.Set(state.MetricIncrementalOpsTotal, float64(r.replayStats.TotalCommands))
+	r.metrics.Set(state.MetricIncrementalOpsSuccess, float64(r.replayStats.ReplayedOK))
 	r.metrics.Set(state.MetricIncrementalOpsSkipped, float64(r.replayStats.Skipped))
 	r.metrics.Set(state.MetricIncrementalOpsFailed, float64(r.replayStats.Failed))
 
