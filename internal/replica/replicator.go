@@ -124,6 +124,9 @@ func (r *Replicator) Start() error {
 	r.recordPipelineStatus("full_sync", "Receiving RDB snapshot")
 	r.estimateSourceKeys()
 
+	// Clear old FLOW stages from previous runs
+	r.clearOldFlowStages()
+
 	// Initialize Redis client (auto-detects cluster/standalone)
 	log.Println("")
 	log.Println("🔗 Connecting to target Redis...")
@@ -1537,6 +1540,36 @@ func (r *Replicator) recordStage(name, status, message string) {
 
 func (r *Replicator) recordFlowStage(flowID int, status, message string) {
 	r.recordStage(fmt.Sprintf("flow:%d", flowID), status, message)
+}
+
+// clearOldFlowStages removes all flow: stages from previous runs to avoid dashboard confusion
+func (r *Replicator) clearOldFlowStages() {
+	if r.store == nil {
+		return
+	}
+	snap, err := r.store.Load()
+	if err != nil {
+		log.Printf("[state] Failed to load snapshot for flow cleanup: %v", err)
+		return
+	}
+
+	// Remove all flow: stages
+	for name := range snap.Stages {
+		if strings.HasPrefix(name, "flow:") {
+			delete(snap.Stages, name)
+		}
+	}
+
+	// Clear flow-related metrics
+	for key := range snap.Metrics {
+		if strings.Contains(key, "flow") {
+			delete(snap.Metrics, key)
+		}
+	}
+
+	if err := r.store.Write(snap); err != nil {
+		log.Printf("[state] Failed to save cleaned snapshot: %v", err)
+	}
 }
 
 func (r *Replicator) estimateSourceKeys() {
