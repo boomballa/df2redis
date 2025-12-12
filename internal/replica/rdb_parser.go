@@ -340,8 +340,14 @@ func (p *RDBParser) handleCompressedBlob() error {
 	log.Printf("  [FLOW-%d] ✓ Decompressed %d bytes → %d bytes (ratio: %.2fx)",
 		p.flowID, compressedLen, decompressedLen, float64(decompressedLen)/float64(compressedLen))
 
-	// Switch to reading from decompressed buffer
-	p.reader = bufio.NewReader(bytes.NewReader(decompressed))
+	// Append RDB_OPCODE_COMPRESSED_BLOB_END (0xCB) to the decompressed data
+	// This matches Dragonfly's behavior: decompress.cc adds this opcode to membuf
+	decompressedWithEnd := make([]byte, len(decompressed)+1)
+	copy(decompressedWithEnd, decompressed)
+	decompressedWithEnd[len(decompressed)] = RDB_OPCODE_COMPRESSED_BLOB_END
+
+	// Switch to reading from decompressed buffer (including the end marker)
+	p.reader = bufio.NewReader(bytes.NewReader(decompressedWithEnd))
 
 	return nil
 }
