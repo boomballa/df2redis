@@ -11,6 +11,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/pierrec/lz4/v4"
+	"github.com/zhuyie/golzf"
 )
 
 // RDBParser streams and decodes RDB payloads
@@ -148,23 +149,16 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			log.Printf("  [FLOW-%d] AUX: %s = %s", p.flowID, auxKey, auxValue)
 			continue
 
-	case RDB_OPCODE_COMPRESSED_ZSTD_BLOB_START:
-		// Dragonfly ZSTD compressed blob start
-		if err := p.handleZstdBlob(); err != nil {
-			return nil, fmt.Errorf("failed to handle ZSTD compressed blob: %w", err)
-		}
-		continue
-
 		case RDB_OPCODE_COMPRESSED_LZ4_BLOB_START:
 			// Dragonfly LZ4 compressed blob start
-			if err := p.handleLZ4Blob(); err != nil {
+			if err := p.handleCompressedBlob(); err != nil {
 				return nil, fmt.Errorf("failed to handle LZ4 compressed blob: %w", err)
 			}
 			continue
 
 		case RDB_OPCODE_COMPRESSED_BLOB_END:
 			// Compressed blob end, switch back to original stream
-			if err := p.handleLZ4BlobEnd(); err != nil {
+			if err := p.handleCompressedBlobEnd(); err != nil {
 				return nil, fmt.Errorf("failed to handle compressed blob end: %w", err)
 			}
 			continue
@@ -323,41 +317,8 @@ func (p *RDBParser) readLength() (uint64, bool, error) {
 	return 0, false, fmt.Errorf("invalid length encoding type: %d", typeField)
 }
 
-// handleZstdBlob handles ZSTD compressed blob (opcode 0xC9)
-func (p *RDBParser) handleZstdBlob() error {
-	// Read compressed data as a length-prefixed string
-	compressedData, err := p.readStringFull()
-	if err != nil {
-		return fmt.Errorf("failed to read ZSTD compressed data: %w", err)
-	}
-
-	// Decompress using ZSTD
-	// Dragonfly uses ZSTD frame format with embedded metadata
-	decoder, err := zstd.NewReader(bytes.NewReader([]byte(compressedData)))
-	if err != nil {
-		return fmt.Errorf("failed to create ZSTD decoder: %w", err)
-	}
-	defer decoder.Close()
-
-	decompressed, err := io.ReadAll(decoder)
-	if err != nil {
-		return fmt.Errorf("ZSTD decompression failed: %w", err)
-	}
-
-	// Append RDB_OPCODE_COMPRESSED_BLOB_END (0xCB) to the decompressed data
-	// This matches Dragonfly's behavior: decompress.cc adds this opcode to membuf
-	decompressedWithEnd := make([]byte, len(decompressed)+1)
-	copy(decompressedWithEnd, decompressed)
-	decompressedWithEnd[len(decompressed)] = RDB_OPCODE_COMPRESSED_BLOB_END
-
-	// Switch to reading from decompressed buffer (including the end marker)
-	p.reader = bufio.NewReader(bytes.NewReader(decompressedWithEnd))
-
-	return nil
-}
-
-// handleLZ4Blob handles LZ4 compressed blob (opcode 0xCA)
-func (p *RDBParser) handleLZ4Blob() error {
+// handleCompressedBlob handles LZ4 compressed blob (opcode 0xCA)
+func (p *RDBParser) handleCompressedBlob() error {
 	// Read compressed data as a length-prefixed string
 	compressedData, err := p.readStringFull()
 	if err != nil {
@@ -384,8 +345,8 @@ func (p *RDBParser) handleLZ4Blob() error {
 	return nil
 }
 
-// handleLZ4BlobEnd handles compressed blob end marker (opcode 0xCB)
-func (p *RDBParser) handleLZ4BlobEnd() error {
+// handleCompressedBlobEnd handles compressed blob end marker (opcode 0xCB)
+func (p *RDBParser) handleCompressedBlobEnd() error {
 	// Switch back to original network stream
 	p.reader = p.originalReader
 	return nil
