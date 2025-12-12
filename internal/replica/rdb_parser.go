@@ -149,7 +149,6 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 
 		case RDB_OPCODE_COMPRESSED_LZ4_BLOB_START:
 			// Dragonfly LZ4 compressed blob start
-			log.Printf("  [FLOW-%d] ✓ LZ4 compressed blob detected", p.flowID)
 			if err := p.handleCompressedBlob(); err != nil {
 				return nil, fmt.Errorf("failed to handle LZ4 compressed blob: %w", err)
 			}
@@ -157,7 +156,6 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 
 		case RDB_OPCODE_COMPRESSED_BLOB_END:
 			// Compressed blob end, switch back to original stream
-			log.Printf("  [FLOW-%d] ✓ Compressed blob end, switching back to original stream", p.flowID)
 			if err := p.handleCompressedBlobEnd(); err != nil {
 				return nil, fmt.Errorf("failed to handle compressed blob end: %w", err)
 			}
@@ -325,9 +323,6 @@ func (p *RDBParser) handleCompressedBlob() error {
 		return fmt.Errorf("failed to read compressed data: %w", err)
 	}
 
-	compressedLen := len(compressedData)
-	log.Printf("  [FLOW-%d] Decompressing LZ4 Frame blob (%d bytes compressed)", p.flowID, compressedLen)
-
 	// Decompress using LZ4 Frame format (not Block format)
 	// Dragonfly uses LZ4F_compressFrame which produces Frame format with embedded metadata
 	reader := lz4.NewReader(bytes.NewReader([]byte(compressedData)))
@@ -335,10 +330,6 @@ func (p *RDBParser) handleCompressedBlob() error {
 	if err != nil {
 		return fmt.Errorf("LZ4 Frame decompression failed: %w", err)
 	}
-
-	decompressedLen := len(decompressed)
-	log.Printf("  [FLOW-%d] ✓ Decompressed %d bytes → %d bytes (ratio: %.2fx)",
-		p.flowID, compressedLen, decompressedLen, float64(decompressedLen)/float64(compressedLen))
 
 	// Append RDB_OPCODE_COMPRESSED_BLOB_END (0xCB) to the decompressed data
 	// This matches Dragonfly's behavior: decompress.cc adds this opcode to membuf
