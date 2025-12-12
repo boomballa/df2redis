@@ -7,6 +7,12 @@ const (
 	MetricSyncedKeys            = "sync.keys.applied"
 	MetricFlowImportedFormat    = "flow.%d.imported_keys"
 	MetricCheckpointSavedAtUnix = "checkpoint.last_saved_unix"
+
+	// RDB phase metrics (snapshot import)
+	MetricRdbOpsTotal   = "sync.rdb.ops.total"
+	MetricRdbOpsSuccess = "sync.rdb.ops.success"
+
+	// Incremental phase metrics (journal streaming)
 	MetricIncrementalLSNCurrent = "sync.incremental.lsn.current"
 	MetricIncrementalLSNApplied = "sync.incremental.lsn.applied"
 	MetricIncrementalLagMs      = "sync.incremental.lag.ms"
