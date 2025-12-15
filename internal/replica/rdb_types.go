@@ -13,6 +13,7 @@ const (
 	RDB_OPCODE_EOF = 0xFF // EOF + 8-byte checksum
 
 	// Dragonfly custom opcodes
+	RDB_OPCODE_JOURNAL_BLOB               = 0xD2 // Inline journal entry during RDB streaming
 	RDB_OPCODE_JOURNAL_OFFSET             = 0xD3 // JOURNAL_OFFSET marker
 	RDB_OPCODE_FULLSYNC_END               = 0xC8 // FULLSYNC_END marker
 	RDB_OPCODE_COMPRESSED_ZSTD_BLOB_START = 201  // 0xC9 - ZSTD compressed blob start
