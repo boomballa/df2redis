@@ -1563,9 +1563,9 @@ func (r *Replicator) clearOldFlowStages() {
 		}
 	}
 
-	// Clear flow-related metrics
+	// Clear flow-related and incremental metrics (reset for new run)
 	for key := range snap.Metrics {
-		if strings.Contains(key, "flow") {
+		if strings.Contains(key, "flow") || strings.Contains(key, "incremental") || strings.Contains(key, "rdb") {
 			delete(snap.Metrics, key)
 		}
 	}
