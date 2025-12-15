@@ -107,6 +107,17 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			p.currentDB = int(dbIndex)
 			continue
 
+		case RDB_OPCODE_JOURNAL_BLOB:
+			// Dragonfly inline journal entry during RDB streaming
+			// Read the journal blob as a length-prefixed string and skip it
+			journalData, err := p.readStringFull()
+			if err != nil {
+				return nil, fmt.Errorf("failed to read JOURNAL_BLOB data: %w", err)
+			}
+			log.Printf("  [FLOW-%d] Skipping inline journal entry (%d bytes) during RDB phase", p.flowID, len(journalData))
+			// Continue to the next opcode
+			continue
+
 		case RDB_OPCODE_JOURNAL_OFFSET:
 			// Dragonfly-specific JOURNAL_OFFSET marker, discard 8-byte offset
 			offset := make([]byte, 8)
