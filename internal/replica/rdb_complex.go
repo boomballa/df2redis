@@ -443,6 +443,19 @@ func readZiplistEntry(data []byte) (string, int, error) {
 
 // parseListpack handles [total_bytes:4][num_elements:2][entries...][lpend:0xFF]
 func parseListpack(data []byte) ([]string, error) {
+	// Handle special case: empty listpack may be encoded as a single byte
+	// Dragonfly sometimes uses simplified encoding for empty collections
+	if len(data) == 0 {
+		return []string{}, nil
+	}
+
+	if len(data) == 1 {
+		// Special encoding for empty listpack (Dragonfly optimization)
+		// Log the byte value for debugging
+		fmt.Printf("  [DEBUG] parseListpack: 1-byte payload, value=0x%02X\n", data[0])
+		return []string{}, nil
+	}
+
 	if len(data) < 7 {
 		return nil, fmt.Errorf("listpack payload too short: %d bytes", len(data))
 	}
