@@ -114,22 +114,28 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 
 		case RDB_OPCODE_JOURNAL_BLOB:
 			// Dragonfly inline journal entry during RDB streaming
-			// Format: packed_uint(length) + journal_entry_data
-			log.Printf("  [FLOW-%d] Skipping inline journal blob during RDB phase", p.flowID)
+			// Format appears to be: marker(1 byte) + size_byte + data
+			// The second byte seems to directly indicate the size in bytes
 
-			// Read length as packed uint (not RDB length encoding)
-			length, err := p.readPackedUint()
+			// Read marker byte
+			marker, err := p.readByte()
 			if err != nil {
-				return nil, fmt.Errorf("failed to read JOURNAL_BLOB length: %w", err)
+				return nil, fmt.Errorf("failed to read JOURNAL_BLOB marker: %w", err)
+			}
+
+			// Read size byte (appears to be direct byte value, not packed uint)
+			size, err := p.readByte()
+			if err != nil {
+				return nil, fmt.Errorf("failed to read JOURNAL_BLOB size: %w", err)
 			}
 
 			// Skip the journal entry data
-			if length > 0 {
-				skipBuf := make([]byte, length)
+			if size > 0 {
+				skipBuf := make([]byte, size)
 				if _, err := io.ReadFull(p.reader, skipBuf); err != nil {
-					return nil, fmt.Errorf("failed to skip JOURNAL_BLOB data (%d bytes): %w", length, err)
+					return nil, fmt.Errorf("failed to skip JOURNAL_BLOB data (%d bytes): %w", size, err)
 				}
-				log.Printf("  [FLOW-%d] Skipped %d bytes of inline journal data", p.flowID, length)
+				log.Printf("  [FLOW-%d] Skipped inline journal blob (marker=0x%02x, size=%d bytes)", p.flowID, marker, size)
 			}
 
 			// Continue to the next opcode
