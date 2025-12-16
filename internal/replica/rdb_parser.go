@@ -115,19 +115,25 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 		case RDB_OPCODE_JOURNAL_BLOB:
 			// Dragonfly inline journal entry during RDB streaming
 			// Format appears to be: marker(1 byte) + size_byte + data
-			// The second byte seems to directly indicate the size in bytes
+			log.Printf("  [FLOW-%d] DEBUG: JOURNAL_BLOB opcode detected", p.flowID)
+
+			// Peek at next 30 bytes to understand the format
+			peekBuf, _ := p.reader.Peek(30)
+			log.Printf("  [FLOW-%d] DEBUG: Next 30 bytes after 0xD2: %x", p.flowID, peekBuf)
 
 			// Read marker byte
 			marker, err := p.readByte()
 			if err != nil {
 				return nil, fmt.Errorf("failed to read JOURNAL_BLOB marker: %w", err)
 			}
+			log.Printf("  [FLOW-%d] DEBUG: marker=0x%02x (%d)", p.flowID, marker, marker)
 
 			// Read size byte (appears to be direct byte value, not packed uint)
 			size, err := p.readByte()
 			if err != nil {
 				return nil, fmt.Errorf("failed to read JOURNAL_BLOB size: %w", err)
 			}
+			log.Printf("  [FLOW-%d] DEBUG: size=0x%02x (%d)", p.flowID, size, size)
 
 			// Skip the journal entry data
 			if size > 0 {
@@ -135,8 +141,12 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 				if _, err := io.ReadFull(p.reader, skipBuf); err != nil {
 					return nil, fmt.Errorf("failed to skip JOURNAL_BLOB data (%d bytes): %w", size, err)
 				}
-				log.Printf("  [FLOW-%d] Skipped inline journal blob (marker=0x%02x, size=%d bytes)", p.flowID, marker, size)
+				log.Printf("  [FLOW-%d] Skipped inline journal blob (marker=0x%02x, size=%d bytes, data=%x)", p.flowID, marker, size, skipBuf)
 			}
+
+			// Peek at next opcode
+			nextOp, _ := p.peekByte()
+			log.Printf("  [FLOW-%d] DEBUG: Next opcode after journal blob: 0x%02X (%d)", p.flowID, nextOp, nextOp)
 
 			// Continue to the next opcode
 			continue
