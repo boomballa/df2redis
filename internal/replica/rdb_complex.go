@@ -579,3 +579,193 @@ func parseIntset(data []byte) ([]string, error) {
 
 	return members, nil
 }
+// ============ Stream parsing ============
+
+// parseStream handles stream types (RDB_TYPE_STREAM_LISTPACKS = 15, 19, 21)
+// Format: length + last_id + listpacks + consumer_groups
+func (p *RDBParser) parseStream(typeByte byte) (*StreamValue, error) {
+	// Read stream length (number of entries)
+	length, _, err := p.readLength()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read stream length: %w", err)
+	}
+
+	// Read last stream ID (ms-seq format)
+	lastIDMs, _, err := p.readLength()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read last ID ms: %w", err)
+	}
+	lastIDSeq, _, err := p.readLength()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read last ID seq: %w", err)
+	}
+	lastID := fmt.Sprintf("%d-%d", lastIDMs, lastIDSeq)
+
+	// Read number of listpacks
+	numListpacks, _, err := p.readLength()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read num listpacks: %w", err)
+	}
+
+	var messages []StreamMessage
+
+	// Parse each listpack
+	for i := uint64(0); i < numListpacks; i++ {
+		// Read master entry (first message ID in this listpack)
+		masterMs, _, err := p.readLength()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read master ID ms: %w", err)
+		}
+		masterSeq, _, err := p.readLength()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read master ID seq: %w", err)
+		}
+
+		// Read listpack data
+		listpackBytes := p.readString()
+		entries, err := parseListpack([]byte(listpackBytes))
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse listpack: %w", err)
+		}
+
+		// Parse listpack entries into stream messages
+		// Listpack format: count + master_fields + [flags + ms_diff + seq_diff + fields...]
+		if len(entries) < 1 {
+			continue
+		}
+
+		// First entry is the count
+		idx := 1
+		
+		// Next entries are master fields (field names that apply to all messages in this listpack)
+		var masterFields []string
+		if idx < len(entries) {
+			numMasterFields, _ := strconv.Atoi(entries[idx])
+			idx++
+			for j := 0; j < numMasterFields && idx < len(entries); j++ {
+				masterFields = append(masterFields, entries[idx])
+				idx++
+			}
+		}
+
+		// Parse messages
+		currentMs := masterMs
+		currentSeq := masterSeq
+		
+		for idx < len(entries) {
+			// Read flags (indicates how ID is stored)
+			if idx >= len(entries) {
+				break
+			}
+			flags, _ := strconv.Atoi(entries[idx])
+			idx++
+
+			// Read ID (ms and seq)
+			if (flags & 0x01) == 0 {
+				// ms is delta from previous
+				if idx >= len(entries) {
+					break
+				}
+				msDelta, _ := strconv.ParseUint(entries[idx], 10, 64)
+				currentMs += msDelta
+				idx++
+			}
+			
+			if (flags & 0x02) == 0 {
+				// seq is delta from previous
+				if idx >= len(entries) {
+					break
+				}
+				seqDelta, _ := strconv.ParseUint(entries[idx], 10, 64)
+				currentSeq = seqDelta
+				idx++
+			} else {
+				currentSeq++
+			}
+
+			messageID := fmt.Sprintf("%d-%d", currentMs, currentSeq)
+			fields := make(map[string]string)
+
+			// Read number of fields for this message
+			if idx >= len(entries) {
+				break
+			}
+			numFields, _ := strconv.Atoi(entries[idx])
+			idx++
+
+			// If numFields is negative, use master fields
+			if numFields < 0 {
+				numFields = -numFields
+				// Use master field names
+				for j := 0; j < numFields && j < len(masterFields) && idx < len(entries); j++ {
+					fields[masterFields[j]] = entries[idx]
+					idx++
+				}
+			} else {
+				// Read field-value pairs
+				for j := 0; j < numFields*2 && idx+1 < len(entries); j += 2 {
+					fields[entries[idx]] = entries[idx+1]
+					idx += 2
+				}
+			}
+
+			if len(fields) > 0 {
+				messages = append(messages, StreamMessage{
+					ID:     messageID,
+					Fields: fields,
+				})
+			}
+
+			// Check if we should stop (lpend or out of data)
+			if idx >= len(entries) {
+				break
+			}
+		}
+	}
+
+	// Skip consumer groups (not needed for basic migration)
+	// Read number of consumer groups
+	numGroups, _, err := p.readLength()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read num consumer groups: %w", err)
+	}
+
+	// Skip consumer group data
+	for i := uint64(0); i < numGroups; i++ {
+		// Group name
+		p.readString()
+		// Last delivered ID (ms + seq)
+		p.readLength()
+		p.readLength()
+		// PEL (pending entry list)
+		pelSize, _, _ := p.readLength()
+		for j := uint64(0); j < pelSize; j++ {
+			// Stream ID
+			p.readInt64()
+			// Delivery time
+			p.readInt64()
+			// Delivery count
+			p.readLength()
+		}
+		// Consumers
+		numConsumers, _, _ := p.readLength()
+		for j := uint64(0); j < numConsumers; j++ {
+			// Consumer name
+			p.readString()
+			// Seen time
+			p.readInt64()
+			// Consumer PEL
+			consumerPEL, _, _ := p.readLength()
+			for k := uint64(0); k < consumerPEL; k++ {
+				// Stream ID
+				p.readInt64()
+			}
+		}
+	}
+
+	return &StreamValue{
+		Messages: messages,
+		Length:   length,
+		LastID:   lastID,
+	}, nil
+}
