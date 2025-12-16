@@ -547,9 +547,11 @@ func (r *Replicator) receiveSnapshot() error {
 
 	// Stats
 	type FlowStats struct {
-		KeyCount     int
-		SkippedCount int
-		ErrorCount   int
+		KeyCount         int
+		SkippedCount     int
+		ErrorCount       int
+		InlineJournalOps int
+		mu               sync.Mutex
 	}
 	statsMap := make(map[int]*FlowStats)
 	var statsMu sync.Mutex
@@ -569,6 +571,23 @@ func (r *Replicator) receiveSnapshot() error {
 
 			// Create RDB parser
 			parser := NewRDBParser(flowConn, flowID)
+
+			// Set callback for inline journal entries during RDB phase
+			parser.onJournalEntry = func(entry *JournalEntry) error {
+				// Apply journal entry using existing replication logic
+				if err := r.replayCommand(flowID, entry); err != nil {
+					return fmt.Errorf("failed to apply inline journal entry: %w", err)
+				}
+				// Update local flow stats
+				stats.mu.Lock()
+				stats.InlineJournalOps++
+				stats.mu.Unlock()
+				// Update global RDB stats
+				r.rdbStats.mu.Lock()
+				r.rdbStats.InlineJournalOps++
+				r.rdbStats.mu.Unlock()
+				return nil
+			}
 
 			// 1. Parse header
 			if err := parser.ParseHeader(); err != nil {
@@ -592,10 +611,13 @@ func (r *Replicator) receiveSnapshot() error {
 				entry, err := parser.ParseNext()
 				if err != nil {
 					if err == io.EOF {
-						log.Printf("  [FLOW-%d] ✓ RDB parsing done (success=%d, skipped=%d, failed=%d)",
-							flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount)
+						stats.mu.Lock()
+						inlineJournalOps := stats.InlineJournalOps
+						stats.mu.Unlock()
+						log.Printf("  [FLOW-%d] ✓ RDB parsing done (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
+							flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps)
 						r.recordFlowStage(flowID, "rdb_done",
-							fmt.Sprintf("success=%d skipped=%d failed=%d", stats.KeyCount, stats.SkippedCount, stats.ErrorCount))
+							fmt.Sprintf("success=%d skipped=%d failed=%d inline_journal=%d", stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps))
 						// FULLSYNC_END received, snapshot done.
 						// EOF tokens are read after STARTSTABLE.
 						return
@@ -650,16 +672,21 @@ func (r *Replicator) receiveSnapshot() error {
 	totalKeys := 0
 	totalSkipped := 0
 	totalErrors := 0
+	totalInlineJournal := 0
 	for flowID, stats := range statsMap {
 		totalKeys += stats.KeyCount
 		totalSkipped += stats.SkippedCount
 		totalErrors += stats.ErrorCount
-		log.Printf("  [FLOW-%d] Stats: success=%d, skipped=%d, failed=%d",
-			flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount)
+		stats.mu.Lock()
+		totalInlineJournal += stats.InlineJournalOps
+		inlineJournalOps := stats.InlineJournalOps
+		stats.mu.Unlock()
+		log.Printf("  [FLOW-%d] Stats: success=%d, skipped=%d, failed=%d, inline_journal=%d",
+			flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps)
 	}
 
-	log.Printf("  ✓ RDB full import complete: total %d keys, skipped %d (expired), failed %d",
-		totalKeys, totalSkipped, totalErrors)
+	log.Printf("  ✓ RDB full import complete: total %d keys, skipped %d (expired), failed %d, inline_journal=%d",
+		totalKeys, totalSkipped, totalErrors, totalInlineJournal)
 
 	// Dragonfly only sends EOF tokens after STARTSTABLE; reading before that causes a 60s timeout.
 	if err := r.sendStartStable(); err != nil {
@@ -1035,9 +1062,10 @@ type ReplayStats struct {
 
 // RDBStats holds RDB snapshot import statistics
 type RDBStats struct {
-	mu       sync.Mutex
-	Commands int64 // Total Redis commands executed during RDB import
-	Keys     int64 // Total keys imported
+	mu               sync.Mutex
+	Commands         int64 // Total Redis commands executed during RDB import (excludes inline journal)
+	Keys             int64 // Total keys imported
+	InlineJournalOps int64 // Inline journal operations applied during RDB phase
 }
 
 // replayCommand replays a single journal command into Redis Cluster
@@ -1765,6 +1793,7 @@ func (r *Replicator) recordFlowLSN(flowID int, lsn uint64) {
 	// RDB phase metrics (snapshot import only)
 	r.metrics.Set(state.MetricRdbOpsTotal, float64(r.rdbStats.Commands))
 	r.metrics.Set(state.MetricRdbOpsSuccess, float64(r.rdbStats.Commands))
+	r.metrics.Set(state.MetricRdbInlineJournalOps, float64(r.rdbStats.InlineJournalOps))
 
 	// Incremental phase metrics (journal streaming only)
 	r.metrics.Set(state.MetricIncrementalOpsTotal, float64(r.replayStats.TotalCommands))

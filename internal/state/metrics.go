@@ -9,8 +9,9 @@ const (
 	MetricCheckpointSavedAtUnix = "checkpoint.last_saved_unix"
 
 	// RDB phase metrics (snapshot import)
-	MetricRdbOpsTotal   = "sync.rdb.ops.total"
-	MetricRdbOpsSuccess = "sync.rdb.ops.success"
+	MetricRdbOpsTotal          = "sync.rdb.ops.total"
+	MetricRdbOpsSuccess        = "sync.rdb.ops.success"
+	MetricRdbInlineJournalOps  = "sync.rdb.inline_journal.ops" // Inline journal entries applied during RDB
 
 	// Incremental phase metrics (journal streaming)
 	MetricIncrementalLSNCurrent = "sync.incremental.lsn.current"
