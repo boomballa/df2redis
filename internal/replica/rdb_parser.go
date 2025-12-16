@@ -80,6 +80,11 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			return nil, err
 		}
 
+		// Debug: log all opcodes >= 0xC0 to help diagnose issues
+		if opcode >= 0xC0 {
+			log.Printf("  [FLOW-%d] DEBUG: Read opcode 0x%02X (%d)", p.flowID, opcode, opcode)
+		}
+
 		switch opcode {
 		case RDB_OPCODE_EXPIRETIME_MS:
 			// TTL encoded as 8-byte little-endian milliseconds
@@ -201,8 +206,18 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 
 // parseKeyValue decodes one key/value pair
 func (p *RDBParser) parseKeyValue(typeByte byte) (*RDBEntry, error) {
+	// Debug: log the type byte being parsed
+	log.Printf("  [FLOW-%d] DEBUG: parseKeyValue called with typeByte=0x%02X (%d)", p.flowID, typeByte, typeByte)
+
 	// 1. Read key
 	key := p.readString()
+
+	// Debug: if key is empty and type is unusual, log more info
+	if key == "" && (typeByte > 30 || typeByte == 6 || typeByte == 7) {
+		// Peek at next 20 bytes to see what's coming
+		peekBuf, _ := p.reader.Peek(20)
+		log.Printf("  [FLOW-%d] DEBUG: Empty key with type=%d, next 20 bytes: %x", p.flowID, typeByte, peekBuf)
+	}
 
 	entry := &RDBEntry{
 		Key:      key,
