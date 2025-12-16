@@ -35,7 +35,7 @@ const (
 	// Zipmap (deprecated)
 	RDB_TYPE_HASH_ZIPMAP = 9
 
-	// Ziplist encodings
+	// Ziplist encodings (compressed formats)
 	RDB_TYPE_LIST_ZIPLIST = 10
 	RDB_TYPE_SET_INTSET   = 11
 	RDB_TYPE_ZSET_ZIPLIST = 12
@@ -43,18 +43,18 @@ const (
 
 	// Quicklist encodings
 	RDB_TYPE_LIST_QUICKLIST   = 14
-	RDB_TYPE_LIST_QUICKLIST_2 = 17 // Redis 7.0+ Quicklist 2.0
+	RDB_TYPE_LIST_QUICKLIST_2 = 17 // Redis 7.0+ / Dragonfly
 
 	// Stream encodings
 	RDB_TYPE_STREAM_LISTPACKS   = 15
 	RDB_TYPE_STREAM_LISTPACKS_2 = 19
 	RDB_TYPE_STREAM_LISTPACKS_3 = 21
 
-	// Listpack encodings (Redis 7+)
-	RDB_TYPE_HASH_ZIPLIST_EX = 16 // hash ziplist with metadata
-	RDB_TYPE_ZSET_LISTPACK   = 18 // zset listpack
-	RDB_TYPE_HASH_LISTPACK   = 20 // hash listpack
-	RDB_TYPE_SET_LISTPACK    = 22 // set listpack
+	// Dragonfly custom types (30-35)
+	RDB_TYPE_JSON             = 30
+	RDB_TYPE_HASH_WITH_EXPIRY = 31 // Hash with per-field TTL
+	RDB_TYPE_SET_WITH_EXPIRY  = 32 // Set with per-member TTL
+	RDB_TYPE_SBF              = 33 // Scalable Bloom Filter
 
 	// ZSet 2.0
 	RDB_TYPE_ZSET_2 = 5

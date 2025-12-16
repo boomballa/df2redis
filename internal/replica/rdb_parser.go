@@ -228,16 +228,16 @@ func (p *RDBParser) parseKeyValue(typeByte byte) (*RDBEntry, error) {
 	case RDB_TYPE_STRING:
 		entry.Value, err = p.parseString()
 
-	case RDB_TYPE_HASH, RDB_TYPE_HASH_ZIPLIST, RDB_TYPE_HASH_ZIPLIST_EX, RDB_TYPE_HASH_LISTPACK:
+	case RDB_TYPE_HASH, RDB_TYPE_HASH_ZIPLIST:
 		entry.Value, err = p.parseHash(typeByte)
 
 	case RDB_TYPE_LIST_QUICKLIST, RDB_TYPE_LIST_QUICKLIST_2:
 		entry.Value, err = p.parseList(typeByte)
 
-	case RDB_TYPE_SET, RDB_TYPE_SET_INTSET, RDB_TYPE_SET_LISTPACK:
+	case RDB_TYPE_SET, RDB_TYPE_SET_INTSET:
 		entry.Value, err = p.parseSet(typeByte)
 
-	case RDB_TYPE_ZSET_2, RDB_TYPE_ZSET_ZIPLIST, RDB_TYPE_ZSET_LISTPACK:
+	case RDB_TYPE_ZSET_2, RDB_TYPE_ZSET_ZIPLIST:
 		entry.Value, err = p.parseZSet(typeByte)
 
 	case RDB_TYPE_STREAM_LISTPACKS, RDB_TYPE_STREAM_LISTPACKS_2, RDB_TYPE_STREAM_LISTPACKS_3:
