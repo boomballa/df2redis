@@ -109,12 +109,20 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 
 		case RDB_OPCODE_JOURNAL_BLOB:
 			// Dragonfly inline journal entry during RDB streaming
+			// Debug: peek at next few bytes to understand format
+			peekBuf, _ := p.reader.Peek(10)
+			log.Printf("  [FLOW-%d] DEBUG: JOURNAL_BLOB detected, next 10 bytes: %v (hex: %x)", p.flowID, peekBuf, peekBuf)
+
 			// Read the journal blob as a length-prefixed string and skip it
 			journalData, err := p.readStringFull()
 			if err != nil {
 				return nil, fmt.Errorf("failed to read JOURNAL_BLOB data: %w", err)
 			}
-			log.Printf("  [FLOW-%d] Skipping inline journal entry (%d bytes) during RDB phase", p.flowID, len(journalData))
+			log.Printf("  [FLOW-%d] Skipping inline journal entry (%d bytes) during RDB phase, data: %x", p.flowID, len(journalData), journalData)
+
+			// Peek at next opcode after skipping journal blob
+			nextOpcode, _ := p.peekByte()
+			log.Printf("  [FLOW-%d] DEBUG: Next opcode after journal blob: 0x%02X (%d)", p.flowID, nextOpcode, nextOpcode)
 			// Continue to the next opcode
 			continue
 
