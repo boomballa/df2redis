@@ -17,9 +17,6 @@ func (p *RDBParser) parseHash(typeByte byte) (*HashValue, error) {
 		return p.parseHashStandard()
 	case RDB_TYPE_HASH_ZIPLIST:
 		return p.parseHashZiplist()
-	case RDB_TYPE_HASH_ZIPLIST_EX, RDB_TYPE_HASH_LISTPACK:
-		// Both type 16 and 20 use listpack format
-		return p.parseHashListpack()
 	default:
 		return nil, fmt.Errorf("unsupported hash encoding type: %d", typeByte)
 	}
@@ -65,28 +62,6 @@ func (p *RDBParser) parseHashZiplist() (*HashValue, error) {
 	return &HashValue{Fields: fields}, nil
 }
 
-// parseHashListpack decodes the listpack-encoded hash (types 16, 20)
-func (p *RDBParser) parseHashListpack() (*HashValue, error) {
-	// Read listpack bytes
-	listpackBytes := p.readString()
-
-	// Decode listpack
-	entries, err := parseListpack([]byte(listpackBytes))
-	if err != nil {
-		return nil, err
-	}
-
-	// Fields and values alternate in the listpack
-	fields := make(map[string]string)
-	for i := 0; i < len(entries); i += 2 {
-		if i+1 < len(entries) {
-			fields[entries[i]] = entries[i+1]
-		}
-	}
-
-	return &HashValue{Fields: fields}, nil
-}
-
 // ============ List parsing ============
 
 // parseList decodes list values depending on encoding
@@ -94,56 +69,9 @@ func (p *RDBParser) parseList(typeByte byte) (*ListValue, error) {
 	switch typeByte {
 	case RDB_TYPE_LIST_QUICKLIST, RDB_TYPE_LIST_QUICKLIST_2:
 		return p.parseListQuicklist2()
-	case 18: // Dragonfly reuses type 18 (former ZSET_LISTPACK) for short lists
-		return p.parseListListpack()
 	default:
 		return nil, fmt.Errorf("unsupported list encoding type: %d", typeByte)
 	}
-}
-
-// parseListListpack handles the listpack encoding (Dragonfly-specific type 18).
-// Mirrors Dragonfly rdb_load.cc ReadListQuicklist.
-func (p *RDBParser) parseListListpack() (*ListValue, error) {
-	// 1. Read node count
-	nodeCount, _, err := p.readLength()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read node count: %w", err)
-	}
-
-	var allElements []string
-
-	// 2. Iterate nodes
-	for i := 0; i < int(nodeCount); i++ {
-		// 2.1 Container type (Quicklist 2 specific)
-		container, _, err := p.readLength()
-		if err != nil {
-			return nil, fmt.Errorf("failed to read container type (node %d): %w", i, err)
-		}
-
-		// container must be QUICKLIST_NODE_CONTAINER_PACKED (1) or QUICKLIST_NODE_CONTAINER_PLAIN (2)
-		// per quicklist.h:
-		// #define QUICKLIST_NODE_CONTAINER_PACKED 1
-		// #define QUICKLIST_NODE_CONTAINER_PLAIN 2
-		if container != 1 && container != 2 {
-			return nil, fmt.Errorf("invalid container type: %d (node %d)", container, i)
-		}
-
-		// 2.2 Read listpack bytes
-		listpackBytes := p.readString()
-		if len(listpackBytes) == 0 {
-			return nil, fmt.Errorf("listpack payload is empty (node %d)", i)
-		}
-
-		// 2.3 Decode listpack
-		entries, err := parseListpack([]byte(listpackBytes))
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse listpack (node %d): %w", i, err)
-		}
-
-		allElements = append(allElements, entries...)
-	}
-
-	return &ListValue{Elements: allElements}, nil
 }
 
 // parseListQuicklist2 handles Quicklist 2.0 (RDB_TYPE_LIST_QUICKLIST_2 = 17)
@@ -189,8 +117,6 @@ func (p *RDBParser) parseSet(typeByte byte) (*SetValue, error) {
 		return p.parseSetStandard()
 	case RDB_TYPE_SET_INTSET:
 		return p.parseSetIntset()
-	case RDB_TYPE_SET_LISTPACK:
-		return p.parseSetListpack()
 	default:
 		return nil, fmt.Errorf("unsupported set encoding type: %d", typeByte)
 	}
@@ -226,20 +152,6 @@ func (p *RDBParser) parseSetIntset() (*SetValue, error) {
 	return &SetValue{Members: members}, nil
 }
 
-// parseSetListpack handles the listpack encoding (RDB_TYPE_SET_LISTPACK = 22, Redis 7+)
-func (p *RDBParser) parseSetListpack() (*SetValue, error) {
-	// Read listpack bytes
-	listpackBytes := p.readString()
-
-	// Decode listpack contents
-	members, err := parseListpack([]byte(listpackBytes))
-	if err != nil {
-		return nil, err
-	}
-
-	return &SetValue{Members: members}, nil
-}
-
 // ============ ZSet parsing ============
 
 // parseZSet decodes sorted sets
@@ -249,8 +161,6 @@ func (p *RDBParser) parseZSet(typeByte byte) (*ZSetValue, error) {
 		return p.parseZSetStandard()
 	case RDB_TYPE_ZSET_ZIPLIST:
 		return p.parseZSetZiplist()
-	case RDB_TYPE_ZSET_LISTPACK:
-		return p.parseZSetListpack()
 	default:
 		return nil, fmt.Errorf("unsupported zset encoding type: %d", typeByte)
 	}
@@ -284,30 +194,6 @@ func (p *RDBParser) parseZSetZiplist() (*ZSetValue, error) {
 
 	// Decode ziplist
 	entries, err := parseZiplist([]byte(ziplistBytes))
-	if err != nil {
-		return nil, err
-	}
-
-	// Entries alternate between member and score
-	var members []ZSetMember
-	for i := 0; i < len(entries); i += 2 {
-		if i+1 < len(entries) {
-			member := entries[i]
-			score, _ := strconv.ParseFloat(entries[i+1], 64)
-			members = append(members, ZSetMember{Member: member, Score: score})
-		}
-	}
-
-	return &ZSetValue{Members: members}, nil
-}
-
-// parseZSetListpack handles the listpack encoding (RDB_TYPE_ZSET_LISTPACK = 18, Redis 7+)
-func (p *RDBParser) parseZSetListpack() (*ZSetValue, error) {
-	// Read listpack bytes
-	listpackBytes := p.readString()
-
-	// Decode listpack
-	entries, err := parseListpack([]byte(listpackBytes))
 	if err != nil {
 		return nil, err
 	}
@@ -444,20 +330,20 @@ func readZiplistEntry(data []byte) (string, int, error) {
 // parseListpack handles [total_bytes:4][num_elements:2][entries...][lpend:0xFF]
 func parseListpack(data []byte) ([]string, error) {
 	// Handle special case: empty listpack may be encoded as a single byte
-	// Dragonfly sometimes uses simplified encoding for empty collections
 	if len(data) == 0 {
 		return []string{}, nil
 	}
 
-	if len(data) == 1 {
-		// Special encoding for empty listpack (Dragonfly optimization)
-		// Log the byte value for debugging
-		fmt.Printf("  [DEBUG] parseListpack: 1-byte payload, value=0x%02X\n", data[0])
-		return []string{}, nil
-	}
-
+	// Debug: show hex dump for short listpacks
 	if len(data) < 7 {
-		return nil, fmt.Errorf("listpack payload too short: %d bytes", len(data))
+		hexDump := ""
+		for i, b := range data {
+			if i > 0 {
+				hexDump += " "
+			}
+			hexDump += fmt.Sprintf("%02X", b)
+		}
+		return nil, fmt.Errorf("listpack payload too short: %d bytes, hex=[%s], possibly invalid or special encoding", len(data), hexDump)
 	}
 
 	// Parse header
