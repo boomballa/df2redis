@@ -114,20 +114,24 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 
 		case RDB_OPCODE_JOURNAL_BLOB:
 			// Dragonfly inline journal entry during RDB streaming
-			// Debug: peek at next few bytes to understand format
-			peekBuf, _ := p.reader.Peek(10)
-			log.Printf("  [FLOW-%d] DEBUG: JOURNAL_BLOB detected, next 10 bytes: %v (hex: %x)", p.flowID, peekBuf, peekBuf)
+			// Format: packed_uint(length) + journal_entry_data
+			log.Printf("  [FLOW-%d] Skipping inline journal blob during RDB phase", p.flowID)
 
-			// Read the journal blob as a length-prefixed string and skip it
-			journalData, err := p.readStringFull()
+			// Read length as packed uint (not RDB length encoding)
+			length, err := p.readPackedUint()
 			if err != nil {
-				return nil, fmt.Errorf("failed to read JOURNAL_BLOB data: %w", err)
+				return nil, fmt.Errorf("failed to read JOURNAL_BLOB length: %w", err)
 			}
-			log.Printf("  [FLOW-%d] Skipping inline journal entry (%d bytes) during RDB phase, data: %x", p.flowID, len(journalData), journalData)
 
-			// Peek at next opcode after skipping journal blob
-			nextOpcode, _ := p.peekByte()
-			log.Printf("  [FLOW-%d] DEBUG: Next opcode after journal blob: 0x%02X (%d)", p.flowID, nextOpcode, nextOpcode)
+			// Skip the journal entry data
+			if length > 0 {
+				skipBuf := make([]byte, length)
+				if _, err := io.ReadFull(p.reader, skipBuf); err != nil {
+					return nil, fmt.Errorf("failed to skip JOURNAL_BLOB data (%d bytes): %w", length, err)
+				}
+				log.Printf("  [FLOW-%d] Skipped %d bytes of inline journal data", p.flowID, length)
+			}
+
 			// Continue to the next opcode
 			continue
 
@@ -302,6 +306,27 @@ func (p *RDBParser) readInt64() (int64, error) {
 		return 0, err
 	}
 	return int64(binary.LittleEndian.Uint64(buf)), nil
+}
+
+// readPackedUint reads a Dragonfly packed uint (variable-length encoding)
+// Format: if byte < 0x80, value = byte; else continue reading
+func (p *RDBParser) readPackedUint() (uint64, error) {
+	var result uint64
+	var shift uint
+	for {
+		b, err := p.readByte()
+		if err != nil {
+			return 0, err
+		}
+		// Add lower 7 bits to result
+		result |= uint64(b&0x7F) << shift
+		// If high bit is not set, we're done
+		if b < 0x80 {
+			break
+		}
+		shift += 7
+	}
+	return result, nil
 }
 
 // readLength parses the RDB length encoding.
