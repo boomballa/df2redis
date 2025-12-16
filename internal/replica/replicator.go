@@ -1259,6 +1259,9 @@ func (r *Replicator) writeRDBEntry(entry *RDBEntry) error {
 	case RDB_TYPE_ZSET_2, RDB_TYPE_ZSET_ZIPLIST:
 		return r.writeZSet(entry)
 
+	case RDB_TYPE_STREAM_LISTPACKS, RDB_TYPE_STREAM_LISTPACKS_2, RDB_TYPE_STREAM_LISTPACKS_3:
+		return r.writeStream(entry)
+
 	default:
 		return fmt.Errorf("unsupported RDB type: %d", entry.Type)
 	}
@@ -1502,6 +1505,61 @@ func (r *Replicator) writeZSet(entry *RDBEntry) error {
 	}
 
 	// Apply TTL
+	if entry.ExpireMs > 0 {
+		remainingMs := entry.ExpireMs - getCurrentTimeMillis()
+		if remainingMs > 0 {
+			r.rdbStats.mu.Lock()
+			r.rdbStats.Commands++
+			r.rdbStats.mu.Unlock()
+
+			_, err := r.clusterClient.Do("PEXPIRE", entry.Key, fmt.Sprintf("%d", remainingMs))
+			if err != nil {
+				return fmt.Errorf("PEXPIRE command failed: %w", err)
+			}
+		}
+	}
+
+	r.rdbStats.mu.Lock()
+	r.rdbStats.Keys++
+	r.rdbStats.mu.Unlock()
+
+	return nil
+}
+
+// writeStream handles stream entries (XADD for each message)
+func (r *Replicator) writeStream(entry *RDBEntry) error {
+	// Extract value
+	streamVal, ok := entry.Value.(*StreamValue)
+	if !ok {
+		return fmt.Errorf("failed to convert stream value")
+	}
+
+	// Remove existing key to avoid conflicts
+	r.rdbStats.mu.Lock()
+	r.rdbStats.Commands++
+	r.rdbStats.mu.Unlock()
+	_, _ = r.clusterClient.Do("DEL", entry.Key)
+
+	// Insert each message using XADD key ID field value ...
+	for _, msg := range streamVal.Messages {
+		args := []string{entry.Key, msg.ID}
+
+		// Add field-value pairs
+		for field, value := range msg.Fields {
+			args = append(args, field, value)
+		}
+
+		r.rdbStats.mu.Lock()
+		r.rdbStats.Commands++
+		r.rdbStats.mu.Unlock()
+
+		_, err := r.clusterClient.Do("XADD", args...)
+		if err != nil {
+			return fmt.Errorf("XADD command failed for message %s: %w", msg.ID, err)
+		}
+	}
+
+	// Apply TTL if needed
 	if entry.ExpireMs > 0 {
 		remainingMs := entry.ExpireMs - getCurrentTimeMillis()
 		if remainingMs > 0 {

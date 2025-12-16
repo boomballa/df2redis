@@ -118,6 +118,19 @@ type ZSetMember struct {
 	Score  float64
 }
 
+// StreamValue stores stream messages
+type StreamValue struct {
+	Messages []StreamMessage
+	Length   uint64 // Total number of messages
+	LastID   string // Last generated ID (ms-seq format)
+}
+
+// StreamMessage represents a single stream entry
+type StreamMessage struct {
+	ID     string            // Message ID (e.g., "1640995200000-0")
+	Fields map[string]string // Field-value pairs
+}
+
 // IsExpired evaluates the TTL
 func (e *RDBEntry) IsExpired() bool {
 	if e.ExpireMs == 0 {

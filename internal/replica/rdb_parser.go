@@ -80,11 +80,6 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			return nil, err
 		}
 
-		// Debug: log all opcodes >= 0xC0 to help diagnose issues
-		if opcode >= 0xC0 {
-			log.Printf("  [FLOW-%d] DEBUG: Read opcode 0x%02X (%d)", p.flowID, opcode, opcode)
-		}
-
 		switch opcode {
 		case RDB_OPCODE_EXPIRETIME_MS:
 			// TTL encoded as 8-byte little-endian milliseconds
@@ -114,26 +109,20 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 
 		case RDB_OPCODE_JOURNAL_BLOB:
 			// Dragonfly inline journal entry during RDB streaming
-			// Format appears to be: marker(1 byte) + size_byte + data
-			log.Printf("  [FLOW-%d] DEBUG: JOURNAL_BLOB opcode detected", p.flowID)
-
-			// Peek at next 30 bytes to understand the format
-			peekBuf, _ := p.reader.Peek(30)
-			log.Printf("  [FLOW-%d] DEBUG: Next 30 bytes after 0xD2: %x", p.flowID, peekBuf)
+			// Format: marker(1 byte) + size_byte + data
+			// Skip this journal entry as it will be replayed in incremental phase
 
 			// Read marker byte
 			marker, err := p.readByte()
 			if err != nil {
 				return nil, fmt.Errorf("failed to read JOURNAL_BLOB marker: %w", err)
 			}
-			log.Printf("  [FLOW-%d] DEBUG: marker=0x%02x (%d)", p.flowID, marker, marker)
 
-			// Read size byte (appears to be direct byte value, not packed uint)
+			// Read size byte
 			size, err := p.readByte()
 			if err != nil {
 				return nil, fmt.Errorf("failed to read JOURNAL_BLOB size: %w", err)
 			}
-			log.Printf("  [FLOW-%d] DEBUG: size=0x%02x (%d)", p.flowID, size, size)
 
 			// Skip the journal entry data
 			if size > 0 {
@@ -141,12 +130,8 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 				if _, err := io.ReadFull(p.reader, skipBuf); err != nil {
 					return nil, fmt.Errorf("failed to skip JOURNAL_BLOB data (%d bytes): %w", size, err)
 				}
-				log.Printf("  [FLOW-%d] Skipped inline journal blob (marker=0x%02x, size=%d bytes, data=%x)", p.flowID, marker, size, skipBuf)
+				log.Printf("  [FLOW-%d] Skipped inline journal blob (marker=0x%02x, size=%d bytes)", p.flowID, marker, size)
 			}
-
-			// Peek at next opcode
-			nextOp, _ := p.peekByte()
-			log.Printf("  [FLOW-%d] DEBUG: Next opcode after journal blob: 0x%02X (%d)", p.flowID, nextOp, nextOp)
 
 			// Continue to the next opcode
 			continue
@@ -226,18 +211,8 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 
 // parseKeyValue decodes one key/value pair
 func (p *RDBParser) parseKeyValue(typeByte byte) (*RDBEntry, error) {
-	// Debug: log the type byte being parsed
-	log.Printf("  [FLOW-%d] DEBUG: parseKeyValue called with typeByte=0x%02X (%d)", p.flowID, typeByte, typeByte)
-
 	// 1. Read key
 	key := p.readString()
-
-	// Debug: if key is empty and type is unusual, log more info
-	if key == "" && (typeByte > 30 || typeByte == 6 || typeByte == 7) {
-		// Peek at next 20 bytes to see what's coming
-		peekBuf, _ := p.reader.Peek(20)
-		log.Printf("  [FLOW-%d] DEBUG: Empty key with type=%d, next 20 bytes: %x", p.flowID, typeByte, peekBuf)
-	}
 
 	entry := &RDBEntry{
 		Key:      key,
@@ -252,17 +227,20 @@ func (p *RDBParser) parseKeyValue(typeByte byte) (*RDBEntry, error) {
 	case RDB_TYPE_STRING:
 		entry.Value, err = p.parseString()
 
-	case RDB_TYPE_HASH, RDB_TYPE_HASH_ZIPLIST:
+	case RDB_TYPE_HASH, RDB_TYPE_HASH_ZIPLIST, RDB_TYPE_HASH_ZIPLIST_EX, RDB_TYPE_HASH_LISTPACK:
 		entry.Value, err = p.parseHash(typeByte)
 
-	case RDB_TYPE_LIST_QUICKLIST, RDB_TYPE_LIST_QUICKLIST_2, 18: // 18 is the Dragonfly listpack list
+	case RDB_TYPE_LIST_QUICKLIST, RDB_TYPE_LIST_QUICKLIST_2:
 		entry.Value, err = p.parseList(typeByte)
 
-	case RDB_TYPE_SET, RDB_TYPE_SET_INTSET:
+	case RDB_TYPE_SET, RDB_TYPE_SET_INTSET, RDB_TYPE_SET_LISTPACK:
 		entry.Value, err = p.parseSet(typeByte)
 
-	case RDB_TYPE_ZSET_2, RDB_TYPE_ZSET_ZIPLIST:
+	case RDB_TYPE_ZSET_2, RDB_TYPE_ZSET_ZIPLIST, RDB_TYPE_ZSET_LISTPACK:
 		entry.Value, err = p.parseZSet(typeByte)
+
+	case RDB_TYPE_STREAM_LISTPACKS, RDB_TYPE_STREAM_LISTPACKS_2, RDB_TYPE_STREAM_LISTPACKS_3:
+		entry.Value, err = p.parseStream(typeByte)
 
 	default:
 		// Unknown module/stream etc.
