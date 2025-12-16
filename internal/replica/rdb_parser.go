@@ -22,6 +22,9 @@ type RDBParser struct {
 	// State tracked during parsing
 	currentDB int   // current database index
 	expireMs  int64 // current key expiration (absolute ms timestamp)
+
+	// Callback for applying inline journal entries during RDB phase
+	onJournalEntry func(*JournalEntry) error
 }
 
 // NewRDBParser creates a parser bound to a reader
@@ -109,28 +112,26 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 
 		case RDB_OPCODE_JOURNAL_BLOB:
 			// Dragonfly inline journal entry during RDB streaming
-			// Format: marker(1 byte) + size_byte + data
-			// Skip this journal entry as it will be replayed in incremental phase
+			// Format per Dragonfly source: [0xD2][num_entries: packed_uint][journal_blob: RDB string]
+			// These entries represent writes that occurred during RDB transmission
+			// and must be applied inline to maintain consistency
 
-			// Read marker byte
-			marker, err := p.readByte()
+			// Read number of entries (packed uint)
+			numEntries, _, err := p.readLength()
 			if err != nil {
-				return nil, fmt.Errorf("failed to read JOURNAL_BLOB marker: %w", err)
+				return nil, fmt.Errorf("failed to read JOURNAL_BLOB num_entries: %w", err)
 			}
 
-			// Read size byte
-			size, err := p.readByte()
-			if err != nil {
-				return nil, fmt.Errorf("failed to read JOURNAL_BLOB size: %w", err)
+			// Read journal blob as RDB string
+			journalBlob := p.readString()
+			if len(journalBlob) == 0 {
+				log.Printf("  [FLOW-%d] Empty JOURNAL_BLOB (num_entries=%d)", p.flowID, numEntries)
+				continue
 			}
 
-			// Skip the journal entry data
-			if size > 0 {
-				skipBuf := make([]byte, size)
-				if _, err := io.ReadFull(p.reader, skipBuf); err != nil {
-					return nil, fmt.Errorf("failed to skip JOURNAL_BLOB data (%d bytes): %w", size, err)
-				}
-				log.Printf("  [FLOW-%d] Skipped inline journal blob (marker=0x%02x, size=%d bytes)", p.flowID, marker, size)
+			// Parse and apply journal entries
+			if err := p.processJournalBlob(journalBlob, numEntries); err != nil {
+				return nil, fmt.Errorf("failed to process JOURNAL_BLOB: %w", err)
 			}
 
 			// Continue to the next opcode
@@ -457,4 +458,55 @@ func (p *RDBParser) readString() string {
 // getCurrentTimeMillis returns the current timestamp in milliseconds
 func getCurrentTimeMillis() int64 {
 	return time.Now().UnixMilli()
+}
+
+// processJournalBlob parses and applies inline journal entries
+func (p *RDBParser) processJournalBlob(blobData string, numEntries uint64) error {
+	// Create a journal reader from the blob data
+	blobReader := bytes.NewReader([]byte(blobData))
+	journalReader := NewJournalReader(blobReader)
+
+	// Parse and process each entry
+	var processed uint64
+	for processed < numEntries {
+		entry, err := journalReader.ReadEntry()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return fmt.Errorf("failed to parse journal entry %d/%d: %w", processed+1, numEntries, err)
+		}
+
+		// Apply the entry via callback if provided
+		if p.onJournalEntry != nil {
+			// Set current database for the entry
+			if entry.Opcode == OpSelect {
+				p.currentDB = int(entry.DbIndex)
+				log.Printf("  [FLOW-%d] Inline journal: SELECT DB %d", p.flowID, entry.DbIndex)
+			} else if entry.Opcode == OpCommand || entry.Opcode == OpExpired {
+				// Apply the command
+				if err := p.onJournalEntry(entry); err != nil {
+					log.Printf("  [FLOW-%d] ✗ Failed to apply inline journal entry: %v", p.flowID, err)
+					return fmt.Errorf("failed to apply inline journal entry: %w", err)
+				}
+				log.Printf("  [FLOW-%d] ✓ Applied inline journal: %s %v", p.flowID, entry.Command, entry.Args)
+			} else if entry.Opcode == OpLSN || entry.Opcode == OpPing {
+				// LSN and PING don't need application
+				log.Printf("  [FLOW-%d] Inline journal: %s", p.flowID, entry.Opcode)
+			}
+		} else {
+			// No callback - this shouldn't happen but log it
+			log.Printf("  [FLOW-%d] ⚠ No callback for inline journal entry, skipping", p.flowID)
+		}
+
+		processed++
+	}
+
+	if processed != numEntries {
+		log.Printf("  [FLOW-%d] ⚠ JOURNAL_BLOB: expected %d entries, parsed %d", p.flowID, numEntries, processed)
+	} else {
+		log.Printf("  [FLOW-%d] Processed %d inline journal entries", p.flowID, processed)
+	}
+
+	return nil
 }

@@ -17,6 +17,9 @@ func (p *RDBParser) parseHash(typeByte byte) (*HashValue, error) {
 		return p.parseHashStandard()
 	case RDB_TYPE_HASH_ZIPLIST:
 		return p.parseHashZiplist()
+	case RDB_TYPE_HASH_ZIPLIST_EX, RDB_TYPE_HASH_LISTPACK:
+		// Both type 16 and 20 use listpack format
+		return p.parseHashListpack()
 	default:
 		return nil, fmt.Errorf("unsupported hash encoding type: %d", typeByte)
 	}
@@ -52,6 +55,28 @@ func (p *RDBParser) parseHashZiplist() (*HashValue, error) {
 	}
 
 	// Fields and values alternate in the ziplist
+	fields := make(map[string]string)
+	for i := 0; i < len(entries); i += 2 {
+		if i+1 < len(entries) {
+			fields[entries[i]] = entries[i+1]
+		}
+	}
+
+	return &HashValue{Fields: fields}, nil
+}
+
+// parseHashListpack decodes the listpack-encoded hash (types 16, 20)
+func (p *RDBParser) parseHashListpack() (*HashValue, error) {
+	// Read listpack bytes
+	listpackBytes := p.readString()
+
+	// Decode listpack
+	entries, err := parseListpack([]byte(listpackBytes))
+	if err != nil {
+		return nil, err
+	}
+
+	// Fields and values alternate in the listpack
 	fields := make(map[string]string)
 	for i := 0; i < len(entries); i += 2 {
 		if i+1 < len(entries) {
