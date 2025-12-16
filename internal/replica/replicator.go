@@ -1275,16 +1275,16 @@ func (r *Replicator) writeRDBEntry(entry *RDBEntry) error {
 	case RDB_TYPE_STRING:
 		return r.writeString(entry)
 
-	case RDB_TYPE_HASH, RDB_TYPE_HASH_ZIPLIST:
+	case RDB_TYPE_HASH, RDB_TYPE_HASH_ZIPLIST, RDB_TYPE_HASH_ZIPLIST_EX, RDB_TYPE_HASH_LISTPACK:
 		return r.writeHash(entry)
 
-	case RDB_TYPE_LIST_QUICKLIST_2, 18: // 18 is Dragonfly listpack encoding for lists
+	case RDB_TYPE_LIST_QUICKLIST, RDB_TYPE_LIST_QUICKLIST_2:
 		return r.writeList(entry)
 
-	case RDB_TYPE_SET, RDB_TYPE_SET_INTSET:
+	case RDB_TYPE_SET, RDB_TYPE_SET_INTSET, RDB_TYPE_SET_LISTPACK:
 		return r.writeSet(entry)
 
-	case RDB_TYPE_ZSET_2, RDB_TYPE_ZSET_ZIPLIST:
+	case RDB_TYPE_ZSET_2, RDB_TYPE_ZSET_ZIPLIST, RDB_TYPE_ZSET_LISTPACK:
 		return r.writeZSet(entry)
 
 	case RDB_TYPE_STREAM_LISTPACKS, RDB_TYPE_STREAM_LISTPACKS_2, RDB_TYPE_STREAM_LISTPACKS_3:
