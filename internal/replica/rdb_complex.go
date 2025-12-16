@@ -189,6 +189,8 @@ func (p *RDBParser) parseSet(typeByte byte) (*SetValue, error) {
 		return p.parseSetStandard()
 	case RDB_TYPE_SET_INTSET:
 		return p.parseSetIntset()
+	case RDB_TYPE_SET_LISTPACK:
+		return p.parseSetListpack()
 	default:
 		return nil, fmt.Errorf("unsupported set encoding type: %d", typeByte)
 	}
@@ -224,6 +226,20 @@ func (p *RDBParser) parseSetIntset() (*SetValue, error) {
 	return &SetValue{Members: members}, nil
 }
 
+// parseSetListpack handles the listpack encoding (RDB_TYPE_SET_LISTPACK = 22, Redis 7+)
+func (p *RDBParser) parseSetListpack() (*SetValue, error) {
+	// Read listpack bytes
+	listpackBytes := p.readString()
+
+	// Decode listpack contents
+	members, err := parseListpack([]byte(listpackBytes))
+	if err != nil {
+		return nil, err
+	}
+
+	return &SetValue{Members: members}, nil
+}
+
 // ============ ZSet parsing ============
 
 // parseZSet decodes sorted sets
@@ -233,6 +249,8 @@ func (p *RDBParser) parseZSet(typeByte byte) (*ZSetValue, error) {
 		return p.parseZSetStandard()
 	case RDB_TYPE_ZSET_ZIPLIST:
 		return p.parseZSetZiplist()
+	case RDB_TYPE_ZSET_LISTPACK:
+		return p.parseZSetListpack()
 	default:
 		return nil, fmt.Errorf("unsupported zset encoding type: %d", typeByte)
 	}
@@ -266,6 +284,30 @@ func (p *RDBParser) parseZSetZiplist() (*ZSetValue, error) {
 
 	// Decode ziplist
 	entries, err := parseZiplist([]byte(ziplistBytes))
+	if err != nil {
+		return nil, err
+	}
+
+	// Entries alternate between member and score
+	var members []ZSetMember
+	for i := 0; i < len(entries); i += 2 {
+		if i+1 < len(entries) {
+			member := entries[i]
+			score, _ := strconv.ParseFloat(entries[i+1], 64)
+			members = append(members, ZSetMember{Member: member, Score: score})
+		}
+	}
+
+	return &ZSetValue{Members: members}, nil
+}
+
+// parseZSetListpack handles the listpack encoding (RDB_TYPE_ZSET_LISTPACK = 18, Redis 7+)
+func (p *RDBParser) parseZSetListpack() (*ZSetValue, error) {
+	// Read listpack bytes
+	listpackBytes := p.readString()
+
+	// Decode listpack
+	entries, err := parseListpack([]byte(listpackBytes))
 	if err != nil {
 		return nil, err
 	}
