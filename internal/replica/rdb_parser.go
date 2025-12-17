@@ -20,8 +20,11 @@ type RDBParser struct {
 	flowID         int
 
 	// State tracked during parsing
-	currentDB int   // current database index
-	expireMs  int64 // current key expiration (absolute ms timestamp)
+	currentDB       int   // current database index
+	expireMs        int64 // current key expiration (absolute ms timestamp)
+	lz4BlobCount    int   // number of LZ4 blobs processed
+	zstdBlobCount   int   // number of ZSTD blobs processed
+	journalBlobCount int  // number of journal blobs processed
 
 	// Callback for applying inline journal entries during RDB phase
 	onJournalEntry func(*JournalEntry) error
@@ -115,23 +118,27 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			// Format per Dragonfly source: [0xD2][num_entries: packed_uint][journal_blob: RDB string]
 			// These entries represent writes that occurred during RDB transmission
 			// and must be applied inline to maintain consistency
+			p.journalBlobCount++
+			blobNum := p.journalBlobCount
 
 			// Read number of entries (packed uint)
 			numEntries, _, err := p.readLength()
 			if err != nil {
-				return nil, fmt.Errorf("failed to read JOURNAL_BLOB num_entries: %w", err)
+				return nil, fmt.Errorf("failed to read JOURNAL_BLOB #%d num_entries: %w", blobNum, err)
 			}
 
 			// Read journal blob as RDB string
 			journalBlob := p.readString()
 			if len(journalBlob) == 0 {
-				log.Printf("  [FLOW-%d] Empty JOURNAL_BLOB (num_entries=%d)", p.flowID, numEntries)
+				log.Printf("  [FLOW-%d] [JOURNAL-BLOB #%d] Empty blob (num_entries=%d)", p.flowID, blobNum, numEntries)
 				continue
 			}
 
+			log.Printf("  [FLOW-%d] [JOURNAL-BLOB #%d] Processing %d entries (%d bytes)", p.flowID, blobNum, numEntries, len(journalBlob))
+
 			// Parse and apply journal entries
 			if err := p.processJournalBlob(journalBlob, numEntries); err != nil {
-				return nil, fmt.Errorf("failed to process JOURNAL_BLOB: %w", err)
+				return nil, fmt.Errorf("failed to process JOURNAL_BLOB #%d: %w", blobNum, err)
 			}
 
 			// Continue to the next opcode
@@ -412,12 +419,16 @@ func (p *RDBParser) handleZstdBlob() error {
 
 // handleLZ4Blob handles LZ4 compressed blob (opcode 0xCA)
 func (p *RDBParser) handleLZ4Blob() error {
+	p.lz4BlobCount++
+	blobNum := p.lz4BlobCount
+
 	// Read compressed data as a length-prefixed string
 	compressedData, err := p.readStringFull()
 	if err != nil {
-		return fmt.Errorf("failed to read compressed data: %w", err)
+		log.Printf("  [FLOW-%d] ✗ LZ4 blob #%d: failed to read compressed data: %v", p.flowID, blobNum, err)
+		return fmt.Errorf("failed to read compressed data (blob #%d): %w", blobNum, err)
 	}
-	log.Printf("  [FLOW-%d] → LZ4 blob: read %d bytes of compressed data", p.flowID, len(compressedData))
+	log.Printf("  [FLOW-%d] → LZ4 blob #%d: read %d bytes of compressed data", p.flowID, blobNum, len(compressedData))
 
 	// Decompress using LZ4 Frame format (not Block format)
 	// Dragonfly uses LZ4F_compressFrame which produces Frame format with embedded metadata
