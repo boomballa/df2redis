@@ -412,11 +412,34 @@ func (p *RDBParser) handleZstdBlob() error {
 
 // handleLZ4Blob handles LZ4 compressed blob (opcode 0xCA)
 func (p *RDBParser) handleLZ4Blob() error {
-	// Read compressed data as a length-prefixed string
-	compressedData, err := p.readStringFull()
+	log.Printf("  [FLOW-%d] → Entering LZ4 blob handler", p.flowID)
+
+	// Read length first for debugging
+	length, special, err := p.readLength()
 	if err != nil {
-		return fmt.Errorf("failed to read compressed data: %w", err)
+		return fmt.Errorf("failed to read compressed data length: %w", err)
 	}
+	log.Printf("  [FLOW-%d] → LZ4 blob length: %d bytes (special=%v)", p.flowID, length, special)
+
+	// Read compressed data
+	if length == 0 {
+		return fmt.Errorf("LZ4 blob has zero length")
+	}
+
+	// If special encoding, handle it
+	if special {
+		return fmt.Errorf("unexpected special encoding for LZ4 blob: %d", length)
+	}
+
+	// Read the actual compressed data
+	buf := make([]byte, length)
+	n, err := io.ReadFull(p.reader, buf)
+	if err != nil {
+		log.Printf("  [FLOW-%d] ✗ Failed to read LZ4 data: expected %d bytes, got %d bytes, err=%v", p.flowID, length, n, err)
+		return fmt.Errorf("failed to read %d bytes of compressed data (got %d): %w", length, n, err)
+	}
+	compressedData := string(buf)
+	log.Printf("  [FLOW-%d] ✓ Successfully read %d bytes of compressed data", p.flowID, len(compressedData))
 
 	// Decompress using LZ4 Frame format (not Block format)
 	// Dragonfly uses LZ4F_compressFrame which produces Frame format with embedded metadata
