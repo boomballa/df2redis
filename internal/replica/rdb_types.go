@@ -42,13 +42,18 @@ const (
 	RDB_TYPE_HASH_ZIPLIST = 13
 
 	// Quicklist encodings
-	RDB_TYPE_LIST_QUICKLIST   = 14
-	RDB_TYPE_LIST_QUICKLIST_2 = 17 // Redis 7.0+ / Dragonfly
+	RDB_TYPE_LIST_QUICKLIST = 14
 
 	// Stream encodings
-	RDB_TYPE_STREAM_LISTPACKS   = 15
-	RDB_TYPE_STREAM_LISTPACKS_2 = 19
-	RDB_TYPE_STREAM_LISTPACKS_3 = 21
+	RDB_TYPE_STREAM_LISTPACKS = 15
+
+	// Redis 7.0+ listpack encodings (compatible with Dragonfly)
+	RDB_TYPE_HASH_LISTPACK      = 16 // Hash encoded as listpack
+	RDB_TYPE_ZSET_LISTPACK      = 17 // ZSet encoded as listpack
+	RDB_TYPE_LIST_QUICKLIST_2   = 18 // Quicklist 2.0 with listpack
+	RDB_TYPE_STREAM_LISTPACKS_2 = 19 // Stream listpack v2
+	RDB_TYPE_SET_LISTPACK       = 20 // Set encoded as listpack
+	RDB_TYPE_STREAM_LISTPACKS_3 = 21 // Stream listpack v3
 
 	// Dragonfly custom types (30-35)
 	RDB_TYPE_JSON             = 30
