@@ -126,25 +126,37 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			p.journalBlobCount++
 			blobNum := p.journalBlobCount
 
+			log.Printf("  [FLOW-%d] [JOURNAL-BLOB #%d] ⚠ DETECTED - about to read num_entries", p.flowID, blobNum)
+
 			// Read number of entries (packed uint)
 			numEntries, _, err := p.readLength()
 			if err != nil {
+				log.Printf("  [FLOW-%d] [JOURNAL-BLOB #%d] ✗ FAILED to read num_entries: %v", p.flowID, blobNum, err)
 				return nil, fmt.Errorf("failed to read JOURNAL_BLOB #%d num_entries: %w", blobNum, err)
 			}
 
+			log.Printf("  [FLOW-%d] [JOURNAL-BLOB #%d] → num_entries=%d, about to read blob data", p.flowID, blobNum, numEntries)
+
 			// Read journal blob as RDB string
 			journalBlob := p.readString()
-			if len(journalBlob) == 0 {
-				log.Printf("  [FLOW-%d] [JOURNAL-BLOB #%d] Empty blob (num_entries=%d)", p.flowID, blobNum, numEntries)
+			blobLen := len(journalBlob)
+
+			log.Printf("  [FLOW-%d] [JOURNAL-BLOB #%d] → blob data read: %d bytes", p.flowID, blobNum, blobLen)
+
+			if blobLen == 0 {
+				log.Printf("  [FLOW-%d] [JOURNAL-BLOB #%d] ⊘ SKIPPED - empty blob (num_entries=%d)", p.flowID, blobNum, numEntries)
 				continue
 			}
 
-			log.Printf("  [FLOW-%d] [JOURNAL-BLOB #%d] Processing %d entries (%d bytes)", p.flowID, blobNum, numEntries, len(journalBlob))
+			log.Printf("  [FLOW-%d] [JOURNAL-BLOB #%d] Processing %d entries (%d bytes)", p.flowID, blobNum, numEntries, blobLen)
 
 			// Parse and apply journal entries
 			if err := p.processJournalBlob(journalBlob, numEntries); err != nil {
+				log.Printf("  [FLOW-%d] [JOURNAL-BLOB #%d] ✗ FAILED to process: %v", p.flowID, blobNum, err)
 				return nil, fmt.Errorf("failed to process JOURNAL_BLOB #%d: %w", blobNum, err)
 			}
+
+			log.Printf("  [FLOW-%d] [JOURNAL-BLOB #%d] ✓ Successfully processed", p.flowID, blobNum)
 
 			// Continue to the next opcode
 			continue
@@ -487,51 +499,74 @@ func getCurrentTimeMillis() int64 {
 
 // processJournalBlob parses and applies inline journal entries
 func (p *RDBParser) processJournalBlob(blobData string, numEntries uint64) error {
+	log.Printf("  [FLOW-%d] [JOURNAL-BLOB-PROCESS] Starting to process blob: numEntries=%d, blobSize=%d bytes",
+		p.flowID, numEntries, len(blobData))
+
+	// Check if callback is registered
+	if p.onJournalEntry == nil {
+		log.Printf("  [FLOW-%d] [JOURNAL-BLOB-PROCESS] ✗ FATAL: No callback registered!", p.flowID)
+		return fmt.Errorf("no journal entry callback registered")
+	}
+
 	// Create a journal reader from the blob data
 	blobReader := bytes.NewReader([]byte(blobData))
 	journalReader := NewJournalReader(blobReader)
 
 	// Parse and process each entry
 	var processed uint64
+	var appliedCommands uint64
+
 	for processed < numEntries {
+		log.Printf("  [FLOW-%d] [JOURNAL-BLOB-PROCESS] Reading entry %d/%d", p.flowID, processed+1, numEntries)
+
 		entry, err := journalReader.ReadEntry()
 		if err != nil {
 			if err == io.EOF {
+				log.Printf("  [FLOW-%d] [JOURNAL-BLOB-PROCESS] ⚠ EOF reached at entry %d/%d", p.flowID, processed, numEntries)
 				break
 			}
+			log.Printf("  [FLOW-%d] [JOURNAL-BLOB-PROCESS] ✗ Failed to parse entry %d/%d: %v",
+				p.flowID, processed+1, numEntries, err)
 			return fmt.Errorf("failed to parse journal entry %d/%d: %w", processed+1, numEntries, err)
 		}
 
-		// Apply the entry via callback if provided
-		if p.onJournalEntry != nil {
-			// Set current database for the entry
-			if entry.Opcode == OpSelect {
-				p.currentDB = int(entry.DbIndex)
-				log.Printf("  [FLOW-%d] [INLINE-JOURNAL] SELECT DB %d", p.flowID, entry.DbIndex)
-			} else if entry.Opcode == OpCommand || entry.Opcode == OpExpired {
-				// Apply the command (detailed logging happens inside replayCommand)
-				if err := p.onJournalEntry(entry); err != nil {
-					// Error log already printed by replayCommand
-					return fmt.Errorf("failed to apply inline journal entry: %w", err)
-				}
-				// Success log already printed by replayCommand, no need to duplicate
-			} else if entry.Opcode == OpLSN {
-				log.Printf("  [FLOW-%d] [INLINE-JOURNAL] LSN update: %d", p.flowID, entry.LSN)
-			} else if entry.Opcode == OpPing {
-				log.Printf("  [FLOW-%d] [INLINE-JOURNAL] PING", p.flowID)
+		log.Printf("  [FLOW-%d] [JOURNAL-BLOB-PROCESS] Entry %d: opcode=%d, dbIndex=%d",
+			p.flowID, processed+1, entry.Opcode, entry.DbIndex)
+
+		// Apply the entry via callback
+		if entry.Opcode == OpSelect {
+			p.currentDB = int(entry.DbIndex)
+			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] SELECT DB %d", p.flowID, entry.DbIndex)
+		} else if entry.Opcode == OpCommand || entry.Opcode == OpExpired {
+			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] → Applying command: %s (args=%v)",
+				p.flowID, entry.Command, entry.Args)
+
+			// Apply the command (detailed logging happens inside replayCommand)
+			if err := p.onJournalEntry(entry); err != nil {
+				log.Printf("  [FLOW-%d] [INLINE-JOURNAL] ✗ Failed to apply command: %v", p.flowID, err)
+				return fmt.Errorf("failed to apply inline journal entry: %w", err)
 			}
+
+			appliedCommands++
+			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] ✓ Command applied successfully (total applied: %d)",
+				p.flowID, appliedCommands)
+		} else if entry.Opcode == OpLSN {
+			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] LSN update: %d", p.flowID, entry.LSN)
+		} else if entry.Opcode == OpPing {
+			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] PING", p.flowID)
 		} else {
-			// No callback - this shouldn't happen but log it
-			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] ⚠ No callback registered, skipping entry", p.flowID)
+			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] ⚠ Unknown opcode: %d", p.flowID, entry.Opcode)
 		}
 
 		processed++
 	}
 
 	if processed != numEntries {
-		log.Printf("  [FLOW-%d] ⚠ JOURNAL_BLOB: expected %d entries, parsed %d", p.flowID, numEntries, processed)
+		log.Printf("  [FLOW-%d] ⚠ JOURNAL_BLOB: expected %d entries, parsed %d (commands applied: %d)",
+			p.flowID, numEntries, processed, appliedCommands)
 	} else {
-		log.Printf("  [FLOW-%d] Processed %d inline journal entries", p.flowID, processed)
+		log.Printf("  [FLOW-%d] ✓ Processed %d inline journal entries (commands applied: %d)",
+			p.flowID, processed, appliedCommands)
 	}
 
 	return nil
