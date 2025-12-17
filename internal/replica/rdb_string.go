@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
 	"strconv"
 
 	lzf "github.com/zhuyie/golzf"
@@ -18,6 +19,11 @@ func (p *RDBParser) readStringFull() (string, error) {
 	length, special, err := p.readLength()
 	if err != nil {
 		return "", fmt.Errorf("failed to read string length: %w", err)
+	}
+
+	// Debug: log large lengths
+	if length > 100000 {
+		log.Printf("  [FLOW-%d] ⚠ readStringFull: unusually large length=%d, special=%v", p.flowID, length, special)
 	}
 
 	if special {
@@ -35,6 +41,7 @@ func (p *RDBParser) readStringFull() (string, error) {
 	if err != nil {
 		// Enhanced error logging for EOF issues
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			log.Printf("  [FLOW-%d] ✗ readStringFull: expected %d bytes, got %d bytes, special=%v", p.flowID, length, n, special)
 			return "", fmt.Errorf("failed to read string data: expected %d bytes, got %d bytes (stream ended prematurely, possible network issue or Dragonfly bug): %w", length, n, err)
 		}
 		return "", fmt.Errorf("failed to read string data: %w", err)
