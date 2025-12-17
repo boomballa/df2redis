@@ -31,7 +31,12 @@ func (p *RDBParser) readStringFull() (string, error) {
 	}
 
 	buf := make([]byte, length)
-	if _, err := io.ReadFull(p.reader, buf); err != nil {
+	n, err := io.ReadFull(p.reader, buf)
+	if err != nil {
+		// Enhanced error logging for EOF issues
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			return "", fmt.Errorf("failed to read string data: expected %d bytes, got %d bytes (stream ended prematurely, possible network issue or Dragonfly bug): %w", length, n, err)
+		}
 		return "", fmt.Errorf("failed to read string data: %w", err)
 	}
 
