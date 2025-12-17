@@ -412,34 +412,12 @@ func (p *RDBParser) handleZstdBlob() error {
 
 // handleLZ4Blob handles LZ4 compressed blob (opcode 0xCA)
 func (p *RDBParser) handleLZ4Blob() error {
-	log.Printf("  [FLOW-%d] → Entering LZ4 blob handler", p.flowID)
-
-	// Read length first for debugging
-	length, special, err := p.readLength()
+	// Read compressed data as a length-prefixed string
+	compressedData, err := p.readStringFull()
 	if err != nil {
-		return fmt.Errorf("failed to read compressed data length: %w", err)
+		return fmt.Errorf("failed to read compressed data: %w", err)
 	}
-	log.Printf("  [FLOW-%d] → LZ4 blob length: %d bytes (special=%v)", p.flowID, length, special)
-
-	// Read compressed data
-	if length == 0 {
-		return fmt.Errorf("LZ4 blob has zero length")
-	}
-
-	// If special encoding, handle it
-	if special {
-		return fmt.Errorf("unexpected special encoding for LZ4 blob: %d", length)
-	}
-
-	// Read the actual compressed data
-	buf := make([]byte, length)
-	n, err := io.ReadFull(p.reader, buf)
-	if err != nil {
-		log.Printf("  [FLOW-%d] ✗ Failed to read LZ4 data: expected %d bytes, got %d bytes, err=%v", p.flowID, length, n, err)
-		return fmt.Errorf("failed to read %d bytes of compressed data (got %d): %w", length, n, err)
-	}
-	compressedData := string(buf)
-	log.Printf("  [FLOW-%d] ✓ Successfully read %d bytes of compressed data", p.flowID, len(compressedData))
+	log.Printf("  [FLOW-%d] → LZ4 blob: read %d bytes of compressed data", p.flowID, len(compressedData))
 
 	// Decompress using LZ4 Frame format (not Block format)
 	// Dragonfly uses LZ4F_compressFrame which produces Frame format with embedded metadata
@@ -505,21 +483,22 @@ func (p *RDBParser) processJournalBlob(blobData string, numEntries uint64) error
 			// Set current database for the entry
 			if entry.Opcode == OpSelect {
 				p.currentDB = int(entry.DbIndex)
-				log.Printf("  [FLOW-%d] Inline journal: SELECT DB %d", p.flowID, entry.DbIndex)
+				log.Printf("  [FLOW-%d] [INLINE-JOURNAL] SELECT DB %d", p.flowID, entry.DbIndex)
 			} else if entry.Opcode == OpCommand || entry.Opcode == OpExpired {
-				// Apply the command
+				// Apply the command (detailed logging happens inside replayCommand)
 				if err := p.onJournalEntry(entry); err != nil {
-					log.Printf("  [FLOW-%d] ✗ Failed to apply inline journal entry: %v", p.flowID, err)
+					// Error log already printed by replayCommand
 					return fmt.Errorf("failed to apply inline journal entry: %w", err)
 				}
-				log.Printf("  [FLOW-%d] ✓ Applied inline journal: %s %v", p.flowID, entry.Command, entry.Args)
-			} else if entry.Opcode == OpLSN || entry.Opcode == OpPing {
-				// LSN and PING don't need application
-				log.Printf("  [FLOW-%d] Inline journal: %s", p.flowID, entry.Opcode)
+				// Success log already printed by replayCommand, no need to duplicate
+			} else if entry.Opcode == OpLSN {
+				log.Printf("  [FLOW-%d] [INLINE-JOURNAL] LSN update: %d", p.flowID, entry.LSN)
+			} else if entry.Opcode == OpPing {
+				log.Printf("  [FLOW-%d] [INLINE-JOURNAL] PING", p.flowID)
 			}
 		} else {
 			// No callback - this shouldn't happen but log it
-			log.Printf("  [FLOW-%d] ⚠ No callback for inline journal entry, skipping", p.flowID)
+			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] ⚠ No callback registered, skipping entry", p.flowID)
 		}
 
 		processed++
