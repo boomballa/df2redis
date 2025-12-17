@@ -432,10 +432,18 @@ func (p *RDBParser) handleLZ4Blob() error {
 
 	// Decompress using LZ4 Frame format (not Block format)
 	// Dragonfly uses LZ4F_compressFrame which produces Frame format with embedded metadata
+	decompressStart := time.Now()
 	reader := lz4.NewReader(bytes.NewReader([]byte(compressedData)))
 	decompressed, err := io.ReadAll(reader)
+	decompressDuration := time.Since(decompressStart)
 	if err != nil {
 		return fmt.Errorf("LZ4 Frame decompression failed: %w", err)
+	}
+
+	// Log slow decompressions (>1 second)
+	if decompressDuration > time.Second {
+		log.Printf("  [FLOW-%d] ⚠ LZ4 blob #%d: decompression took %v (compressed: %d bytes → uncompressed: %d bytes)",
+			p.flowID, blobNum, decompressDuration, len(compressedData), len(decompressed))
 	}
 
 	// Append RDB_OPCODE_COMPRESSED_BLOB_END (0xCB) to the decompressed data
