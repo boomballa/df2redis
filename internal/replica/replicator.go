@@ -1073,6 +1073,7 @@ func (r *Replicator) replayCommand(flowID int, entry *JournalEntry) error {
 	switch entry.Opcode {
 	case OpSelect:
 		// Redis Cluster only exposes DB 0, ignore SELECT
+		log.Printf("  [FLOW-%d] ⊘ Skipped SELECT (reason: Redis Cluster only supports DB 0)", flowID)
 		r.replayStats.mu.Lock()
 		r.replayStats.Skipped++
 		r.replayStats.mu.Unlock()
@@ -1080,6 +1081,7 @@ func (r *Replicator) replayCommand(flowID int, entry *JournalEntry) error {
 
 	case OpPing:
 		// Ignore heartbeat
+		log.Printf("  [FLOW-%d] ⊘ Skipped PING (reason: heartbeat, no action needed)", flowID)
 		r.replayStats.mu.Lock()
 		r.replayStats.Skipped++
 		r.replayStats.mu.Unlock()
@@ -1098,12 +1100,18 @@ func (r *Replicator) replayCommand(flowID int, entry *JournalEntry) error {
 
 	case OpExpired:
 		// Handle expired key by re-applying TTL using PEXPIRE
+		keyName := "unknown"
+		if len(entry.Args) > 0 {
+			keyName = entry.Args[0]
+		}
 		if err := r.handleExpiredKey(entry); err != nil {
+			log.Printf("  [FLOW-%d] ✗ FAILED OpExpired key=%s, error: %v", flowID, keyName, err)
 			r.replayStats.mu.Lock()
 			r.replayStats.Failed++
 			r.replayStats.mu.Unlock()
 			return fmt.Errorf("Failed to process expired key: %w", err)
 		}
+		log.Printf("  [FLOW-%d] ✓ OpExpired applied: key=%s", flowID, keyName)
 		r.replayStats.mu.Lock()
 		r.replayStats.ReplayedOK++
 		r.replayStats.LastReplayTime = time.Now()
@@ -1113,8 +1121,13 @@ func (r *Replicator) replayCommand(flowID int, entry *JournalEntry) error {
 	case OpCommand:
 		// Check for global commands
 		cmd := strings.ToUpper(entry.Command)
+		keyName := "N/A"
+		if len(entry.Args) > 0 {
+			keyName = entry.Args[0]
+		}
+
 		if isGlobalCommand(cmd) {
-			log.Printf("  ⚠ Skipping global command %s (requires multi-shard coordination)", cmd)
+			log.Printf("  [FLOW-%d] ⊘ Skipped global command: %s (reason: requires multi-shard coordination)", flowID, cmd)
 			r.replayStats.mu.Lock()
 			r.replayStats.Skipped++
 			r.replayStats.mu.Unlock()
@@ -1123,12 +1136,14 @@ func (r *Replicator) replayCommand(flowID int, entry *JournalEntry) error {
 
 		// Execute regular command
 		if err := r.executeCommand(entry); err != nil {
+			log.Printf("  [FLOW-%d] ✗ FAILED command: %s key=%s args=%v, error: %v", flowID, entry.Command, keyName, entry.Args[1:], err)
 			r.replayStats.mu.Lock()
 			r.replayStats.Failed++
 			r.replayStats.mu.Unlock()
 			return fmt.Errorf("Command execution failed: %w", err)
 		}
 
+		log.Printf("  [FLOW-%d] ✓ Command applied: %s key=%s args=%v", flowID, entry.Command, keyName, entry.Args[1:])
 		r.replayStats.mu.Lock()
 		r.replayStats.ReplayedOK++
 		r.replayStats.LastReplayTime = time.Now()
