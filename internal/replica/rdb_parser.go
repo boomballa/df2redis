@@ -86,6 +86,11 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			return nil, err
 		}
 
+		// Debug: Log every opcode encountered (helps diagnose missing JOURNAL_BLOB)
+		if opcode >= 0xC8 { // Log only special opcodes (not regular type codes)
+			log.Printf("  [FLOW-%d] [DEBUG] Opcode encountered: 0x%02X", p.flowID, opcode)
+		}
+
 		switch opcode {
 		case RDB_OPCODE_EXPIRETIME_MS:
 			// TTL encoded as 8-byte little-endian milliseconds

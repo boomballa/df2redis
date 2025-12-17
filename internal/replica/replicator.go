@@ -705,7 +705,9 @@ func (r *Replicator) sendStartStable() error {
 	log.Println("")
 	log.Println("🔄 Switching to stable sync mode...")
 
-	resp, err := r.mainConn.Do("DFLY", "STARTSTABLE", r.masterInfo.SyncID)
+	// STARTSTABLE may take longer than the default 5s timeout as it coordinates
+	// multiple shards and prepares for stable sync transition. Use 60s timeout.
+	resp, err := r.mainConn.DoWithTimeout(60*time.Second, "DFLY", "STARTSTABLE", r.masterInfo.SyncID)
 	if err != nil {
 		return fmt.Errorf("DFLY STARTSTABLE failed: %w", err)
 	}

@@ -150,6 +150,37 @@ func (c *Client) Do(cmd string, args ...interface{}) (interface{}, error) {
 	return c.readReply()
 }
 
+// DoWithTimeout sends a command with a custom timeout and returns the parsed RESP reply.
+// Useful for commands that may take longer than the default timeout (e.g., DFLY STARTSTABLE).
+func (c *Client) DoWithTimeout(timeout time.Duration, cmd string, args ...interface{}) (interface{}, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil, errors.New("redisx: client closed")
+	}
+
+	// Temporarily override timeout for write
+	if err := c.conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	count := 1 + len(args)
+	fmt.Fprintf(&buf, "*%d\r\n", count)
+	writeBulk(&buf, strings.ToUpper(cmd))
+	for _, arg := range args {
+		writeBulk(&buf, formatArg(arg))
+	}
+	if _, err := c.conn.Write(buf.Bytes()); err != nil {
+		return nil, err
+	}
+
+	// Set read deadline with custom timeout
+	if err := c.conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return nil, err
+	}
+	return c.readReply()
+}
+
 // Set sets a key to the given value.
 func (c *Client) Set(key, value string) error {
 	_, err := c.Do("SET", key, value)
