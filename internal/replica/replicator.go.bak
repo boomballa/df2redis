@@ -559,7 +559,7 @@ func (r *Replicator) receiveSnapshot() error {
 	// Create async writers for each flow
 	flowWriters := make([]*FlowWriter, numFlows)
 	for i := 0; i < numFlows; i++ {
-		flowWriters[i] = NewFlowWriter(i, r.writeRDBEntry)
+		flowWriters[i] = NewFlowWriter(i, r.clusterClient)
 		flowWriters[i].Start()
 	}
 
@@ -644,7 +644,7 @@ func (r *Replicator) receiveSnapshot() error {
 				}
 
 				// Write entry into Redis
-				if err := flowWriter.Enqueue(entry); err != nil {
+				if err := r.writeRDBEntry(entry); err != nil {
 					log.Printf("  [FLOW-%d] ⚠ Write failed (key=%s): %v", flowID, entry.Key, err)
 					statsMu.Lock()
 					stats.ErrorCount++
@@ -675,17 +675,6 @@ func (r *Replicator) receiveSnapshot() error {
 			return err
 		}
 	}
-
-	// Stop all writers and wait for remaining batches to flush
-	log.Println("")
-	log.Println("⏸  Stopping async writers and flushing remaining batches...")
-	for i, fw := range flowWriters {
-		fw.Stop()
-		received, written, batches := fw.GetStats()
-		log.Printf("  [FLOW-%d] Writer stats: received=%d, written=%d, batches=%d",
-			i, received, written, batches)
-	}
-	log.Println("  ✓ All writers stopped, all data flushed")
 
 	// Final stats
 	totalKeys := 0
