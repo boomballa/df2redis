@@ -556,6 +556,13 @@ func (r *Replicator) receiveSnapshot() error {
 	statsMap := make(map[int]*FlowStats)
 	var statsMu sync.Mutex
 
+	// Create async writers for each flow
+	flowWriters := make([]*FlowWriter, numFlows)
+	for i := 0; i < numFlows; i++ {
+		flowWriters[i] = NewFlowWriter(i, r.writeRDBEntry)
+		flowWriters[i].Start()
+	}
+
 	// Start a goroutine per FLOW to read and parse RDB data
 	for i := 0; i < numFlows; i++ {
 		statsMap[i] = &FlowStats{}
@@ -565,6 +572,7 @@ func (r *Replicator) receiveSnapshot() error {
 
 			flowConn := r.flowConns[flowID]
 			stats := statsMap[flowID]
+			flowWriter := flowWriters[flowID]
 			r.recordFlowStage(flowID, "rdb", "Receiving RDB snapshot")
 
 			log.Printf("  [FLOW-%d] Starting to parse RDB data...", flowID)
@@ -636,7 +644,7 @@ func (r *Replicator) receiveSnapshot() error {
 				}
 
 				// Write entry into Redis
-				if err := r.writeRDBEntry(entry); err != nil {
+				if err := flowWriter.Enqueue(entry); err != nil {
 					log.Printf("  [FLOW-%d] ⚠ Write failed (key=%s): %v", flowID, entry.Key, err)
 					statsMu.Lock()
 					stats.ErrorCount++
@@ -667,6 +675,17 @@ func (r *Replicator) receiveSnapshot() error {
 			return err
 		}
 	}
+
+	// Stop all writers and wait for remaining batches to flush
+	log.Println("")
+	log.Println("⏸  Stopping async writers and flushing remaining batches...")
+	for i, fw := range flowWriters {
+		fw.Stop()
+		received, written, batches := fw.GetStats()
+		log.Printf("  [FLOW-%d] Writer stats: received=%d, written=%d, batches=%d",
+			i, received, written, batches)
+	}
+	log.Println("  ✓ All writers stopped, all data flushed")
 
 	// Final stats
 	totalKeys := 0
@@ -706,9 +725,10 @@ func (r *Replicator) sendStartStable() error {
 	log.Println("🔄 Switching to stable sync mode...")
 
 	// STARTSTABLE may take longer than the default 5s timeout as it coordinates
-	// multiple shards and prepares for stable sync transition. Use 120s timeout.
-	log.Printf("  → Sending DFLY STARTSTABLE (sync_id=%s, timeout=120s)...", r.masterInfo.SyncID)
-	resp, err := r.mainConn.DoWithTimeout(120*time.Second, "DFLY", "STARTSTABLE", r.masterInfo.SyncID)
+	// multiple shards and prepares for stable sync transition. Use 180s timeout.
+	log.Printf("  → Sending DFLY STARTSTABLE (sync_id=%s, timeout=180s)...", r.masterInfo.SyncID)
+	log.Printf("  → Please wait, this may take a few minutes for Dragonfly to coordinate all shards...")
+	resp, err := r.mainConn.DoWithTimeout(180*time.Second, "DFLY", "STARTSTABLE", r.masterInfo.SyncID)
 	if err != nil {
 		return fmt.Errorf("DFLY STARTSTABLE failed: %w", err)
 	}

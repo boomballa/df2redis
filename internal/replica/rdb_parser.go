@@ -239,12 +239,12 @@ func (p *RDBParser) parseKeyValue(typeByte byte) (*RDBEntry, error) {
 	// 1. Read key
 	key := p.readString()
 
-	entry := &RDBEntry{
-		Key:      key,
-		Type:     typeByte,
-		DbIndex:  p.currentDB,
-		ExpireMs: p.expireMs,
-	}
+	// Get entry from pool for object reuse
+	entry := GetRDBEntry()
+	entry.Key = key
+	entry.Type = typeByte
+	entry.DbIndex = p.currentDB
+	entry.ExpireMs = p.expireMs
 
 	// 2. Parse value based on encoding
 	var err error
@@ -530,18 +530,21 @@ func (p *RDBParser) processJournalBlob(blobData string, numEntries uint64) error
 			return fmt.Errorf("failed to parse journal entry %d/%d: %w", processed+1, numEntries, err)
 		}
 
-		log.Printf("  [FLOW-%d] [JOURNAL-BLOB-PROCESS] Entry %d: opcode=%d, dbIndex=%d",
-			p.flowID, processed+1, entry.Opcode, entry.DbIndex)
+		log.Printf("  [FLOW-%d] [JOURNAL-BLOB-PROCESS] Entry %d: opcode=%d (%s), dbIndex=%d, txid=%d",
+			p.flowID, processed+1, entry.Opcode, entry.Opcode.String(), entry.DbIndex, entry.TxID)
 
 		// Apply the entry via callback
-		if entry.Opcode == OpSelect {
+		switch entry.Opcode {
+		case OpSelect:
 			p.currentDB = int(entry.DbIndex)
 			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] SELECT DB %d", p.flowID, entry.DbIndex)
-		} else if entry.Opcode == OpCommand || entry.Opcode == OpExpired {
-			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] → Applying command: %s (args=%v)",
-				p.flowID, entry.Command, entry.Args)
 
-			// Apply the command (detailed logging happens inside replayCommand)
+		case OpCommand, OpExpired:
+			// Log the command with full details
+			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] → Applying %s: cmd=%s, args=%v (db=%d, txid=%d)",
+				p.flowID, entry.Opcode.String(), entry.Command, entry.Args, entry.DbIndex, entry.TxID)
+
+			// Apply the command
 			if err := p.onJournalEntry(entry); err != nil {
 				log.Printf("  [FLOW-%d] [INLINE-JOURNAL] ✗ Failed to apply command: %v", p.flowID, err)
 				return fmt.Errorf("failed to apply inline journal entry: %w", err)
@@ -550,11 +553,17 @@ func (p *RDBParser) processJournalBlob(blobData string, numEntries uint64) error
 			appliedCommands++
 			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] ✓ Command applied successfully (total applied: %d)",
 				p.flowID, appliedCommands)
-		} else if entry.Opcode == OpLSN {
+
+		case OpLSN:
 			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] LSN update: %d", p.flowID, entry.LSN)
-		} else if entry.Opcode == OpPing {
+
+		case OpPing:
 			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] PING", p.flowID)
-		} else {
+
+		case OpNoop:
+			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] NOOP", p.flowID)
+
+		default:
 			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] ⚠ Unknown opcode: %d", p.flowID, entry.Opcode)
 		}
 
