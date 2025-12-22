@@ -19,6 +19,10 @@ type FlowWriter struct {
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
 
+	// Concurrency control
+	maxConcurrentWrites int        // Maximum concurrent write goroutines
+	writeSemaphore      chan struct{} // Semaphore to limit concurrency
+
 	// Statistics
 	stats struct {
 		totalReceived int64
@@ -35,15 +39,19 @@ type FlowWriter struct {
 func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error) *FlowWriter {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	maxConcurrent := 10 // Limit to 10 concurrent slot writes to avoid overloading Dragonfly
+
 	fw := &FlowWriter{
-		flowID:          flowID,
-		entryChan:       make(chan *RDBEntry, 1000), // Buffer 1000 entries
-		batchSize:       100,                        // Batch every 100 entries
-		flushInterval:   100 * time.Millisecond,     // Or every 100ms
-		writeFn:         writeFn,
-		ctx:             ctx,
-		cancel:          cancel,
-		channelCapacity: 1000,
+		flowID:              flowID,
+		entryChan:           make(chan *RDBEntry, 1000),      // Buffer 1000 entries
+		batchSize:           100,                             // Batch every 100 entries
+		flushInterval:       100 * time.Millisecond,          // Or every 100ms
+		writeFn:             writeFn,
+		ctx:                 ctx,
+		cancel:              cancel,
+		channelCapacity:     1000,
+		maxConcurrentWrites: maxConcurrent,
+		writeSemaphore:      make(chan struct{}, maxConcurrent), // Semaphore for concurrency control
 	}
 
 	return fw
@@ -55,11 +63,18 @@ func (fw *FlowWriter) Start() {
 	go fw.batchWriteLoop()
 }
 
-// Stop gracefully shuts down the writer
+// Stop gracefully shuts down the writer, ensuring all queued entries are flushed
 func (fw *FlowWriter) Stop() {
+	// Close channel to signal no more entries
 	close(fw.entryChan)
-	fw.cancel()
+
+	// Wait for write loop to finish processing all remaining entries
 	fw.wg.Wait()
+
+	// Cancel context after all data is written
+	fw.cancel()
+
+	log.Printf("  [FLOW-%d] [WRITER] Shutdown complete, all data flushed", fw.flowID)
 }
 
 // Enqueue adds an entry to the write queue (blocks if channel is full - backpressure)
@@ -150,14 +165,19 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 	slotGroups := fw.groupBySlot(batch)
 	numGroups := len(slotGroups)
 
-	// Process groups in parallel using goroutines
+	// Process groups in parallel using goroutines with concurrency limit
 	var wg sync.WaitGroup
 	resultChan := make(chan writeResult, numGroups)
 
 	for _, group := range slotGroups {
+		// Acquire semaphore slot (blocks if limit reached)
+		fw.writeSemaphore <- struct{}{}
+
 		wg.Add(1)
 		go func(entries []*RDBEntry) {
 			defer wg.Done()
+			defer func() { <-fw.writeSemaphore }() // Release semaphore slot
+
 			result := fw.writeSlotGroup(entries)
 			resultChan <- result
 		}(group)
