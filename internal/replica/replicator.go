@@ -706,6 +706,15 @@ func (r *Replicator) receiveSnapshot() error {
 
 	log.Printf("  ✓ RDB full import complete: total %d keys, skipped %d (expired), failed %d, inline_journal=%d",
 		totalKeys, totalSkipped, totalErrors, totalInlineJournal)
+	log.Printf("")
+
+	// IMPORTANT: Wait for Dragonfly to complete RDB transmission before sending STARTSTABLE
+	// Even though we've received all data, Dragonfly may still be writing to channels.
+	// This prevents "Channel write took XXX ms" errors and heartbeat stalls.
+	waitSeconds := 30
+	log.Printf("⏸  Waiting %d seconds for Dragonfly to complete RDB transmission...", waitSeconds)
+	log.Printf("   (This allows Dragonfly shards to finish writing and avoid heartbeat stalls)")
+	time.Sleep(time.Duration(waitSeconds) * time.Second)
 
 	// Dragonfly only sends EOF tokens after STARTSTABLE; reading before that causes a 60s timeout.
 	if err := r.sendStartStable(); err != nil {
