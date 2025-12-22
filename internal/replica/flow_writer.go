@@ -39,21 +39,26 @@ type FlowWriter struct {
 func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error) *FlowWriter {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Lower concurrency and batch size to reduce pressure on Dragonfly
-	// This prevents heartbeat stalls and channel write timeouts
-	maxConcurrent := 5   // Limit to 5 concurrent slot writes (reduced from 10)
-	batchSize := 50      // Process 50 entries per batch (reduced from 100)
-	flushInterval := 50  // Flush every 50ms (reduced from 100ms)
+	// Balance between throughput and Dragonfly stability:
+	// - Too low: causes channel backpressure and Dragonfly heartbeat stalls
+	// - Too high: overwhelms Dragonfly with concurrent requests
+	// LZ4 decompression adds CPU overhead, so we need higher concurrency
+	// to maintain sufficient throughput
+	maxConcurrent := 15  // Allow 15 concurrent slot writes (increased for LZ4 workloads)
+	batchSize := 100     // Process 100 entries per batch (restored)
+	flushInterval := 50  // Flush every 50ms (keep responsive)
+
+	channelBuffer := 2000 // Increase buffer to 2000 to handle LZ4 decompression bursts
 
 	fw := &FlowWriter{
 		flowID:              flowID,
-		entryChan:           make(chan *RDBEntry, 1000),                    // Buffer 1000 entries
-		batchSize:           batchSize,                                     // Batch every 50 entries
+		entryChan:           make(chan *RDBEntry, channelBuffer),           // Larger buffer for LZ4 workloads
+		batchSize:           batchSize,                                     // Batch every 100 entries
 		flushInterval:       time.Duration(flushInterval) * time.Millisecond, // Flush every 50ms
 		writeFn:             writeFn,
 		ctx:                 ctx,
 		cancel:              cancel,
-		channelCapacity:     1000,
+		channelCapacity:     channelBuffer,
 		maxConcurrentWrites: maxConcurrent,
 		writeSemaphore:      make(chan struct{}, maxConcurrent), // Semaphore for concurrency control
 	}
