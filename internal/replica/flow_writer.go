@@ -39,13 +39,17 @@ type FlowWriter struct {
 func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error) *FlowWriter {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	maxConcurrent := 10 // Limit to 10 concurrent slot writes to avoid overloading Dragonfly
+	// Lower concurrency and batch size to reduce pressure on Dragonfly
+	// This prevents heartbeat stalls and channel write timeouts
+	maxConcurrent := 5   // Limit to 5 concurrent slot writes (reduced from 10)
+	batchSize := 50      // Process 50 entries per batch (reduced from 100)
+	flushInterval := 50  // Flush every 50ms (reduced from 100ms)
 
 	fw := &FlowWriter{
 		flowID:              flowID,
-		entryChan:           make(chan *RDBEntry, 1000),      // Buffer 1000 entries
-		batchSize:           100,                             // Batch every 100 entries
-		flushInterval:       100 * time.Millisecond,          // Or every 100ms
+		entryChan:           make(chan *RDBEntry, 1000),                    // Buffer 1000 entries
+		batchSize:           batchSize,                                     // Batch every 50 entries
+		flushInterval:       time.Duration(flushInterval) * time.Millisecond, // Flush every 50ms
 		writeFn:             writeFn,
 		ctx:                 ctx,
 		cancel:              cancel,
