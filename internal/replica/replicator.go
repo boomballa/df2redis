@@ -556,10 +556,10 @@ func (r *Replicator) receiveSnapshot() error {
 	statsMap := make(map[int]*FlowStats)
 	var statsMu sync.Mutex
 
-	// Create async writers for each flow
+	// Create async writers for each flow with adaptive concurrency
 	flowWriters := make([]*FlowWriter, numFlows)
 	for i := 0; i < numFlows; i++ {
-		flowWriters[i] = NewFlowWriter(i, r.writeRDBEntry)
+		flowWriters[i] = NewFlowWriter(i, r.writeRDBEntry, numFlows)
 		flowWriters[i].Start()
 	}
 
