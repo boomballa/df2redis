@@ -559,7 +559,7 @@ func (r *Replicator) receiveSnapshot() error {
 	// Create async writers for each flow with adaptive concurrency
 	flowWriters := make([]*FlowWriter, numFlows)
 	for i := 0; i < numFlows; i++ {
-		flowWriters[i] = NewFlowWriter(i, r.writeRDBEntry, numFlows)
+		flowWriters[i] = NewFlowWriter(i, r.writeRDBEntry, numFlows, r.cfg.Target.Type)
 		flowWriters[i].Start()
 	}
 
