@@ -41,19 +41,25 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int) *Flo
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Adaptive concurrency control based on number of FLOWs:
-	// - Total system concurrency should be limited to avoid overload
+	// - Total system concurrency should be balanced between throughput and stability
 	// - Each FLOW gets a fair share: totalLimit / numFlows
-	// - Constraints: min 4 (avoid too slow), max 30 (single FLOW performance cap)
+	// - Constraints: min 10 (below this, performance degrades significantly)
+	//               max 30 (single FLOW performance cap)
+	//
+	// Tuning rationale:
+	//   - 2 FLOWs need ~30 concurrent each to achieve 6000 ops/sec per FLOW
+	//   - 8 FLOWs need ~12 concurrent each to achieve 4000 ops/sec per FLOW
+	//   - Total concurrency can be higher on physical machines (more resources)
 	//
 	// Examples:
-	//   2 FLOWs:  60/2  = 30 → 30 concurrent per FLOW (total: 60)
-	//   4 FLOWs:  60/4  = 15 → 15 concurrent per FLOW (total: 60)
-	//   8 FLOWs:  60/8  = 7  → 8  concurrent per FLOW (total: 64)
-	//  16 FLOWs:  60/16 = 3  → 4  concurrent per FLOW (total: 64, capped at min)
-	totalConcurrencyLimit := 60
+	//   2 FLOWs:  100/2  = 50 → 30 concurrent per FLOW (total: 60, capped at max)
+	//   4 FLOWs:  100/4  = 25 → 25 concurrent per FLOW (total: 100)
+	//   8 FLOWs:  100/8  = 12 → 12 concurrent per FLOW (total: 96)
+	//  16 FLOWs:  100/16 = 6  → 10 concurrent per FLOW (total: 160, capped at min)
+	totalConcurrencyLimit := 100  // Increased for better throughput on physical machines
 	maxConcurrent := totalConcurrencyLimit / numFlows
-	if maxConcurrent < 4 {
-		maxConcurrent = 4 // Minimum per FLOW to maintain reasonable throughput
+	if maxConcurrent < 10 {
+		maxConcurrent = 10 // Minimum per FLOW to maintain reasonable throughput
 	}
 	if maxConcurrent > 30 {
 		maxConcurrent = 30 // Maximum per FLOW (diminishing returns beyond this)
