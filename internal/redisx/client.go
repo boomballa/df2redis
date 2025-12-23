@@ -54,12 +54,33 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	}
 
 	// Enable TCP keepalive to align with Dragonfly's 30-second timeout detection
+	// and increase receive buffer to prevent Dragonfly's sink->Write() from blocking
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		// Enable keepalive
 		if err := tcpConn.SetKeepAlive(true); err != nil {
 			// Non-fatal; log a warning and continue
 			fmt.Fprintf(os.Stderr, "Warning: failed to enable TCP KeepAlive: %v\n", err)
 		} else if err := tcpConn.SetKeepAlivePeriod(30 * time.Second); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to set KeepAlive period: %v\n", err)
+		}
+
+		// CRITICAL: Increase receive buffer to 16MB
+		// Dragonfly's Channel buffer is only 2 elements, and sink->Write() blocks if
+		// client doesn't read fast enough. With a large SO_RCVBUF, kernel can buffer
+		// more data, allowing Dragonfly to continue sending even if application is busy
+		// processing/writing to Redis.
+		//
+		// This prevents the 30-second timeout error:
+		//   "Master detected replication timeout, breaking full sync"
+		const recvBufferSize = 16 * 1024 * 1024 // 16MB
+		if rawConn, err := tcpConn.SyscallConn(); err == nil {
+			_ = rawConn.Control(func(fd uintptr) {
+				// Set SO_RCVBUF on the socket file descriptor
+				// syscall.SetsockoptInt requires proper imports
+				if err := setReceiveBuffer(int(fd), recvBufferSize); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to set SO_RCVBUF to %d: %v\n", recvBufferSize, err)
+				}
+			})
 		}
 	}
 

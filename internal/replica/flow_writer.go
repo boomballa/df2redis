@@ -31,8 +31,11 @@ type FlowWriter struct {
 		mu            sync.Mutex
 	}
 
-	// Backpressure
-	channelCapacity int
+	// Backpressure and monitoring
+	channelCapacity    int
+	lastMonitorTime    time.Time
+	monitorInterval    time.Duration
+	highWatermarkCount int64 // Count of times channel usage exceeded 80%
 }
 
 // NewFlowWriter creates a new async batch writer for a flow
@@ -68,7 +71,15 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int) *Flo
 	batchSize := 100     // Process 100 entries per batch
 	flushInterval := 50  // Flush every 50ms (keep responsive)
 
-	channelBuffer := 2000 // Increase buffer to 2000 to handle LZ4 decompression bursts
+	// CRITICAL: Large buffer required to prevent blocking socket reads!
+	// Dragonfly's Channel buffer is only 2 elements, so if we block on reading from socket,
+	// Dragonfly's sink->Write() will block for 30+ seconds and trigger replication timeout.
+	//
+	// Buffer sizing:
+	//   - Each entry ~1KB avg, 50000 entries = ~50MB memory
+	//   - Dragonfly can buffer several MBs on its side (2 elements × several MB each)
+	//   - This allows continuous socket reading even when Redis writes are slower
+	channelBuffer := 50000 // Large buffer to decouple socket reading from Redis writing
 
 	fw := &FlowWriter{
 		flowID:              flowID,
@@ -81,6 +92,8 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int) *Flo
 		channelCapacity:     channelBuffer,
 		maxConcurrentWrites: maxConcurrent,
 		writeSemaphore:      make(chan struct{}, maxConcurrent), // Semaphore for concurrency control
+		lastMonitorTime:     time.Now(),
+		monitorInterval:     10 * time.Second, // Log channel usage every 10 seconds
 	}
 
 	// Log adaptive concurrency settings for visibility
@@ -116,6 +129,28 @@ func (fw *FlowWriter) Enqueue(entry *RDBEntry) error {
 	case fw.entryChan <- entry:
 		fw.stats.mu.Lock()
 		fw.stats.totalReceived++
+
+		// Monitor channel usage to detect backpressure
+		// CRITICAL: If channel is frequently full, socket reads will block,
+		// causing Dragonfly's sink->Write() to timeout (30s)
+		now := time.Now()
+		if now.Sub(fw.lastMonitorTime) >= fw.monitorInterval {
+			fw.lastMonitorTime = now
+			channelLen := len(fw.entryChan)
+			usagePercent := float64(channelLen) * 100.0 / float64(fw.channelCapacity)
+
+			// Always log periodic status
+			log.Printf("  [FLOW-%d] [MONITOR] Channel usage: %d/%d (%.1f%%)",
+				fw.flowID, channelLen, fw.channelCapacity, usagePercent)
+
+			// Track high watermark events
+			if usagePercent > 80.0 {
+				fw.highWatermarkCount++
+				log.Printf("  [FLOW-%d] [WARNING] Channel usage high! This may cause socket read blocking. "+
+					"High watermark events: %d", fw.flowID, fw.highWatermarkCount)
+			}
+		}
+
 		fw.stats.mu.Unlock()
 		return nil
 	case <-fw.ctx.Done():
