@@ -778,23 +778,36 @@ func (r *Replicator) verifyEofTokens() error {
 			}
 			log.Printf("  [FLOW-%d] → Reading EOF token (%d bytes)...", flowID, tokenLen)
 
-			// 1. Skip metadata block (0xD3 + 8 bytes). Dragonfly sends it before EOF.
-			metadataBuf := make([]byte, 9) // 1 byte opcode + 8 bytes data
-			if _, err := io.ReadFull(flowConn, metadataBuf); err != nil {
-				errChan <- fmt.Errorf("FLOW-%d: failed to read metadata: %w", flowID, err)
+			// 1. Read first opcode byte to determine what follows
+			// Dragonfly may send metadata (0xD3) or directly EOF (0xFF) depending on shard
+			firstByte := make([]byte, 1)
+			if _, err := io.ReadFull(flowConn, firstByte); err != nil {
+				errChan <- fmt.Errorf("FLOW-%d: failed to read first opcode: %w", flowID, err)
 				return
 			}
 
-			// 2. Read EOF opcode (0xFF)
-			opcodeBuf := make([]byte, 1)
-			if _, err := io.ReadFull(flowConn, opcodeBuf); err != nil {
-				errChan <- fmt.Errorf("FLOW-%d: failed to read EOF opcode: %w", flowID, err)
+			// 2. If metadata block (0xD3), skip it (8 bytes data)
+			if firstByte[0] == 0xD3 {
+				log.Printf("  [FLOW-%d] Found metadata block (0xD3), skipping 8 bytes...", flowID)
+				metadataData := make([]byte, 8)
+				if _, err := io.ReadFull(flowConn, metadataData); err != nil {
+					errChan <- fmt.Errorf("FLOW-%d: failed to read metadata data: %w", flowID, err)
+					return
+				}
+
+				// Read next opcode (should be EOF now)
+				if _, err := io.ReadFull(flowConn, firstByte); err != nil {
+					errChan <- fmt.Errorf("FLOW-%d: failed to read opcode after metadata: %w", flowID, err)
+					return
+				}
+			}
+
+			// 3. Now firstByte should be EOF opcode (0xFF)
+			if firstByte[0] != 0xFF {
+				errChan <- fmt.Errorf("FLOW-%d: expected EOF opcode 0xFF but got 0x%02X", flowID, firstByte[0])
 				return
 			}
-			if opcodeBuf[0] != 0xFF {
-				errChan <- fmt.Errorf("FLOW-%d: expected EOF opcode 0xFF but got 0x%02X", flowID, opcodeBuf[0])
-				return
-			}
+			log.Printf("  [FLOW-%d] Found EOF opcode (0xFF)", flowID)
 
 			// 3. Read checksum (8 bytes)
 			checksumBuf := make([]byte, 8)
