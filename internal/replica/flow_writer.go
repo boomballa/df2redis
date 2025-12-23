@@ -42,10 +42,10 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error) *FlowWriter {
 	// Balance between throughput and Dragonfly stability:
 	// - Too low: causes channel backpressure and Dragonfly heartbeat stalls
 	// - Too high: overwhelms Dragonfly with concurrent requests
-	// LZ4 decompression adds CPU overhead, so we need higher concurrency
-	// to maintain sufficient throughput
-	maxConcurrent := 15  // Allow 15 concurrent slot writes (increased for LZ4 workloads)
-	batchSize := 100     // Process 100 entries per batch (restored)
+	// For multi-FLOW scenarios (8+ FLOWs), lower concurrency per flow to avoid
+	// total system overload (e.g., 8 flows × 15 = 120 concurrent goroutines)
+	maxConcurrent := 8   // Limit to 8 concurrent slot writes (balanced for multi-FLOW)
+	batchSize := 100     // Process 100 entries per batch
 	flushInterval := 50  // Flush every 50ms (keep responsive)
 
 	channelBuffer := 2000 // Increase buffer to 2000 to handle LZ4 decompression bursts
