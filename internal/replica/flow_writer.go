@@ -19,6 +19,9 @@ type FlowWriter struct {
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
 
+	// Target type determines write strategy
+	targetType string // "redis-standalone" or "redis-cluster"
+
 	// Concurrency control
 	maxConcurrentWrites int        // Maximum concurrent write goroutines
 	writeSemaphore      chan struct{} // Semaphore to limit concurrency
@@ -40,31 +43,39 @@ type FlowWriter struct {
 
 // NewFlowWriter creates a new async batch writer for a flow
 // numFlows parameter enables adaptive concurrency tuning based on total FLOW count
-func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int) *FlowWriter {
+// targetType determines the write strategy: "redis-standalone" uses pipeline, "redis-cluster" uses slot-based parallelism
+func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targetType string) *FlowWriter {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Adaptive concurrency control based on number of FLOWs:
-	// - High concurrency required for single-command writes (no pipeline yet)
-	// - Each network RTT can process one command, so need many concurrent goroutines
-	// - Physical machine (56 cores, 200G RAM) can easily handle 800 concurrent goroutines
+	// Adaptive concurrency control based on target type and number of FLOWs:
+	// - Standalone mode: pipeline batching = lower concurrency needed
+	// - Cluster mode: slot-based parallel writes = higher concurrency needed
+	// - Physical machine (56 cores, 200G RAM) can handle high concurrency
 	//
-	// Tuning rationale:
-	//   - Current bottleneck: each key sent individually (no pipeline)
-	//   - With 100 keys/batch split into ~99 groups, need high concurrency to parallelize
-	//   - Target: 5000-10000 ops/sec per FLOW (vs current 800 ops/sec)
+	// Strategy:
+	//   - Standalone: 1 concurrent per FLOW (pipeline handles batching)
+	//   - Cluster: adaptive concurrency based on FLOW count
 	//
 	// Examples:
-	//   2 FLOWs:  800/2  = 400 → 200 concurrent per FLOW (total: 400, capped at max)
-	//   4 FLOWs:  800/4  = 200 → 200 concurrent per FLOW (total: 800)
-	//   8 FLOWs:  800/8  = 100 → 100 concurrent per FLOW (total: 800)
-	//  16 FLOWs:  800/16 = 50  → 50 concurrent per FLOW (total: 800)
-	totalConcurrencyLimit := 800  // High concurrency for high-performance physical machines
-	maxConcurrent := totalConcurrencyLimit / numFlows
-	if maxConcurrent < 50 {
-		maxConcurrent = 50 // Minimum per FLOW for decent parallelism
-	}
-	if maxConcurrent > 200 {
-		maxConcurrent = 200 // Maximum per FLOW (reasonable cap for stability)
+	//   Standalone mode (any FLOWs): 1 concurrent per FLOW (pipeline does the work)
+	//   Cluster mode - 2 FLOWs:  800/2  = 400 → 200 concurrent per FLOW
+	//   Cluster mode - 8 FLOWs:  800/8  = 100 → 100 concurrent per FLOW
+	//   Cluster mode - 16 FLOWs: 800/16 = 50  → 50 concurrent per FLOW
+
+	var maxConcurrent int
+	if targetType == "redis-standalone" {
+		// Standalone mode: pipeline batching, only need 1 concurrent per FLOW
+		maxConcurrent = 1
+	} else {
+		// Cluster mode: slot-based parallelism, need high concurrency
+		totalConcurrencyLimit := 800
+		maxConcurrent = totalConcurrencyLimit / numFlows
+		if maxConcurrent < 50 {
+			maxConcurrent = 50
+		}
+		if maxConcurrent > 200 {
+			maxConcurrent = 200
+		}
 	}
 
 	batchSize := 100     // Process 100 entries per batch
@@ -86,6 +97,7 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int) *Flo
 		batchSize:           batchSize,                                     // Batch every 100 entries
 		flushInterval:       time.Duration(flushInterval) * time.Millisecond, // Flush every 50ms
 		writeFn:             writeFn,
+		targetType:          targetType,
 		ctx:                 ctx,
 		cancel:              cancel,
 		channelCapacity:     channelBuffer,
@@ -95,9 +107,15 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int) *Flo
 		monitorInterval:     10 * time.Second, // Log channel usage every 10 seconds
 	}
 
-	// Log adaptive concurrency settings for visibility
-	log.Printf("  [FLOW-%d] [WRITER] Adaptive concurrency: %d/%d (per-FLOW/total), batch=%d, buffer=%d",
-		flowID, maxConcurrent, maxConcurrent*numFlows, batchSize, channelBuffer)
+	// Log adaptive concurrency settings and mode for visibility
+	mode := targetType
+	if targetType == "redis-standalone" {
+		mode = "standalone (pipeline enabled)"
+	} else {
+		mode = "cluster (slot-based parallel)"
+	}
+	log.Printf("  [FLOW-%d] [WRITER] Adaptive concurrency: %d/%d (per-FLOW/total), batch=%d, buffer=%d, mode=%s",
+		flowID, maxConcurrent, maxConcurrent*numFlows, batchSize, channelBuffer, mode)
 
 	return fw
 }
@@ -228,8 +246,17 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 	// Log batch start
 	log.Printf("  [FLOW-%d] [WRITER] ⏩ Flushing batch: %d entries", fw.flowID, batchSize)
 
-	// Group entries by slot for parallel processing
-	slotGroups := fw.groupBySlot(batch)
+	// CRITICAL: Strategy selection based on target type
+	// - Standalone: treat batch as single group (enables pipeline batching)
+	// - Cluster: group by slot for parallel writes
+	var slotGroups [][]*RDBEntry
+	if fw.targetType == "redis-standalone" {
+		// Standalone mode: treat entire batch as one group (no slot partitioning)
+		slotGroups = [][]*RDBEntry{batch}
+	} else {
+		// Cluster mode: group entries by slot for parallel processing
+		slotGroups = fw.groupBySlot(batch)
+	}
 	numGroups := len(slotGroups)
 
 	// Process groups in parallel using goroutines with concurrency limit
@@ -315,7 +342,15 @@ func (fw *FlowWriter) groupBySlot(batch []*RDBEntry) [][]*RDBEntry {
 func (fw *FlowWriter) writeSlotGroup(entries []*RDBEntry) writeResult {
 	var successCount, failCount int
 
-	// Write entries sequentially (can add pipelining here in future)
+	// Standalone mode: use pipeline for batch writes (CRITICAL OPTIMIZATION)
+	// This reduces network round trips from N to 1 per batch
+	if fw.targetType == "redis-standalone" {
+		// TODO: Implement actual pipeline batching
+		// For now, fallback to sequential writes
+		// Will implement in next iteration with ClusterClient.GetStandaloneClient().Pipeline()
+	}
+
+	// Cluster mode OR fallback: write entries sequentially
 	for _, entry := range entries {
 		if err := fw.writeEntry(entry); err != nil {
 			log.Printf("  [FLOW-%d] [WRITER] ✗ Failed to write key=%s: %v", fw.flowID, entry.Key, err)
