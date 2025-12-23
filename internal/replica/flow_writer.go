@@ -32,6 +32,7 @@ type FlowWriter struct {
 	// This is set only when targetType == "redis-standalone"
 	pipelineClient PipelineClient
 	isCluster      bool
+	clusterClient  interface{} // Store original cluster client for debugging
 
 	// Concurrency control
 	maxConcurrentWrites int        // Maximum concurrent write goroutines
@@ -60,16 +61,36 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Extract pipeline client if in standalone mode
+	// CRITICAL FIX: Use concrete type assertion to get *redisx.Client, which implements Pipeline()
 	var pipelineClient PipelineClient
 	var isCluster bool
+
+	log.Printf("  [FLOW-%d] [INIT] Starting FlowWriter initialization, targetType=%s", flowID, targetType)
+
+	// Try to extract cluster client interface
 	if cc, ok := clusterClient.(interface {
 		IsCluster() bool
-		GetStandaloneClient() PipelineClient
+		GetStandaloneClient() interface{}
 	}); ok {
 		isCluster = cc.IsCluster()
+		log.Printf("  [FLOW-%d] [INIT] ClusterClient interface extracted, isCluster=%v", flowID, isCluster)
+
 		if !isCluster {
-			pipelineClient = cc.GetStandaloneClient()
+			// Get standalone client
+			standaloneClient := cc.GetStandaloneClient()
+			log.Printf("  [FLOW-%d] [INIT] StandaloneClient extracted, type=%T", flowID, standaloneClient)
+
+			// Try to assert to PipelineClient interface
+			if pc, ok := standaloneClient.(PipelineClient); ok {
+				pipelineClient = pc
+				log.Printf("  [FLOW-%d] [INIT] ✓ Pipeline client successfully extracted!", flowID)
+			} else {
+				log.Printf("  [FLOW-%d] [INIT] ✗ WARNING: StandaloneClient does not implement PipelineClient interface! Type=%T",
+					flowID, standaloneClient)
+			}
 		}
+	} else {
+		log.Printf("  [FLOW-%d] [INIT] ✗ WARNING: Failed to extract ClusterClient interface from %T", flowID, clusterClient)
 	}
 
 	// Adaptive concurrency control based on target type and number of FLOWs:
@@ -103,46 +124,63 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 		}
 	}
 
-	batchSize := 100     // Process 100 entries per batch
-	flushInterval := 50  // Flush every 50ms (keep responsive)
+	// CRITICAL OPTIMIZATION: Increase batch size to reduce round trips
+	// Old: 100 entries/batch → ~700 ops/sec
+	// New: 2000 entries/batch → expected ~14000 ops/sec (20x reduction in round trips)
+	batchSize := 2000     // Process 2000 entries per batch (increased from 100)
+	flushInterval := 100  // Flush every 100ms (increased from 50ms to match larger batch)
 
-	// CRITICAL: Large buffer required to prevent blocking socket reads!
-	// Dragonfly's Channel buffer is only 2 elements, so if we block on reading from socket,
-	// Dragonfly's sink->Write() will block for 30+ seconds and trigger replication timeout.
+	// CRITICAL: Even larger buffer to handle full sync bursts
+	// During full sync, Dragonfly can send data extremely fast (600万keys in 3 seconds)
+	// We need a huge buffer to absorb the burst while slowly writing to Redis
 	//
 	// Buffer sizing:
-	//   - Each entry ~1KB avg, 50000 entries = ~50MB memory
-	//   - Dragonfly can buffer several MBs on its side (2 elements × several MB each)
-	//   - This allows continuous socket reading even when Redis writes are slower
-	channelBuffer := 50000 // Large buffer to decouple socket reading from Redis writing
+	//   - 600万keys / 4 FLOWs = 150万keys per FLOW
+	//   - 3 seconds full sync time → ~50万keys/sec/FLOW
+	//   - Buffer for 2 seconds of burst: 100万entries × 1KB = 1GB per FLOW
+	//   - Reduced to 200K entries = ~200MB per FLOW (acceptable memory usage)
+	channelBuffer := 200000 // Huge buffer to absorb Dragonfly's fast full sync (increased from 50000)
 
 	fw := &FlowWriter{
 		flowID:              flowID,
-		entryChan:           make(chan *RDBEntry, channelBuffer),           // Larger buffer for LZ4 workloads
-		batchSize:           batchSize,                                     // Batch every 100 entries
-		flushInterval:       time.Duration(flushInterval) * time.Millisecond, // Flush every 50ms
+		entryChan:           make(chan *RDBEntry, channelBuffer),             // Huge buffer for full sync bursts
+		batchSize:           batchSize,                                       // Large batch for pipeline efficiency
+		flushInterval:       time.Duration(flushInterval) * time.Millisecond, // Match batch size
 		writeFn:             writeFn,
 		targetType:          targetType,
 		pipelineClient:      pipelineClient,
 		isCluster:           isCluster,
+		clusterClient:       clusterClient,
 		ctx:                 ctx,
 		cancel:              cancel,
 		channelCapacity:     channelBuffer,
 		maxConcurrentWrites: maxConcurrent,
 		writeSemaphore:      make(chan struct{}, maxConcurrent), // Semaphore for concurrency control
 		lastMonitorTime:     time.Now(),
-		monitorInterval:     10 * time.Second, // Log channel usage every 10 seconds
+		monitorInterval:     5 * time.Second, // Log channel usage every 5 seconds (more frequent)
 	}
 
 	// Log adaptive concurrency settings and mode for visibility
 	mode := targetType
+	pipelineStatus := "DISABLED"
 	if targetType == "redis-standalone" {
-		mode = "standalone (pipeline enabled)"
+		if pipelineClient != nil {
+			mode = "standalone (pipeline ENABLED)"
+			pipelineStatus = "ENABLED"
+		} else {
+			mode = "standalone (pipeline FAILED - will use sequential!)"
+			pipelineStatus = "FAILED"
+		}
 	} else {
 		mode = "cluster (slot-based parallel)"
 	}
-	log.Printf("  [FLOW-%d] [WRITER] Adaptive concurrency: %d/%d (per-FLOW/total), batch=%d, buffer=%d, mode=%s",
-		flowID, maxConcurrent, maxConcurrent*numFlows, batchSize, channelBuffer, mode)
+	log.Printf("  [FLOW-%d] [WRITER] Initialization complete:", flowID)
+	log.Printf("    • Mode: %s", mode)
+	log.Printf("    • Pipeline: %s", pipelineStatus)
+	log.Printf("    • Concurrency: %d per FLOW (%d total)", maxConcurrent, maxConcurrent*numFlows)
+	log.Printf("    • Batch size: %d entries", batchSize)
+	log.Printf("    • Buffer size: %d entries (~%dMB)", channelBuffer, channelBuffer/1000)
+	log.Printf("    • Flush interval: %v", time.Duration(flushInterval)*time.Millisecond)
 
 	return fw
 }
@@ -368,11 +406,19 @@ func (fw *FlowWriter) groupBySlot(batch []*RDBEntry) [][]*RDBEntry {
 // writeSlotGroup writes a group of entries for the same slot
 func (fw *FlowWriter) writeSlotGroup(entries []*RDBEntry) writeResult {
 	var successCount, failCount int
+	startTime := time.Now()
+
+	// CRITICAL DEBUG: Log code path selection
+	log.Printf("  [FLOW-%d] [WRITER] writeSlotGroup called: entries=%d, targetType=%s, pipelineClient=%v",
+		fw.flowID, len(entries), fw.targetType, fw.pipelineClient != nil)
 
 	// Standalone mode: use pipeline for batch writes (CRITICAL OPTIMIZATION)
 	// This reduces network round trips from N to 1 per batch
 	if fw.targetType == "redis-standalone" && fw.pipelineClient != nil {
+		log.Printf("  [FLOW-%d] [WRITER] ✓ Using PIPELINE mode for %d entries", fw.flowID, len(entries))
+
 		// Build pipeline commands for all entries
+		buildStart := time.Now()
 		cmds := make([][]interface{}, 0, len(entries))
 		for _, entry := range entries {
 			cmd := fw.buildCommand(entry)
@@ -380,15 +426,25 @@ func (fw *FlowWriter) writeSlotGroup(entries []*RDBEntry) writeResult {
 				cmds = append(cmds, cmd)
 			}
 		}
+		buildDuration := time.Since(buildStart)
+
+		log.Printf("  [FLOW-%d] [WRITER] Built %d commands in %v", fw.flowID, len(cmds), buildDuration)
 
 		// Execute pipeline batch
 		if len(cmds) > 0 {
+			pipelineStart := time.Now()
 			results, err := fw.pipelineClient.Pipeline(cmds)
+			pipelineDuration := time.Since(pipelineStart)
+
 			if err != nil {
-				log.Printf("  [FLOW-%d] [WRITER] ✗ Pipeline failed: %v, fallback to sequential", fw.flowID, err)
+				log.Printf("  [FLOW-%d] [WRITER] ✗ Pipeline failed after %v: %v, fallback to sequential",
+					fw.flowID, pipelineDuration, err)
 				// Fallback to sequential writes on pipeline failure
 				goto sequential
 			}
+
+			log.Printf("  [FLOW-%d] [WRITER] ✓ Pipeline executed in %v (%.0f ops/sec)",
+				fw.flowID, pipelineDuration, float64(len(cmds))/pipelineDuration.Seconds())
 
 			// Check results
 			for i, result := range results {
@@ -405,12 +461,24 @@ func (fw *FlowWriter) writeSlotGroup(entries []*RDBEntry) writeResult {
 				}
 			}
 
+			totalDuration := time.Since(startTime)
+			log.Printf("  [FLOW-%d] [WRITER] ✓ Pipeline batch complete: %d success, %d failed in %v",
+				fw.flowID, successCount, failCount, totalDuration)
+
 			return writeResult{success: successCount, failed: failCount}
+		} else {
+			log.Printf("  [FLOW-%d] [WRITER] ⚠ No commands built, all entries skipped", fw.flowID)
 		}
+	} else {
+		log.Printf("  [FLOW-%d] [WRITER] Using SEQUENTIAL mode (targetType=%s, pipelineClient=%v)",
+			fw.flowID, fw.targetType, fw.pipelineClient != nil)
 	}
 
 sequential:
 	// Cluster mode OR fallback: write entries sequentially
+	log.Printf("  [FLOW-%d] [WRITER] Sequential write started for %d entries", fw.flowID, len(entries))
+	seqStart := time.Now()
+
 	for _, entry := range entries {
 		if err := fw.writeEntry(entry); err != nil {
 			log.Printf("  [FLOW-%d] [WRITER] ✗ Failed to write key=%s: %v", fw.flowID, entry.Key, err)
@@ -419,6 +487,10 @@ sequential:
 			successCount++
 		}
 	}
+
+	seqDuration := time.Since(seqStart)
+	log.Printf("  [FLOW-%d] [WRITER] Sequential write complete: %d success, %d failed in %v (%.0f ops/sec)",
+		fw.flowID, successCount, failCount, seqDuration, float64(len(entries))/seqDuration.Seconds())
 
 	return writeResult{success: successCount, failed: failCount}
 }
