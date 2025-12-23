@@ -44,28 +44,27 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int) *Flo
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Adaptive concurrency control based on number of FLOWs:
-	// - Total system concurrency should be balanced between throughput and stability
-	// - Each FLOW gets a fair share: totalLimit / numFlows
-	// - Constraints: min 10 (below this, performance degrades significantly)
-	//               max 30 (single FLOW performance cap)
+	// - High concurrency required for single-command writes (no pipeline yet)
+	// - Each network RTT can process one command, so need many concurrent goroutines
+	// - Physical machine (56 cores, 200G RAM) can easily handle 800 concurrent goroutines
 	//
 	// Tuning rationale:
-	//   - 2 FLOWs need ~30 concurrent each to achieve 6000 ops/sec per FLOW
-	//   - 8 FLOWs need ~12 concurrent each to achieve 4000 ops/sec per FLOW
-	//   - Total concurrency can be higher on physical machines (more resources)
+	//   - Current bottleneck: each key sent individually (no pipeline)
+	//   - With 100 keys/batch split into ~99 groups, need high concurrency to parallelize
+	//   - Target: 5000-10000 ops/sec per FLOW (vs current 800 ops/sec)
 	//
 	// Examples:
-	//   2 FLOWs:  100/2  = 50 → 30 concurrent per FLOW (total: 60, capped at max)
-	//   4 FLOWs:  100/4  = 25 → 25 concurrent per FLOW (total: 100)
-	//   8 FLOWs:  100/8  = 12 → 12 concurrent per FLOW (total: 96)
-	//  16 FLOWs:  100/16 = 6  → 10 concurrent per FLOW (total: 160, capped at min)
-	totalConcurrencyLimit := 100  // Increased for better throughput on physical machines
+	//   2 FLOWs:  800/2  = 400 → 200 concurrent per FLOW (total: 400, capped at max)
+	//   4 FLOWs:  800/4  = 200 → 200 concurrent per FLOW (total: 800)
+	//   8 FLOWs:  800/8  = 100 → 100 concurrent per FLOW (total: 800)
+	//  16 FLOWs:  800/16 = 50  → 50 concurrent per FLOW (total: 800)
+	totalConcurrencyLimit := 800  // High concurrency for high-performance physical machines
 	maxConcurrent := totalConcurrencyLimit / numFlows
-	if maxConcurrent < 10 {
-		maxConcurrent = 10 // Minimum per FLOW to maintain reasonable throughput
+	if maxConcurrent < 50 {
+		maxConcurrent = 50 // Minimum per FLOW for decent parallelism
 	}
-	if maxConcurrent > 30 {
-		maxConcurrent = 30 // Maximum per FLOW (diminishing returns beyond this)
+	if maxConcurrent > 200 {
+		maxConcurrent = 200 // Maximum per FLOW (reasonable cap for stability)
 	}
 
 	batchSize := 100     // Process 100 entries per batch
