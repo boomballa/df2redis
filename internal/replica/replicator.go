@@ -778,36 +778,79 @@ func (r *Replicator) verifyEofTokens() error {
 			}
 			log.Printf("  [FLOW-%d] → Reading EOF token (%d bytes)...", flowID, tokenLen)
 
-			// 1. Read first opcode byte to determine what follows
-			// Dragonfly may send metadata (0xD3) or directly EOF (0xFF) depending on shard
-			firstByte := make([]byte, 1)
-			if _, err := io.ReadFull(flowConn, firstByte); err != nil {
-				errChan <- fmt.Errorf("FLOW-%d: failed to read first opcode: %w", flowID, err)
-				return
-			}
-
-			// 2. If metadata block (0xD3), skip it (8 bytes data)
-			if firstByte[0] == 0xD3 {
-				log.Printf("  [FLOW-%d] Found metadata block (0xD3), skipping 8 bytes...", flowID)
-				metadataData := make([]byte, 8)
-				if _, err := io.ReadFull(flowConn, metadataData); err != nil {
-					errChan <- fmt.Errorf("FLOW-%d: failed to read metadata data: %w", flowID, err)
+			// 1. Read opcodes until we find EOF (0xFF) or metadata (0xD3)
+			// Dragonfly may send journal entries (0xD2) after RDB parser returns
+			// We need to skip all of them before reaching the true EOF
+			var opcodeByte byte
+			maxRetries := 100 // Prevent infinite loop
+			for i := 0; i < maxRetries; i++ {
+				opcodeBuf := make([]byte, 1)
+				if _, err := io.ReadFull(flowConn, opcodeBuf); err != nil {
+					errChan <- fmt.Errorf("FLOW-%d: failed to read opcode byte (attempt %d): %w", flowID, i+1, err)
 					return
 				}
+				opcodeByte = opcodeBuf[0]
+				log.Printf("  [FLOW-%d] Read opcode byte: 0x%02X (attempt %d)", flowID, opcodeByte, i+1)
 
-				// Read next opcode (should be EOF now)
-				if _, err := io.ReadFull(flowConn, firstByte); err != nil {
-					errChan <- fmt.Errorf("FLOW-%d: failed to read opcode after metadata: %w", flowID, err)
+				switch opcodeByte {
+				case 0xD2: // RDB_OPCODE_JOURNAL_BLOB
+					// Skip inline journal entry
+					log.Printf("  [FLOW-%d] Found journal blob (0xD2), skipping...", flowID)
+					// Read num_entries (packed uint)
+					numEntriesBuf := make([]byte, 1)
+					if _, err := io.ReadFull(flowConn, numEntriesBuf); err != nil {
+						errChan <- fmt.Errorf("FLOW-%d: failed to read journal num_entries: %w", flowID, err)
+						return
+					}
+					numEntries := int(numEntriesBuf[0])
+					log.Printf("  [FLOW-%d] Journal blob has %d entries", flowID, numEntries)
+
+					// Read blob size (RDB string length encoding)
+					// Simple case: assume length < 64 (encoded in 6 bits)
+					lenBuf := make([]byte, 1)
+					if _, err := io.ReadFull(flowConn, lenBuf); err != nil {
+						errChan <- fmt.Errorf("FLOW-%d: failed to read journal blob length: %w", flowID, err)
+						return
+					}
+					blobLen := int(lenBuf[0] & 0x3F) // Extract lower 6 bits
+					log.Printf("  [FLOW-%d] Journal blob length: %d bytes", flowID, blobLen)
+
+					// Skip blob data
+					blobData := make([]byte, blobLen)
+					if _, err := io.ReadFull(flowConn, blobData); err != nil {
+						errChan <- fmt.Errorf("FLOW-%d: failed to skip journal blob data: %w", flowID, err)
+						return
+					}
+					log.Printf("  [FLOW-%d] ✓ Skipped journal blob (%d bytes)", flowID, blobLen)
+					continue // Read next opcode
+
+				case 0xD3: // RDB_OPCODE_JOURNAL_OFFSET (metadata)
+					// Skip metadata (8 bytes)
+					log.Printf("  [FLOW-%d] Found metadata block (0xD3), skipping 8 bytes...", flowID)
+					metadataData := make([]byte, 8)
+					if _, err := io.ReadFull(flowConn, metadataData); err != nil {
+						errChan <- fmt.Errorf("FLOW-%d: failed to read metadata data: %w", flowID, err)
+						return
+					}
+					continue // Read next opcode
+
+				case 0xFF: // RDB_OPCODE_EOF
+					// Found EOF!
+					log.Printf("  [FLOW-%d] ✓ Found EOF opcode (0xFF)", flowID)
+					goto foundEOF
+
+				default:
+					errChan <- fmt.Errorf("FLOW-%d: unexpected opcode 0x%02X (expected 0xD2/0xD3/0xFF)", flowID, opcodeByte)
 					return
 				}
 			}
 
-			// 3. Now firstByte should be EOF opcode (0xFF)
-			if firstByte[0] != 0xFF {
-				errChan <- fmt.Errorf("FLOW-%d: expected EOF opcode 0xFF but got 0x%02X", flowID, firstByte[0])
-				return
-			}
-			log.Printf("  [FLOW-%d] Found EOF opcode (0xFF)", flowID)
+			// If we reach here, we exceeded max retries
+			errChan <- fmt.Errorf("FLOW-%d: exceeded max retries (%d) while searching for EOF", flowID, maxRetries)
+			return
+
+		foundEOF:
+			// 2. Now we have EOF opcode, continue with checksum and token
 
 			// 3. Read checksum (8 bytes)
 			checksumBuf := make([]byte, 8)
