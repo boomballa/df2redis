@@ -4,9 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
+
+// PipelineClient defines the interface for pipeline operations
+type PipelineClient interface {
+	Pipeline(cmds [][]interface{}) ([]interface{}, error)
+}
 
 // FlowWriter handles async batched writes for a single flow
 type FlowWriter struct {
@@ -21,6 +27,11 @@ type FlowWriter struct {
 
 	// Target type determines write strategy
 	targetType string // "redis-standalone" or "redis-cluster"
+
+	// Pipeline client for standalone Redis batch writes
+	// This is set only when targetType == "redis-standalone"
+	pipelineClient PipelineClient
+	isCluster      bool
 
 	// Concurrency control
 	maxConcurrentWrites int        // Maximum concurrent write goroutines
@@ -44,8 +55,22 @@ type FlowWriter struct {
 // NewFlowWriter creates a new async batch writer for a flow
 // numFlows parameter enables adaptive concurrency tuning based on total FLOW count
 // targetType determines the write strategy: "redis-standalone" uses pipeline, "redis-cluster" uses slot-based parallelism
-func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targetType string) *FlowWriter {
+// clusterClient provides access to standalone client for pipeline operations
+func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targetType string, clusterClient interface{}) *FlowWriter {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// Extract pipeline client if in standalone mode
+	var pipelineClient PipelineClient
+	var isCluster bool
+	if cc, ok := clusterClient.(interface {
+		IsCluster() bool
+		GetStandaloneClient() PipelineClient
+	}); ok {
+		isCluster = cc.IsCluster()
+		if !isCluster {
+			pipelineClient = cc.GetStandaloneClient()
+		}
+	}
 
 	// Adaptive concurrency control based on target type and number of FLOWs:
 	// - Standalone mode: pipeline batching = lower concurrency needed
@@ -98,6 +123,8 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 		flushInterval:       time.Duration(flushInterval) * time.Millisecond, // Flush every 50ms
 		writeFn:             writeFn,
 		targetType:          targetType,
+		pipelineClient:      pipelineClient,
+		isCluster:           isCluster,
 		ctx:                 ctx,
 		cancel:              cancel,
 		channelCapacity:     channelBuffer,
@@ -344,12 +371,45 @@ func (fw *FlowWriter) writeSlotGroup(entries []*RDBEntry) writeResult {
 
 	// Standalone mode: use pipeline for batch writes (CRITICAL OPTIMIZATION)
 	// This reduces network round trips from N to 1 per batch
-	if fw.targetType == "redis-standalone" {
-		// TODO: Implement actual pipeline batching
-		// For now, fallback to sequential writes
-		// Will implement in next iteration with ClusterClient.GetStandaloneClient().Pipeline()
+	if fw.targetType == "redis-standalone" && fw.pipelineClient != nil {
+		// Build pipeline commands for all entries
+		cmds := make([][]interface{}, 0, len(entries))
+		for _, entry := range entries {
+			cmd := fw.buildCommand(entry)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+
+		// Execute pipeline batch
+		if len(cmds) > 0 {
+			results, err := fw.pipelineClient.Pipeline(cmds)
+			if err != nil {
+				log.Printf("  [FLOW-%d] [WRITER] ✗ Pipeline failed: %v, fallback to sequential", fw.flowID, err)
+				// Fallback to sequential writes on pipeline failure
+				goto sequential
+			}
+
+			// Check results
+			for i, result := range results {
+				if result != nil {
+					// Check if result is an error
+					if errStr, ok := result.(string); ok && strings.HasPrefix(errStr, "ERR") {
+						log.Printf("  [FLOW-%d] [WRITER] ✗ Command %d failed: %v", fw.flowID, i, errStr)
+						failCount++
+					} else {
+						successCount++
+					}
+				} else {
+					successCount++
+				}
+			}
+
+			return writeResult{success: successCount, failed: failCount}
+		}
 	}
 
+sequential:
 	// Cluster mode OR fallback: write entries sequentially
 	for _, entry := range entries {
 		if err := fw.writeEntry(entry); err != nil {
