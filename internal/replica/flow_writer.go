@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"df2redis/internal/redisx"
 )
 
 // PipelineClient defines the interface for pipeline operations
@@ -61,32 +63,35 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Extract pipeline client if in standalone mode
-	// CRITICAL FIX: Use concrete type assertion to get *redisx.Client, which implements Pipeline()
+	// CRITICAL FIX: Use concrete type assertion for *cluster.ClusterClient
 	var pipelineClient PipelineClient
 	var isCluster bool
 
 	log.Printf("  [FLOW-%d] [INIT] Starting FlowWriter initialization, targetType=%s", flowID, targetType)
 
-	// Try to extract cluster client interface
-	if cc, ok := clusterClient.(interface {
+	// Try to extract cluster client using concrete type import
+	// We use interface with method signatures to avoid circular dependency
+	type ClusterClientInterface interface {
 		IsCluster() bool
-		GetStandaloneClient() interface{}
-	}); ok {
+		GetStandaloneClient() *redisx.Client
+	}
+
+	if cc, ok := clusterClient.(ClusterClientInterface); ok {
 		isCluster = cc.IsCluster()
 		log.Printf("  [FLOW-%d] [INIT] ClusterClient interface extracted, isCluster=%v", flowID, isCluster)
 
 		if !isCluster {
-			// Get standalone client
+			// Get standalone client (*redisx.Client)
 			standaloneClient := cc.GetStandaloneClient()
 			log.Printf("  [FLOW-%d] [INIT] StandaloneClient extracted, type=%T", flowID, standaloneClient)
 
-			// Try to assert to PipelineClient interface
-			if pc, ok := standaloneClient.(PipelineClient); ok {
-				pipelineClient = pc
+			// *redisx.Client should implement PipelineClient interface
+			if standaloneClient != nil {
+				// Direct assignment since *redisx.Client implements Pipeline()
+				pipelineClient = standaloneClient
 				log.Printf("  [FLOW-%d] [INIT] ✓ Pipeline client successfully extracted!", flowID)
 			} else {
-				log.Printf("  [FLOW-%d] [INIT] ✗ WARNING: StandaloneClient does not implement PipelineClient interface! Type=%T",
-					flowID, standaloneClient)
+				log.Printf("  [FLOW-%d] [INIT] ✗ WARNING: StandaloneClient is nil!", flowID)
 			}
 		}
 	} else {
