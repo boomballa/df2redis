@@ -274,3 +274,17 @@ func (c *ClusterClient) ForEachMaster(fn func(addr string, client *redisx.Client
 	}
 	return nil
 }
+
+// IsCluster returns whether the target is a Redis Cluster or standalone instance
+func (c *ClusterClient) IsCluster() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isCluster
+}
+
+// GetStandaloneClient returns the standalone client (nil if in cluster mode)
+func (c *ClusterClient) GetStandaloneClient() *redisx.Client {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.standaloneClient
+}

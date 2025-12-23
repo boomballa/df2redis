@@ -265,6 +265,64 @@ func (c *Client) Info(section string) (string, error) {
 	return ToString(reply)
 }
 
+// Pipeline executes multiple commands in a single network round-trip.
+// This significantly improves performance for bulk operations on standalone Redis.
+//
+// Usage:
+//   cmds := [][]interface{}{
+//     {"SET", "key1", "value1"},
+//     {"SET", "key2", "value2"},
+//     {"HSET", "hash1", "field1", "value1"},
+//   }
+//   results, err := client.Pipeline(cmds)
+//
+// Returns a slice of results corresponding to each command.
+// If any command fails, returns error immediately.
+func (c *Client) Pipeline(cmds [][]interface{}) ([]interface{}, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.closed {
+		return nil, errors.New("redisx: client closed")
+	}
+
+	if len(cmds) == 0 {
+		return []interface{}{}, nil
+	}
+
+	// Step 1: Send all commands without waiting for replies
+	for _, cmdArgs := range cmds {
+		if len(cmdArgs) == 0 {
+			return nil, errors.New("redisx: empty command in pipeline")
+		}
+
+		// First element is command name
+		cmd, ok := cmdArgs[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("redisx: command name must be string, got %T", cmdArgs[0])
+		}
+
+		// Remaining elements are arguments
+		args := cmdArgs[1:]
+
+		if err := c.writeCommand(cmd, args...); err != nil {
+			return nil, fmt.Errorf("redisx: failed to write command %s: %w", cmd, err)
+		}
+	}
+
+	// Step 2: Read all replies
+	results := make([]interface{}, len(cmds))
+	for i := range cmds {
+		reply, err := c.readReply()
+		if err != nil {
+			return nil, fmt.Errorf("redisx: failed to read reply for command %d: %w", i, err)
+		}
+		results[i] = reply
+	}
+
+	return results, nil
+}
+
 func (c *Client) writeCommand(cmd string, args ...interface{}) error {
 	if err := c.conn.SetWriteDeadline(time.Now().Add(c.timeout)); err != nil {
 		return err
