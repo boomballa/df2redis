@@ -36,15 +36,29 @@ type FlowWriter struct {
 }
 
 // NewFlowWriter creates a new async batch writer for a flow
-func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error) *FlowWriter {
+// numFlows parameter enables adaptive concurrency tuning based on total FLOW count
+func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int) *FlowWriter {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Balance between throughput and Dragonfly stability:
-	// - Too low: causes channel backpressure and Dragonfly heartbeat stalls
-	// - Too high: overwhelms Dragonfly with concurrent requests
-	// For multi-FLOW scenarios (8+ FLOWs), lower concurrency per flow to avoid
-	// total system overload (e.g., 8 flows × 15 = 120 concurrent goroutines)
-	maxConcurrent := 8   // Limit to 8 concurrent slot writes (balanced for multi-FLOW)
+	// Adaptive concurrency control based on number of FLOWs:
+	// - Total system concurrency should be limited to avoid overload
+	// - Each FLOW gets a fair share: totalLimit / numFlows
+	// - Constraints: min 4 (avoid too slow), max 30 (single FLOW performance cap)
+	//
+	// Examples:
+	//   2 FLOWs:  60/2  = 30 → 30 concurrent per FLOW (total: 60)
+	//   4 FLOWs:  60/4  = 15 → 15 concurrent per FLOW (total: 60)
+	//   8 FLOWs:  60/8  = 7  → 8  concurrent per FLOW (total: 64)
+	//  16 FLOWs:  60/16 = 3  → 4  concurrent per FLOW (total: 64, capped at min)
+	totalConcurrencyLimit := 60
+	maxConcurrent := totalConcurrencyLimit / numFlows
+	if maxConcurrent < 4 {
+		maxConcurrent = 4 // Minimum per FLOW to maintain reasonable throughput
+	}
+	if maxConcurrent > 30 {
+		maxConcurrent = 30 // Maximum per FLOW (diminishing returns beyond this)
+	}
+
 	batchSize := 100     // Process 100 entries per batch
 	flushInterval := 50  // Flush every 50ms (keep responsive)
 
@@ -62,6 +76,10 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error) *FlowWriter {
 		maxConcurrentWrites: maxConcurrent,
 		writeSemaphore:      make(chan struct{}, maxConcurrent), // Semaphore for concurrency control
 	}
+
+	// Log adaptive concurrency settings for visibility
+	log.Printf("  [FLOW-%d] [WRITER] Adaptive concurrency: %d/%d (per-FLOW/total), batch=%d, buffer=%d",
+		flowID, maxConcurrent, maxConcurrent*numFlows, batchSize, channelBuffer)
 
 	return fw
 }
