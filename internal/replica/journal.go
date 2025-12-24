@@ -81,12 +81,16 @@ func (e *JournalEntry) String() string {
 
 // JournalReader decodes journal frames
 type JournalReader struct {
-	reader io.Reader
+	reader         io.Reader
+	currentDbIndex int // Tracks current database index from SELECT opcodes
 }
 
 // NewJournalReader builds a reader over an io.Reader
 func NewJournalReader(r io.Reader) *JournalReader {
-	return &JournalReader{reader: r}
+	return &JournalReader{
+		reader:         r,
+		currentDbIndex: 0, // Default to DB 0
+	}
 }
 
 // ReadEntry parses the next entry
@@ -106,13 +110,17 @@ func (jr *JournalReader) ReadEntry() (*JournalEntry, error) {
 	// 2. Dispatch per opcode
 	switch entry.Opcode {
 	case OpSelect:
-		// SELECT: only read dbid
+		// SELECT: read dbid, update internal state, then RECURSIVELY read next entry
+		// This matches Dragonfly's behavior where SELECT is transparent to the caller
 		dbid, err := ReadPackedUint(jr.reader)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read SELECT dbid: %w", err)
 		}
-		entry.DbIndex = dbid
-		return entry, nil
+		jr.currentDbIndex = int(dbid) // Update internal state
+
+		// CRITICAL FIX: Recursively read the next entry (the actual COMMAND)
+		// This ensures SELECT is transparent - caller only gets the COMMAND entry
+		return jr.ReadEntry()
 
 	case OpLSN:
 		// LSN marker
@@ -140,6 +148,9 @@ func (jr *JournalReader) ReadEntry() (*JournalEntry, error) {
 			return nil, fmt.Errorf("failed to read shard_cnt: %w", err)
 		}
 		entry.ShardCnt = shardCnt
+
+		// Use the current dbid from SELECT (if any)
+		entry.DbIndex = uint64(jr.currentDbIndex)
 
 		// Parse payload
 		if err := jr.readPayload(entry); err != nil {
