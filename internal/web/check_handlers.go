@@ -173,7 +173,7 @@ func (s *DashboardServer) runRealCheckTask(ctx context.Context, compareMode, com
 		Binary:       "./bin/redis-full-check", // Relative to working directory
 		SourceAddr:   s.cfg.Source.Addr,
 		SourcePass:   s.cfg.Source.Password,
-		TargetAddr:   s.cfg.Target.Seed,
+		TargetAddr:   s.cfg.Target.Addr,
 		TargetPass:   s.cfg.Target.Password,
 		CompareMode:  compareMode,
 		CompareTimes: compareTimes,
