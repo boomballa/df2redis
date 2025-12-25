@@ -119,45 +119,111 @@ key "i"  → hash 到 FLOW-0/1/2/3 → 该 FLOW 已完成 → 数据丢失 ✗
 
 ### 核心思路
 
-使用**全局同步屏障（Global Barrier）**，确保所有 FLOW 都完成 RDB 后，才统一进入下一阶段。
+参考 Dragonfly 源码设计，实现正确的状态机：
+1. **FULLSYNC_END 不是结束标记**，而是"静态快照完成，准备切换"的信号
+2. **持续读取连接**，不要在 FULLSYNC_END 后退出 goroutine
+3. **全局 Barrier 同步**，确保所有 FLOW 都完成后才发送 STARTSTABLE
+4. **STARTSTABLE 触发 EOF**，Dragonfly 收到后才真正结束 RDB 阶段
 
 ### 实现细节
 
-**修复代码**（`internal/replica/replicator.go:566-661`）：
+#### 1. Parser 层改动（`internal/replica/rdb_parser.go:173-190`）
+
+**旧代码**：
+```go
+case RDB_OPCODE_FULLSYNC_END:
+    // ...
+    return nil, io.EOF  // ❌ 立即返回 EOF，导致 goroutine 退出
+```
+
+**新代码**：
+```go
+case RDB_OPCODE_FULLSYNC_END:
+    // FULLSYNC_END 表示"静态快照完成"，但 Dragonfly 会继续发送 journal blobs
+    // 直到我们发送 STARTSTABLE。不要返回 EOF，而是返回一个标记。
+    return &RDBEntry{
+        Type:  RDB_TYPE_FULLSYNC_END_MARKER,  // ✅ 返回标记，不是 EOF
+        Key:   "",
+        Value: nil,
+    }, nil
+```
+
+#### 2. Replicator 层改动（`internal/replica/replicator.go:566-682`）
+
+**关键逻辑**：
 
 ```go
-// 1. 创建全局 barrier 和计数器
+// 创建全局 barrier（匹配 Dragonfly 的 BlockingCounter）
 rdbCompletionBarrier := make(chan struct{})
 flowCompletionCount := &struct {
     count int
     mu    sync.Mutex
 }{}
 
-// 2. 每个 FLOW 收到 FULLSYNC_END 后
-if err == io.EOF {
-    log.Printf("  [FLOW-%d] ✓ RDB parsing done", flowID)
+// ParseNext() 循环中
+for {
+    entry, err := parser.ParseNext()
 
-    // 增加完成计数
-    flowCompletionCount.mu.Lock()
-    flowCompletionCount.count++
-    completedCount := flowCompletionCount.count
-    flowCompletionCount.mu.Unlock()
-
-    log.Printf("  [FLOW-%d] ⏸ Waiting for all FLOWs to complete RDB (%d/%d done)...",
-        flowID, completedCount, numFlows)
-
-    // 如果是最后一个完成的 FLOW，广播信号
-    if completedCount == numFlows {
-        log.Printf("  [FLOW-%d] 🎯 All FLOWs completed! Broadcasting barrier signal...", flowID)
-        close(rdbCompletionBarrier)
+    if err != nil {
+        if err == io.EOF {
+            // 真正的 EOF（STARTSTABLE 之后）
+            log.Printf("  [FLOW-%d] ✓ RDB stream terminated with EOF", flowID)
+            return  // ✅ 现在才退出
+        }
+        return  // 其他错误
     }
 
-    // 等待 barrier（阻塞直到所有 FLOW 完成）
-    <-rdbCompletionBarrier
-    log.Printf("  [FLOW-%d] ✓ Barrier released, proceeding to stable sync preparation", flowID)
+    // 检查 FULLSYNC_END 标记
+    if entry.Type == RDB_TYPE_FULLSYNC_END_MARKER {
+        log.Printf("  [FLOW-%d] ✓ RDB parsing done", flowID)
 
-    return
+        // Barrier 同步
+        flowCompletionCount.mu.Lock()
+        flowCompletionCount.count++
+        completedCount := flowCompletionCount.count
+        flowCompletionCount.mu.Unlock()
+
+        if completedCount == numFlows {
+            close(rdbCompletionBarrier)  // 最后一个完成，广播
+        }
+
+        <-rdbCompletionBarrier  // 等待所有 FLOW
+        log.Printf("  [FLOW-%d] ✓ Barrier released", flowID)
+
+        // ✅ 关键：继续循环，不要返回！
+        log.Printf("  [FLOW-%d] → Continuing to read journal blobs until STARTSTABLE triggers EOF...", flowID)
+        continue  // ← 继续读取
+    }
+
+    // 处理正常的 RDB entries
+    // ...
 }
+```
+
+#### 3. Main 线程改动（`internal/replica/replicator.go:715-810`）
+
+**旧代码**：
+```go
+wg.Wait()  // ❌ 等待 goroutine 退出（但它们不会退出，死锁）
+time.Sleep(30 * time.Second)  // ❌ Workaround
+sendStartStable()
+```
+
+**新代码**：
+```go
+// 1. 等待 barrier 释放（所有 FLOW 完成 RDB 静态快照）
+<-rdbCompletionBarrier
+log.Println("  ✓ All FLOWs completed RDB static snapshot")
+
+// 2. 打印中间统计
+// ...
+
+// 3. ✅ 立即发送 STARTSTABLE（不等待 30 秒）
+sendStartStable()
+
+// 4. ✅ 等待 goroutine 退出（STARTSTABLE 后 Dragonfly 会发送 EOF）
+wg.Wait()
+log.Println("  ✓ All FLOW goroutines terminated")
 ```
 
 ### 工作流程

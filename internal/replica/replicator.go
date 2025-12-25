@@ -563,10 +563,11 @@ func (r *Replicator) receiveSnapshot() error {
 		flowWriters[i].Start()
 	}
 
-	// CRITICAL FIX: Global barrier to synchronize RDB completion across all FLOWs
-	// This prevents data loss during the time window when some FLOWs have finished
-	// RDB but others are still transmitting inline journal entries.
-	// Without this barrier, writes to fast-finishing FLOWs during this window would be lost.
+	// CRITICAL FIX: Global synchronization barrier matching Dragonfly's BlockingCounter design
+	// rdbCompletionBarrier: Ensures all FLOWs finish RDB static snapshot before we send STARTSTABLE
+	//
+	// Dragonfly continues sending journal blobs AFTER FULLSYNC_END until we send STARTSTABLE.
+	// We must keep reading continuously to avoid data loss.
 	rdbCompletionBarrier := make(chan struct{})
 	flowCompletionCount := &struct {
 		count int
@@ -628,41 +629,57 @@ func (r *Replicator) receiveSnapshot() error {
 				// Parse next entry
 				entry, err := parser.ParseNext()
 				if err != nil {
+					// True EOF: Dragonfly sent EOF after we issued STARTSTABLE
 					if err == io.EOF {
 						stats.mu.Lock()
 						inlineJournalOps := stats.InlineJournalOps
 						stats.mu.Unlock()
-						log.Printf("  [FLOW-%d] ✓ RDB parsing done (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
+						log.Printf("  [FLOW-%d] ✓ RDB stream terminated with EOF (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
 							flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps)
 						r.recordFlowStage(flowID, "rdb_done",
 							fmt.Sprintf("success=%d skipped=%d failed=%d inline_journal=%d", stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps))
-
-						// CRITICAL FIX: Wait for all FLOWs to complete RDB before proceeding
-						// This ensures no data loss during the completion time window
-						flowCompletionCount.mu.Lock()
-						flowCompletionCount.count++
-						completedCount := flowCompletionCount.count
-						flowCompletionCount.mu.Unlock()
-
-						log.Printf("  [FLOW-%d] ⏸ Waiting for all FLOWs to complete RDB (%d/%d done)...", flowID, completedCount, numFlows)
-
-						// If this is the last FLOW to complete, signal all waiting FLOWs
-						if completedCount == numFlows {
-							log.Printf("  [FLOW-%d] 🎯 All FLOWs completed! Broadcasting barrier signal...", flowID)
-							close(rdbCompletionBarrier)
-						}
-
-						// Wait for the barrier (either we closed it, or another FLOW will)
-						<-rdbCompletionBarrier
-						log.Printf("  [FLOW-%d] ✓ Barrier released, proceeding to stable sync preparation", flowID)
-
-						// FULLSYNC_END received, snapshot done.
-						// EOF tokens are read after STARTSTABLE.
 						return
 					}
+					// Other errors: real parsing failure
 					errChan <- fmt.Errorf("FLOW-%d: parsing failed: %w", flowID, err)
 					r.recordFlowStage(flowID, "error", fmt.Sprintf("Parsing failed: %v", err))
 					return
+				}
+
+				// CRITICAL: Check for FULLSYNC_END marker
+				// This means "static RDB snapshot complete", but Dragonfly will CONTINUE
+				// sending journal blobs until we send STARTSTABLE.
+				if entry.Type == RDB_TYPE_FULLSYNC_END_MARKER {
+					stats.mu.Lock()
+					inlineJournalOps := stats.InlineJournalOps
+					stats.mu.Unlock()
+					log.Printf("  [FLOW-%d] ✓ RDB parsing done (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
+						flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps)
+
+					// CRITICAL FIX: Wait for all FLOWs to complete RDB before main thread sends STARTSTABLE
+					// This matches Dragonfly's BlockingCounter::Wait() behavior
+					flowCompletionCount.mu.Lock()
+					flowCompletionCount.count++
+					completedCount := flowCompletionCount.count
+					flowCompletionCount.mu.Unlock()
+
+					log.Printf("  [FLOW-%d] ⏸ Waiting for all FLOWs to complete RDB (%d/%d done)...", flowID, completedCount, numFlows)
+
+					// If this is the last FLOW to complete, broadcast signal to release all
+					if completedCount == numFlows {
+						log.Printf("  [FLOW-%d] 🎯 All FLOWs completed! Broadcasting barrier signal...", flowID)
+						close(rdbCompletionBarrier)
+					}
+
+					// Wait for the barrier (blocks until all FLOWs reach this point)
+					<-rdbCompletionBarrier
+					log.Printf("  [FLOW-%d] ✓ Barrier released, proceeding to stable sync preparation", flowID)
+
+					// CRITICAL: Continue ParseNext() loop to read journal blobs!
+					// Do NOT return - Dragonfly will keep sending data until STARTSTABLE.
+					// After main thread sends STARTSTABLE, Dragonfly will send EOF and we'll exit above.
+					log.Printf("  [FLOW-%d] → Continuing to read journal blobs until STARTSTABLE triggers EOF...", flowID)
+					continue
 				}
 
 				// Skip expired keys
@@ -695,29 +712,18 @@ func (r *Replicator) receiveSnapshot() error {
 		}(i)
 	}
 
-	// Wait for goroutines
-	wg.Wait()
-	close(errChan)
-
-	// Drain errors
-	for err := range errChan {
-		if err != nil {
-			return err
-		}
-	}
-
-	// Stop all writers and wait for remaining batches to flush
+	// CRITICAL FIX: Wait for RDB completion barrier BEFORE sending STARTSTABLE
+	// This ensures all FLOWs have finished their static RDB snapshot.
+	// After this point, goroutines continue reading journal blobs until we send STARTSTABLE.
 	log.Println("")
-	log.Println("⏸  Stopping async writers and flushing remaining batches...")
-	for i, fw := range flowWriters {
-		fw.Stop()
-		received, written, batches := fw.GetStats()
-		log.Printf("  [FLOW-%d] Writer stats: received=%d, written=%d, batches=%d",
-			i, received, written, batches)
-	}
-	log.Println("  ✓ All writers stopped, all data flushed")
+	log.Println("⏸  Waiting for all FLOWs to complete RDB static snapshot...")
+	<-rdbCompletionBarrier
+	log.Println("  ✓ All FLOWs completed RDB static snapshot")
 
-	// Final stats
+	// Intermediate stats - at this point RDB snapshot is complete but journal blobs may still be coming
+	log.Println("")
+	log.Println("📊 RDB Static Snapshot Complete - Intermediate Stats:")
+	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	totalKeys := 0
 	totalSkipped := 0
 	totalErrors := 0
@@ -733,24 +739,69 @@ func (r *Replicator) receiveSnapshot() error {
 		log.Printf("  [FLOW-%d] Stats: success=%d, skipped=%d, failed=%d, inline_journal=%d",
 			flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps)
 	}
-
-	log.Printf("  ✓ RDB full import complete: total %d keys, skipped %d (expired), failed %d, inline_journal=%d",
+	log.Printf("  ✓ RDB snapshot: total %d keys, skipped %d (expired), failed %d, inline_journal=%d",
 		totalKeys, totalSkipped, totalErrors, totalInlineJournal)
 	log.Printf("")
 
-	// IMPORTANT: Wait for Dragonfly to complete RDB transmission before sending STARTSTABLE
-	// Even though we've received all data, Dragonfly may still be writing to channels.
-	// This prevents "Channel write took XXX ms" errors and heartbeat stalls.
-	waitSeconds := 30
-	log.Printf("⏸  Waiting %d seconds for Dragonfly to complete RDB transmission...", waitSeconds)
-	log.Printf("   (This allows Dragonfly shards to finish writing and avoid heartbeat stalls)")
-	time.Sleep(time.Duration(waitSeconds) * time.Second)
-
-	// Dragonfly only sends EOF tokens after STARTSTABLE; reading before that causes a 60s timeout.
+	// CRITICAL: Send STARTSTABLE immediately after barrier
+	// This matches Dragonfly's design: after all FLOWs complete static snapshot,
+	// send STARTSTABLE to trigger transition to stable sync.
+	// Dragonfly will then send EOF to all FLOWs, allowing goroutines to exit naturally.
 	if err := r.sendStartStable(); err != nil {
 		return fmt.Errorf("Switching to stable sync failed: %w", err)
 	}
 
+	// CRITICAL: Now wait for goroutines to exit
+	// After STARTSTABLE, Dragonfly sends EOF to all FLOWs, causing ParseNext() to return io.EOF
+	// and goroutines to exit naturally.
+	log.Println("")
+	log.Println("⏸  Waiting for all FLOWs to receive EOF and terminate...")
+	wg.Wait()
+	close(errChan)
+
+	// Drain errors
+	for err := range errChan {
+		if err != nil {
+			return err
+		}
+	}
+	log.Println("  ✓ All FLOW goroutines terminated")
+
+	// Stop all writers and wait for remaining batches to flush
+	log.Println("")
+	log.Println("⏸  Stopping async writers and flushing remaining batches...")
+	for i, fw := range flowWriters {
+		fw.Stop()
+		received, written, batches := fw.GetStats()
+		log.Printf("  [FLOW-%d] Writer stats: received=%d, written=%d, batches=%d",
+			i, received, written, batches)
+	}
+	log.Println("  ✓ All writers stopped, all data flushed")
+
+	// Final stats after all journal blobs processed
+	log.Println("")
+	log.Println("📊 Final Stats (including all journal blobs):")
+	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	totalKeys = 0
+	totalSkipped = 0
+	totalErrors = 0
+	totalInlineJournal = 0
+	for flowID, stats := range statsMap {
+		totalKeys += stats.KeyCount
+		totalSkipped += stats.SkippedCount
+		totalErrors += stats.ErrorCount
+		stats.mu.Lock()
+		totalInlineJournal += stats.InlineJournalOps
+		inlineJournalOps := stats.InlineJournalOps
+		stats.mu.Unlock()
+		log.Printf("  [FLOW-%d] Stats: success=%d, skipped=%d, failed=%d, inline_journal=%d",
+			flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps)
+	}
+	log.Printf("  ✓ Total: %d keys, skipped %d (expired), failed %d, inline_journal=%d",
+		totalKeys, totalSkipped, totalErrors, totalInlineJournal)
+	log.Printf("")
+
+	// Verify EOF tokens
 	if err := r.verifyEofTokens(); err != nil {
 		return fmt.Errorf("EOF token verification failed: %w", err)
 	}

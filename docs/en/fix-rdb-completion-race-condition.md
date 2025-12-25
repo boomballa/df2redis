@@ -119,45 +119,111 @@ key "i"  → hashes to FLOW-0/1/2/3 → FLOW completed → Data lost ✗
 
 ### Core Idea
 
-Use a **Global Barrier** to ensure all FLOWs complete RDB before proceeding to the next phase together.
+Implement correct state machine based on Dragonfly source code design:
+1. **FULLSYNC_END is not a termination marker** - it signals "static snapshot complete, preparing to switch"
+2. **Keep reading connection** - don't exit goroutine after FULLSYNC_END
+3. **Global Barrier synchronization** - ensure all FLOWs complete before sending STARTSTABLE
+4. **STARTSTABLE triggers EOF** - Dragonfly sends true EOF only after receiving STARTSTABLE
 
 ### Implementation Details
 
-**Fix Code** (`internal/replica/replicator.go:566-661`):
+#### 1. Parser Layer Changes (`internal/replica/rdb_parser.go:173-190`)
+
+**Old Code**:
+```go
+case RDB_OPCODE_FULLSYNC_END:
+    // ...
+    return nil, io.EOF  // ❌ Immediately return EOF, causing goroutine to exit
+```
+
+**New Code**:
+```go
+case RDB_OPCODE_FULLSYNC_END:
+    // FULLSYNC_END means "static snapshot complete", but Dragonfly will CONTINUE
+    // sending journal blobs until we send STARTSTABLE. Return a marker instead of EOF.
+    return &RDBEntry{
+        Type:  RDB_TYPE_FULLSYNC_END_MARKER,  // ✅ Return marker, not EOF
+        Key:   "",
+        Value: nil,
+    }, nil
+```
+
+#### 2. Replicator Layer Changes (`internal/replica/replicator.go:566-682`)
+
+**Key Logic**:
 
 ```go
-// 1. Create global barrier and counter
+// Create global barrier (matching Dragonfly's BlockingCounter)
 rdbCompletionBarrier := make(chan struct{})
 flowCompletionCount := &struct {
     count int
     mu    sync.Mutex
 }{}
 
-// 2. After each FLOW receives FULLSYNC_END
-if err == io.EOF {
-    log.Printf("  [FLOW-%d] ✓ RDB parsing done", flowID)
+// In ParseNext() loop
+for {
+    entry, err := parser.ParseNext()
 
-    // Increment completion count
-    flowCompletionCount.mu.Lock()
-    flowCompletionCount.count++
-    completedCount := flowCompletionCount.count
-    flowCompletionCount.mu.Unlock()
-
-    log.Printf("  [FLOW-%d] ⏸ Waiting for all FLOWs to complete RDB (%d/%d done)...",
-        flowID, completedCount, numFlows)
-
-    // If this is the last FLOW to complete, broadcast signal
-    if completedCount == numFlows {
-        log.Printf("  [FLOW-%d] 🎯 All FLOWs completed! Broadcasting barrier signal...", flowID)
-        close(rdbCompletionBarrier)
+    if err != nil {
+        if err == io.EOF {
+            // True EOF (after STARTSTABLE)
+            log.Printf("  [FLOW-%d] ✓ RDB stream terminated with EOF", flowID)
+            return  // ✅ Exit now
+        }
+        return  // Other errors
     }
 
-    // Wait for barrier (blocks until all FLOWs complete)
-    <-rdbCompletionBarrier
-    log.Printf("  [FLOW-%d] ✓ Barrier released, proceeding to stable sync preparation", flowID)
+    // Check for FULLSYNC_END marker
+    if entry.Type == RDB_TYPE_FULLSYNC_END_MARKER {
+        log.Printf("  [FLOW-%d] ✓ RDB parsing done", flowID)
 
-    return
+        // Barrier synchronization
+        flowCompletionCount.mu.Lock()
+        flowCompletionCount.count++
+        completedCount := flowCompletionCount.count
+        flowCompletionCount.mu.Unlock()
+
+        if completedCount == numFlows {
+            close(rdbCompletionBarrier)  // Last to complete, broadcast
+        }
+
+        <-rdbCompletionBarrier  // Wait for all FLOWs
+        log.Printf("  [FLOW-%d] ✓ Barrier released", flowID)
+
+        // ✅ Critical: Continue loop, don't return!
+        log.Printf("  [FLOW-%d] → Continuing to read journal blobs until STARTSTABLE triggers EOF...", flowID)
+        continue  // ← Keep reading
+    }
+
+    // Process normal RDB entries
+    // ...
 }
+```
+
+#### 3. Main Thread Changes (`internal/replica/replicator.go:715-810`)
+
+**Old Code**:
+```go
+wg.Wait()  // ❌ Wait for goroutines to exit (but they won't, deadlock)
+time.Sleep(30 * time.Second)  // ❌ Workaround
+sendStartStable()
+```
+
+**New Code**:
+```go
+// 1. Wait for barrier release (all FLOWs completed RDB static snapshot)
+<-rdbCompletionBarrier
+log.Println("  ✓ All FLOWs completed RDB static snapshot")
+
+// 2. Print intermediate stats
+// ...
+
+// 3. ✅ Send STARTSTABLE immediately (no 30s wait)
+sendStartStable()
+
+// 4. ✅ Wait for goroutines to exit (Dragonfly sends EOF after STARTSTABLE)
+wg.Wait()
+log.Println("  ✓ All FLOW goroutines terminated")
 ```
 
 ### Workflow
