@@ -278,7 +278,7 @@ func runColdImport(args []string) int {
 
 	logger.Console("❄️ Cold import started")
 	logger.Console("📦 RDB file: %s", cfg.Migrate.SnapshotPath)
-	logger.Console("🎯 Target: %s @ %s", cfg.Target.Type, cfg.Target.Seed)
+	logger.Console("🎯 Target: %s @ %s", cfg.Target.Type, cfg.Target.Addr)
 	logger.Console("⚙️ redis-shake: %s", cfg.Migrate.ShakeBinary)
 	logger.Console("⚠️ Existing data on the target may be overwritten")
 
@@ -636,7 +636,7 @@ func runCheck(args []string) int {
 	checkerCfg := checker.Config{
 		SourceAddr:      cfg.Source.Addr,
 		SourcePassword:  cfg.Source.Password,
-		TargetAddr:      cfg.Target.Seed,
+		TargetAddr:      cfg.Target.Addr,
 		TargetPassword:  cfg.Target.Password,
 		Mode:            checkerMode,
 		QPS:             qps,
