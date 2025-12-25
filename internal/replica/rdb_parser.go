@@ -177,8 +177,17 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 				return nil, fmt.Errorf("failed to read FULLSYNC_END suffix: %w", err)
 			}
 
-			// Signal the caller that full sync is complete so it can verify EOF tokens, etc.
-			return nil, io.EOF
+			// CRITICAL: FULLSYNC_END means "static RDB snapshot complete, preparing to switch to stable sync"
+			// Dragonfly will CONTINUE sending journal blobs until we send DFLY STARTSTABLE.
+			// We must NOT stop reading here - instead, return a special marker entry to notify
+			// the replicator that this FLOW completed RDB, then continue the ParseNext() loop.
+			//
+			// Return a marker entry with Type = RDB_TYPE_FULLSYNC_END_MARKER
+			return &RDBEntry{
+				Type:  RDB_TYPE_FULLSYNC_END_MARKER,
+				Key:   "",
+				Value: nil,
+			}, nil
 
 		case RDB_OPCODE_EOF:
 			// RDB terminator; drop 8-byte checksum
