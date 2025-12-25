@@ -563,6 +563,16 @@ func (r *Replicator) receiveSnapshot() error {
 		flowWriters[i].Start()
 	}
 
+	// CRITICAL FIX: Global barrier to synchronize RDB completion across all FLOWs
+	// This prevents data loss during the time window when some FLOWs have finished
+	// RDB but others are still transmitting inline journal entries.
+	// Without this barrier, writes to fast-finishing FLOWs during this window would be lost.
+	rdbCompletionBarrier := make(chan struct{})
+	flowCompletionCount := &struct {
+		count int
+		mu    sync.Mutex
+	}{}
+
 	// Start a goroutine per FLOW to read and parse RDB data
 	for i := 0; i < numFlows; i++ {
 		statsMap[i] = &FlowStats{}
@@ -626,6 +636,26 @@ func (r *Replicator) receiveSnapshot() error {
 							flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps)
 						r.recordFlowStage(flowID, "rdb_done",
 							fmt.Sprintf("success=%d skipped=%d failed=%d inline_journal=%d", stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps))
+
+						// CRITICAL FIX: Wait for all FLOWs to complete RDB before proceeding
+						// This ensures no data loss during the completion time window
+						flowCompletionCount.mu.Lock()
+						flowCompletionCount.count++
+						completedCount := flowCompletionCount.count
+						flowCompletionCount.mu.Unlock()
+
+						log.Printf("  [FLOW-%d] ⏸ Waiting for all FLOWs to complete RDB (%d/%d done)...", flowID, completedCount, numFlows)
+
+						// If this is the last FLOW to complete, signal all waiting FLOWs
+						if completedCount == numFlows {
+							log.Printf("  [FLOW-%d] 🎯 All FLOWs completed! Broadcasting barrier signal...", flowID)
+							close(rdbCompletionBarrier)
+						}
+
+						// Wait for the barrier (either we closed it, or another FLOW will)
+						<-rdbCompletionBarrier
+						log.Printf("  [FLOW-%d] ✓ Barrier released, proceeding to stable sync preparation", flowID)
+
 						// FULLSYNC_END received, snapshot done.
 						// EOF tokens are read after STARTSTABLE.
 						return
