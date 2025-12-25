@@ -8,8 +8,13 @@ Purpose:
   then verify all keys are correctly synchronized to target.
 
 Usage:
-  1. Start df2redis with: ./bin/df2redis-mac replicate --config config.yaml
-  2. Run this script: python3 scripts/test_rdb_phase_sync.py
+  1. Start df2redis with: ./bin/df2redis replicate --config <config_path>
+  2. Run this script in one of three ways:
+     - Auto-detect: python3 scripts/test_rdb_phase_sync.py
+       (Detects config from running df2redis process)
+     - Explicit config: python3 scripts/test_rdb_phase_sync.py examples/replicate.sample.yaml
+     - Default config: python3 scripts/test_rdb_phase_sync.py
+       (Uses config.yaml in current directory)
   3. Script will wait for RDB phase, write test data, and verify results
 
 Expected Result:
@@ -21,6 +26,8 @@ import time
 import yaml
 import sys
 import os
+import subprocess
+import re
 from typing import Dict, Tuple, List, Optional
 
 # Test configuration
@@ -36,22 +43,66 @@ class Colors:
     BOLD = '\033[1m'
     END = '\033[0m'
 
+def get_running_df2redis_config() -> Optional[str]:
+    """Detect running df2redis process and extract config file path"""
+    try:
+        # Get all running processes
+        result = subprocess.run(['ps', '-ef'], capture_output=True, text=True, timeout=5)
+        if result.returncode != 0:
+            return None
+
+        # Search for df2redis process
+        for line in result.stdout.splitlines():
+            if 'df2redis' in line and 'replicate' in line and '--config' in line:
+                # Extract config path using regex
+                # Pattern: --config <path>
+                match = re.search(r'--config\s+(\S+)', line)
+                if match:
+                    config_path = match.group(1)
+                    print(f"{Colors.BLUE}🔍 Found running df2redis process{Colors.END}")
+                    print(f"{Colors.BLUE}   Config file: {config_path}{Colors.END}")
+                    return config_path
+
+        return None
+    except Exception as e:
+        print(f"{Colors.YELLOW}⚠ Failed to detect running df2redis: {e}{Colors.END}")
+        return None
+
 def load_config(config_path: str = "config.yaml") -> Dict:
     """Load and parse df2redis config.yaml"""
-    if not os.path.exists(config_path):
-        print(f"{Colors.RED}✗ Config file not found: {config_path}{Colors.END}")
-        print(f"{Colors.YELLOW}💡 Please run this script from df2redis root directory{Colors.END}")
-        sys.exit(1)
+    # First, try the provided path
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+            print(f"{Colors.GREEN}✓ Loaded config from {config_path}{Colors.END}")
+            return config
+        except Exception as e:
+            print(f"{Colors.RED}✗ Failed to load config: {e}{Colors.END}")
+            sys.exit(1)
 
-    try:
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
+    # If default config not found, try to detect from running process
+    print(f"{Colors.YELLOW}⚠ Config file not found: {config_path}{Colors.END}")
+    print(f"{Colors.BLUE}🔍 Attempting to detect config from running df2redis process...{Colors.END}")
 
-        print(f"{Colors.GREEN}✓ Loaded config from {config_path}{Colors.END}")
-        return config
-    except Exception as e:
-        print(f"{Colors.RED}✗ Failed to load config: {e}{Colors.END}")
-        sys.exit(1)
+    detected_config = get_running_df2redis_config()
+    if detected_config and os.path.exists(detected_config):
+        try:
+            with open(detected_config, 'r') as f:
+                config = yaml.safe_load(f)
+            print(f"{Colors.GREEN}✓ Loaded config from detected path: {detected_config}{Colors.END}")
+            return config
+        except Exception as e:
+            print(f"{Colors.RED}✗ Failed to load detected config: {e}{Colors.END}")
+            sys.exit(1)
+
+    # No config found
+    print(f"{Colors.RED}✗ Could not find config file{Colors.END}")
+    print(f"{Colors.YELLOW}💡 Solutions:{Colors.END}")
+    print(f"   1. Run this script from df2redis root directory")
+    print(f"   2. Or start df2redis first: ./bin/df2redis replicate --config <path>{Colors.END}")
+    print(f"   3. Or specify config path: python3 scripts/test_rdb_phase_sync.py <config_path>{Colors.END}")
+    sys.exit(1)
 
 def connect_redis(label: str, host: str, port: int, password: str = "", db: int = 0) -> redis.Redis:
     """Create Redis/Dragonfly connection"""
@@ -259,8 +310,11 @@ def main():
     print(f"{Colors.BOLD}🧪 df2redis RDB Phase Data Sync Test{Colors.END}")
     print(f"{Colors.BOLD}{'='*70}{Colors.END}\n")
 
-    # Step 1: Load configuration
-    config = load_config()
+    # Step 1: Load configuration (support command line arg)
+    config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
+    if len(sys.argv) > 1:
+        print(f"{Colors.BLUE}📋 Using config from command line: {config_path}{Colors.END}\n")
+    config = load_config(config_path)
 
     # Extract source and target info
     source_host = config['source']['addr'].split(':')[0]

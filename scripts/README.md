@@ -41,7 +41,7 @@ pip3 install redis pyyaml
 
 ```bash
 # From project root
-./bin/df2redis-mac replicate --config config.yaml
+./bin/df2redis replicate --config examples/replicate.sample.yaml
 ```
 
 **Step 2**: Wait for RDB import to start (you'll see FLOW logs like):
@@ -54,10 +54,25 @@ pip3 install redis pyyaml
 
 **Step 3**: In another terminal, run the test script
 
+The script supports multiple ways to specify config:
+
 ```bash
-# From project root
+# Option 1: Auto-detect from running df2redis process (recommended)
+python3 scripts/test_rdb_phase_sync.py
+
+# Option 2: Explicitly specify config file
+python3 scripts/test_rdb_phase_sync.py examples/replicate.sample.yaml
+
+# Option 3: Use default config.yaml in current directory
+cd /path/to/df2redis
 python3 scripts/test_rdb_phase_sync.py
 ```
+
+**How config detection works:**
+- First tries the default `config.yaml` in current directory
+- If not found, automatically detects running df2redis process via `ps -ef`
+- Extracts `--config` argument from the process command line
+- Uses that config file
 
 **Step 4**: When prompted, press Enter to start writing test data
 
@@ -126,8 +141,23 @@ Total test keys: 20
 ### Troubleshooting
 
 #### Issue: "Config file not found"
+
+**Solution 1**: Let script auto-detect from running df2redis
 ```bash
-# Make sure you run from project root
+# Start df2redis first
+./bin/df2redis replicate --config examples/replicate.sample.yaml
+
+# Then run test script (will auto-detect config)
+python3 scripts/test_rdb_phase_sync.py
+```
+
+**Solution 2**: Specify config explicitly
+```bash
+python3 scripts/test_rdb_phase_sync.py examples/replicate.sample.yaml
+```
+
+**Solution 3**: Run from project root with default config.yaml
+```bash
 cd /path/to/df2redis
 python3 scripts/test_rdb_phase_sync.py
 ```
