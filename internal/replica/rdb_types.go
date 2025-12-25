@@ -67,6 +67,9 @@ const (
 	// Module types
 	RDB_TYPE_MODULE   = 6
 	RDB_TYPE_MODULE_2 = 7
+
+	// Internal marker types (not real RDB types, used for signaling)
+	RDB_TYPE_FULLSYNC_END_MARKER = 255 // Marker indicating FULLSYNC_END received
 )
 
 // RDB string encodings
