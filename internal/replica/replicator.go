@@ -131,7 +131,7 @@ func (r *Replicator) Start() error {
 	log.Println("")
 	log.Println("🔗 Connecting to target Redis...")
 	r.clusterClient = cluster.NewClusterClient(
-		r.cfg.Target.Seed,
+		r.cfg.Target.Addr,
 		r.cfg.Target.Password,
 		r.cfg.Target.TLS,
 	)

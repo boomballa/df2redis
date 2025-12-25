@@ -321,15 +321,10 @@ def main():
     source_port = int(config['source']['addr'].split(':')[1])
     source_password = config['source'].get('password', '')
 
-    # Handle target configuration
+    # Extract target info
     target_config = config['target']
-    if target_config['type'] == 'redis-cluster':
-        target_addr = target_config['seed']
-    else:
-        target_addr = target_config['addr']
-
-    target_host = target_addr.split(':')[0]
-    target_port = int(target_addr.split(':')[1])
+    target_host = target_config['addr'].split(':')[0]
+    target_port = int(target_config['addr'].split(':')[1])
     target_password = target_config.get('password', '')
 
     print(f"{Colors.BLUE}Source: {source_host}:{source_port}{Colors.END}")

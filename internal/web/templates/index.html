@@ -37,7 +37,7 @@
             </div>
             <div class="meta-pill">
                 <span class="icon">🎯</span>
-                <span>Target: <strong>{{ .Target.Type }} @ {{ .Target.Seed }}</strong></span>
+                <span>Target: <strong>{{ .Target.Type }} @ {{ .Target.Addr }}</strong></span>
             </div>
         </div>
     </div>
@@ -83,7 +83,7 @@
     <div class="card">
         <div class="card-title">Target</div>
         <p class="muted">Type: <strong>{{ .Target.Type }}</strong></p>
-        <p class="muted">Seed: <strong>{{ .Target.Seed }}</strong></p>
+        <p class="muted">Addr: <strong>{{ .Target.Addr }}</strong></p>
         <p class="muted">TLS: {{ if .Target.TLS }}enabled{{ else }}disabled{{ end }}</p>
     </div>
 </div>

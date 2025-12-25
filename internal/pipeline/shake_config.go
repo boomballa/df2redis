@@ -73,7 +73,7 @@ pipeline_count_limit = 1024
 target_redis_client_max_querybuf_len = 1073741824
 target_redis_proto_max_bulk_len = 512000000
 empty_db_before_sync = false
-`, snapshot, targetCluster, cfg.Target.Seed, cfg.Target.Password, cfg.Target.TLS, stateDir, logPath)
+`, snapshot, targetCluster, cfg.Target.Addr, cfg.Target.Password, cfg.Target.TLS, stateDir, logPath)
 
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return "", fmt.Errorf("failed to write shake config: %w", err)

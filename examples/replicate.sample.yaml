@@ -20,7 +20,7 @@ source:
 ########################################
 target:
   type: redis-standalone
-  seed: 10.180.7.93:6379
+  addr: 10.180.7.93:6379
   password: "pwd4dba"
   tls: false
 

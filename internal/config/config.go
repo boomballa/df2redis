@@ -35,7 +35,7 @@ type SourceConfig struct {
 
 type TargetConfig struct {
 	Type     string `json:"type"`
-	Seed     string `json:"seed"`
+	Addr     string `json:"addr"`
 	Password string `json:"password"`
 	TLS      bool   `json:"tls"`
 }
@@ -218,8 +218,8 @@ func (c *Config) Validate() error {
 	if c.Source.Addr == "" {
 		errs = append(errs, "source.addr is required")
 	}
-	if c.Target.Seed == "" {
-		errs = append(errs, "target.seed is required")
+	if c.Target.Addr == "" {
+		errs = append(errs, "target.addr is required")
 	}
 	if c.Migrate.SnapshotPath == "" {
 		errs = append(errs, "migrate.snapshotPath is required (RDB file path)")
@@ -286,7 +286,7 @@ func (c *Config) EnsureStateDir() error {
 func (c *Config) Summary() string {
 	return fmt.Sprintf("source=%s@%s, target=%s@%s, migrate(snapshot=%s), stateDir=%s, statusFile=%s",
 		c.Source.Type, c.Source.Addr,
-		c.Target.Type, c.Target.Seed,
+		c.Target.Type, c.Target.Addr,
 		c.Migrate.SnapshotPath,
 		c.ResolveStateDir(), c.StatusFilePath())
 }
@@ -295,7 +295,7 @@ func (c *Config) Summary() string {
 func (c *Config) PrettySummary() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "  🗄️ source    : %s @ %s\n", c.Source.Type, c.Source.Addr)
-	fmt.Fprintf(&b, "  🎯 target    : %s @ %s\n", c.Target.Type, c.Target.Seed)
+	fmt.Fprintf(&b, "  🎯 target    : %s @ %s\n", c.Target.Type, c.Target.Addr)
 	fmt.Fprintf(&b, "  🚚 migrate   : snapshot=%s\n", c.Migrate.SnapshotPath)
 	fmt.Fprintf(&b, "  📂 stateDir  : %s\n", c.ResolveStateDir())
 	fmt.Fprintf(&b, "  📝 statusFile: %s", c.StatusFilePath())

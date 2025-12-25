@@ -73,7 +73,7 @@ func NewContext(runCtx context.Context, cfg *config.Config, store *state.Store) 
 	dialCtx2, cancel2 := context.WithTimeout(baseCtx, 5*time.Second)
 	defer cancel2()
 	targetClient, err := redisx.Dial(dialCtx2, redisx.Config{
-		Addr:     cfg.Target.Seed,
+		Addr:     cfg.Target.Addr,
 		Password: cfg.Target.Password,
 		TLS:      cfg.Target.TLS,
 	})

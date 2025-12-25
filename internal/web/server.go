@@ -284,7 +284,7 @@ type sourceInfo struct {
 
 type targetInfo struct {
 	Type        string  `json:"type"`
-	Seed        string  `json:"seed"`
+	Addr        string  `json:"addr"`
 	InitialKeys float64 `json:"initialKeys"`
 }
 
@@ -374,7 +374,7 @@ func buildSyncSummary(cfg *config.Config, snap state.Snapshot) syncSummaryRespon
 		},
 		Target: targetInfo{
 			Type:        cfg.Target.Type,
-			Seed:        cfg.Target.Seed,
+			Addr:        cfg.Target.Addr,
 			InitialKeys: snap.Metrics[state.MetricTargetKeysInitial],
 		},
 		Checkpoint:   cpInfo,
