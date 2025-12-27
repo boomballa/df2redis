@@ -591,10 +591,10 @@ func (r *Replicator) receiveSnapshot() error {
 			// Track whether this FLOW has completed RDB phase and synchronized via barrier
 			// This ensures we only increment flowCompletionCount once, regardless of whether
 			// we receive FULLSYNC_END marker or direct EOF from Dragonfly.
-					// we receive FULLSYNC_END marker or direct EOF from Dragonfly.
-					rdbCompleted := false
+			rdbCompleted := false
 
-					parser := NewRDBParser(flowConn, flowID)
+			// Create RDB parser
+			parser := NewRDBParser(flowConn, flowID)
 
 			// Set callback for inline journal entries during RDB phase
 			parser.onJournalEntry = func(entry *JournalEntry) error {
@@ -639,38 +639,8 @@ func (r *Replicator) receiveSnapshot() error {
 						stats.mu.Lock()
 						inlineJournalOps := stats.InlineJournalOps
 						stats.mu.Unlock()
-
-						// CRITICAL FIX: If this FLOW never received FULLSYNC_END marker,
-						// we still need to synchronize via barrier before exiting.
-						// This handles the case where Dragonfly sends EOF directly without FULLSYNC_END.
-						if !rdbCompleted {
-							log.Printf("  [FLOW-%d] ✓ RDB stream terminated with EOF (no FULLSYNC_END received) (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
-								flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps)
-
-							// Participate in barrier synchronization
-							flowCompletionCount.mu.Lock()
-							flowCompletionCount.count++
-							completedCount := flowCompletionCount.count
-							flowCompletionCount.mu.Unlock()
-
-							log.Printf("  [FLOW-%d] ⏸ Waiting for all FLOWs to complete RDB (%d/%d done)...", flowID, completedCount, numFlows)
-
-							// If this is the last FLOW to complete, broadcast signal
-							if completedCount == numFlows {
-								log.Printf("  [FLOW-%d] 🎯 All FLOWs completed! Broadcasting barrier signal...", flowID)
-								close(rdbCompletionBarrier)
-							}
-
-							// Wait for barrier release
-							<-rdbCompletionBarrier
-							log.Printf("  [FLOW-%d] ✓ Barrier released, EOF FLOW exiting", flowID)
-							rdbCompleted = true
-						} else {
-							// Normal case: EOF after STARTSTABLE (already participated in barrier)
-							log.Printf("  [FLOW-%d] ✓ RDB stream terminated with EOF (after STARTSTABLE) (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
-								flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps)
-						}
-
+						log.Printf("  [FLOW-%d] ✓ RDB stream terminated with EOF (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
+							flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps)
 						r.recordFlowStage(flowID, "rdb_done",
 							fmt.Sprintf("success=%d skipped=%d failed=%d inline_journal=%d", stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps))
 						return
@@ -709,7 +679,6 @@ func (r *Replicator) receiveSnapshot() error {
 					// Wait for the barrier (blocks until all FLOWs reach this point)
 					<-rdbCompletionBarrier
 					log.Printf("  [FLOW-%d] ✓ Barrier released, proceeding to stable sync preparation", flowID)
-					rdbCompleted = true
 
 					// CRITICAL: Continue ParseNext() loop to read journal blobs!
 					// Do NOT return - Dragonfly will keep sending data until STARTSTABLE.
