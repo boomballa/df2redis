@@ -18,13 +18,14 @@
 
 ## 📖 Overview
 
-df2redis implements Dragonfly's replication protocol end-to-end so that Redis or Redis Cluster can act as a downstream target. The tool performs a full snapshot import followed by continuous journal replay, giving you a near-zero-downtime migration path without relying on double-write proxies or fragile scripts.
+df2redis implements Dragonfly's replication protocol end-to-end so that Redis or Redis Cluster can act as a downstream target. The tool performs a full snapshot import followed by continuous journal replay, giving you a near-zero-downtime migration path without relying on proxies or dual-write mechanisms.
 
 Key ideas:
 
 - **Native protocol support** – handshake with Dragonfly via `DFLY FLOW`, detect FLOW topology, and request RDB + journal streams.
-- **Parallel snapshot ingest** – multiple FLOW connections stream data concurrently, decoding Dragonfly-specific encodings (type-18 listpacks, QuickList 2.0, etc.).
+- **Parallel snapshot ingest** – multiple FLOW connections stream data concurrently, decoding Dragonfly-specific encodings (type-18 listpacks, QuickList 2.0, LZ4 compression, etc.).
 - **Incremental catch-up** – Journal entries are parsed and routed to the correct Redis Cluster node, honoring transaction IDs, TTLs, and skip policies.
+- **Multi-FLOW synchronization** – Barrier-based coordination ensures all FLOWs complete RDB phase before stable sync, preventing data loss during the handoff window.
 - **Checkpointing** – LSN/state checkpoints are persisted so you can resume stable sync after interruptions.
 
 ---
@@ -50,6 +51,13 @@ Key ideas:
 - Per-FLOW stats, human-friendly logging with emoji markers, and optional log files.
 - Conflict policies (`overwrite`, `skip`, `panic`) applied during snapshot ingestion.
 - Graceful shutdown path that saves a final checkpoint and closes FLOW streams.
+
+### Reliability & Correctness
+
+- **RDB completion barrier** – All FLOWs synchronize before STARTSTABLE is sent, handling both FULLSYNC_END marker and direct EOF cases to prevent data loss during phase transition.
+- **Journal replay accuracy** – Supports inline journal entries (0xD2 opcode) during RDB phase, ensuring writes during snapshot are captured.
+- **Stream type support** – Correctly replicates XADD/XTRIM operations with Dragonfly's rewritten commands (MINID/MAXLEN exact boundaries).
+- **LZ4 decompression** – Full support for Dragonfly's LZ4-compressed RDB blobs (0xCA opcode).
 
 ---
 

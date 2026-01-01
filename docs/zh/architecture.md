@@ -3,9 +3,9 @@
 [English Version](en/architecture.md) | [中文版](architecture.md)
 
 ## 目标
-- 以 Go 实现“伪 Dragonfly replica”，直接兼容 DFLY 复制协议。
+- 以 Go 实现"伪 Dragonfly replica"，直接兼容 DFLY 复制协议。
 - 支持 Dragonfly 主库到 Redis（含 Cluster）的全量 + 增量同步。
-- 不依赖 Camellia 代理/双写；尽量减少外部运行环境依赖。
+- 不依赖外部代理或双写机制；尽量减少外部运行环境依赖。
 
 ## 路线概览
 1) **握手阶段**  
