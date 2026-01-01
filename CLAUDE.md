@@ -154,7 +154,7 @@ Closes #123
 
 ## Project Overview
 
-**df2redis** is a Go-based migration tool for Dragonfly → Redis. It implements a direct replication protocol compatible with Dragonfly to enable full and incremental data synchronization without requiring Camellia proxy or dual-write mechanisms.
+**df2redis** is a Go-based migration tool for Dragonfly → Redis. It implements a direct replication protocol compatible with Dragonfly to enable full and incremental data synchronization without requiring external proxies or dual-write mechanisms.
 
 **Current Status**: Prototype phase with CLI framework, configuration parsing, full-data import (via redis-shake), state management, and dashboard visualization. Incremental sync via Dragonfly journal streaming is planned but not yet implemented.
 
