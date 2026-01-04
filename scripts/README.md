@@ -4,6 +4,20 @@
 
 This directory contains test scripts for validating df2redis functionality.
 
+## Installation
+
+All test scripts require Python 3.7+ and the dependencies listed in `requirements.txt`.
+
+```bash
+# Install dependencies
+pip3 install -r scripts/requirements.txt
+
+# Or using a virtual environment (recommended)
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r scripts/requirements.txt
+```
+
 ## test_rdb_phase_sync.py
 
 **Purpose**: Test data consistency during RDB phase by writing keys while RDB import is in progress.
@@ -25,15 +39,9 @@ This test validates the **RDB completion race condition fix**:
 
 ### Prerequisites
 
-```bash
-# 1. Install Python dependencies
-pip3 install redis pyyaml
-
-# 2. Make sure source Dragonfly has significant data (1M+ keys)
-#    This ensures RDB phase takes long enough to write test data
-
-# 3. Have a valid config.yaml in the project root
-```
+1. Install Python dependencies (see [Installation](#installation) above)
+2. Make sure source Dragonfly has significant data (1M+ keys) - this ensures RDB phase takes long enough to write test data
+3. Have a valid config.yaml in the project root or specify config path explicitly
 
 ### Usage
 
@@ -203,6 +211,175 @@ redis-cli -h <source-host> -p <source-port> -a <password> keys rdb_phase_test:* 
 redis-cli -h <target-host> -p <target-port> -a <password> keys rdb_phase_test:* | xargs redis-cli -h <target-host> -p <target-port> -a <password> del
 ```
 
+## test_stream_replication.py
+
+**Purpose**: Comprehensive test suite for validating Stream data type replication from Dragonfly to Redis.
+
+### What This Test Does
+
+Tests all critical Stream operations:
+1. **Basic XADD** with explicit IDs
+2. **Auto-ID XADD** with `*` wildcard
+3. **XTRIM MAXLEN** with approximate trimming
+4. **XTRIM MINID** with exact boundaries
+5. **XTRIM to zero** (empty stream)
+6. **XADD with inline trim** (MAXLEN option)
+
+### Prerequisites
+
+1. Install Python dependencies (see [Installation](#installation) above)
+2. Ensure df2redis is running and actively replicating
+3. Both source and target must be accessible
+
+### Usage
+
+```bash
+# 1. Start df2redis replication
+./bin/df2redis replicate --config examples/replicate.sample.yaml
+
+# 2. Run Stream tests (modify host/port/password in the script if needed)
+python3 scripts/test_stream_replication.py
+```
+
+### Configuration
+
+Edit the script to match your environment:
+
+```python
+SOURCE_HOST = "10.46.128.12"
+SOURCE_PORT = 7380
+SOURCE_PASSWORD = ""
+
+TARGET_HOST = "10.180.7.93"
+TARGET_PORT = 6379
+TARGET_PASSWORD = "pwd4dba"
+```
+
+### Expected Output
+
+```
+============================================================
+Stream Replication Test Suite
+============================================================
+
+[Cleanup] Removing old test data...
+
+[Test 1] Basic XADD with explicit ID
+  ✓ Stream 'test:stream:basic' perfectly synchronized (3 entries)
+
+[Test 2] XADD with automatic ID generation
+  Generated IDs: 1735123456789-0, 1735123456790-0, 1735123456791-0
+  ✓ Stream 'test:stream:autoid' perfectly synchronized (3 entries)
+
+...
+
+============================================================
+Test Summary
+============================================================
+✓ PASS: Basic XADD
+✓ PASS: Auto-ID XADD
+✓ PASS: XTRIM MAXLEN
+✓ PASS: XTRIM MINID
+✓ PASS: XTRIM to zero
+✓ PASS: XADD with inline trim
+------------------------------------------------------------
+Total: 6/6 tests passed (100%)
+============================================================
+```
+
+### Why This Test Is Important
+
+Validates that Dragonfly's Stream-specific journal rewrites are correctly replicated:
+- **XADD**: Ensures actual generated IDs are used (not command arguments)
+- **XTRIM**: Verifies MINID/MAXLEN exact boundaries after approximate trimming
+- **Empty streams**: Confirms MAXLEN 0 handling
+
+## manual_test_all_types.sh
+
+**Purpose**: Simple one-command test for all 5 Redis data types during RDB phase.
+
+### What This Test Does
+
+1. Cleans up old test data
+2. Waits for df2redis to initialize (3 seconds)
+3. Writes 20 test keys (4 of each type: String, Hash, List, Set, ZSet)
+4. Waits 120 seconds for synchronization
+5. Verifies all keys and reports results
+
+### Prerequisites
+
+1. `redis-cli` must be installed and in PATH
+2. df2redis should be running
+3. Source and target must be accessible
+
+### Usage
+
+```bash
+# 1. Edit script configuration if needed
+vim scripts/manual_test_all_types.sh
+# Modify: SOURCE_HOST, SOURCE_PORT, TARGET_HOST, TARGET_PORT, TARGET_PASS
+
+# 2. Start df2redis
+./bin/df2redis replicate --config examples/replicate.sample.yaml &
+
+# 3. Run test immediately (script waits 3s before writing)
+bash scripts/manual_test_all_types.sh
+```
+
+### Expected Output
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🧪 RDB Phase Sync Test - All Data Types
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[1/5] 🧹 Cleaning up existing test data...
+  ✓ Cleanup completed
+
+[2/5] ⏱  Waiting for df2redis to initialize (3 seconds)...
+  ✓ Ready to write test data
+
+[3/5] ✍️  Writing test data to source (all types)...
+  ✓ Written 20 keys (4 per type)
+
+[4/5] ⏳ Waiting for sync completion (120s)...
+  ✓ Wait completed
+
+[5/5] 🔍 Verifying synchronization...
+
+  • Checking String keys...
+    ✓ Found: df2redis_test:string:1
+    ✓ Found: df2redis_test:string:2
+    ✓ Found: df2redis_test:string:3
+    ✓ Found: df2redis_test:string:4
+  • Checking Hash keys...
+    ✓ Found: df2redis_test:hash:1
+    ...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 Test Results
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Total keys checked: 20
+Successfully synced: 20
+Missing keys: 0
+Success rate: 100.00%
+
+🎉 SUCCESS: All keys synchronized!
+```
+
+### Configuration Variables
+
+```bash
+SOURCE_HOST="10.46.128.12"      # Dragonfly host
+SOURCE_PORT="7380"              # Dragonfly port
+TARGET_HOST="10.180.7.93"       # Redis host
+TARGET_PORT="6379"              # Redis port
+TARGET_PASS="pwd4dba"           # Redis password
+
+NUM_KEYS_PER_TYPE=4             # Keys per data type
+SYNC_WAIT_TIME=120              # Wait time in seconds
+```
+
 ## Contributing
 
 When adding new test scripts:
@@ -210,3 +387,4 @@ When adding new test scripts:
 2. Make scripts executable: `chmod +x scripts/your_script.py`
 3. Add clear usage instructions and expected output
 4. Include troubleshooting section
+5. Update `requirements.txt` if adding new Python dependencies
