@@ -17,7 +17,7 @@ statusFile: ../out/status.json
 migrate:
   snapshotPath: ../data/backup/dragonfly7380-dump.rdb
   shakeBinary: ../redis-shake-v4/redis-shake
-  shakeArgs: ""          # 选填：完整命令行参数（如不用配置文件）
-  shakeConfigFile: ""    # 选填：redis-shake 配置文件路径（如使用 -conf）
-  autoBgsave: false      # 是否在源端自动触发 BGSAVE
+  shakeArgs: ""          # Optional: full CLI args (if not using config file)
+  shakeConfigFile: ""    # Optional: redis-shake config file path (if using -conf)
+  autoBgsave: false      # Auto-trigger BGSAVE on source
   bgsaveTimeoutSeconds: 300

@@ -13,7 +13,6 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration (modify these values as needed)
-# For actual test environment configs, see CLAUDE.md "Internal Development Reference"
 SOURCE_HOST="localhost"
 SOURCE_PORT="6380"
 TARGET_HOST="localhost"
