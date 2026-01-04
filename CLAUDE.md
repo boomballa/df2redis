@@ -121,8 +121,8 @@ Closes #123
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 📋 配置信息：
-  • 源库: dragonfly@10.46.128.11:7379
-  • 目标: redis-cluster@10.180.50.231:6379
+  • 源库: dragonfly@192.168.1.100:6380
+  • 目标: redis-cluster@192.168.2.200:6379
   • 状态目录: ../out
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -262,7 +262,7 @@ See `examples/migrate.sample.yaml` for reference. Key fields:
 ```yaml
 source:
   type: dragonfly          # Identifier (informational)
-  addr: 10.46.128.11:7379  # Source address
+  addr: 192.168.1.100:6380 # Source address
   password: ""
   tls: false
 ```
@@ -271,8 +271,8 @@ source:
 ```yaml
 target:
   type: redis-cluster      # "redis-standalone" or "redis-cluster"
-  seed: 10.180.50.231:6379 # Seed node address
-  password: "pwd4dba"
+  seed: 192.168.2.200:6379 # Seed node address
+  password: "your_redis_password"
   tls: false
 ```
 

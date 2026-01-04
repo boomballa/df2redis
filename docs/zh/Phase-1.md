@@ -145,7 +145,7 @@ DFLY FLOW 16c2763d0e4cb8f214ded18e6d4e178b00775674 SYNC12 0
 
 ### 测试环境
 - Dragonfly 版本：v1.30.0
-- Dragonfly 地址：10.46.128.12:7380
+- Dragonfly 地址：192.168.1.100:6380
 - Shard 数量：8
 - 协议版本：VER4
 
@@ -154,7 +154,7 @@ DFLY FLOW 16c2763d0e4cb8f214ded18e6d4e178b00775674 SYNC12 0
 ```
 🚀 启动 Dragonfly 复制器
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔗 连接到 Dragonfly: 10.46.128.12:7380
+🔗 连接到 Dragonfly: 192.168.1.100:6380
 ✓ 连接成功
 
 🤝 开始握手流程
@@ -234,14 +234,14 @@ Dragonfly 使用多 Shard 架构，每个 Shard 需要独立的 FLOW 通道
 ```yaml
 source:
   type: dragonfly
-  addr: 10.46.128.12:7380
+  addr: 192.168.1.100:6380
   password: ""
   tls: false
 
 target:
   type: redis-standalone
-  seed: 10.180.7.93:6379
-  password: "pwd4dba"
+  seed: 192.168.2.200:6379
+  password: "your_redis_password"
   tls: false
 
 stateDir: ./out
