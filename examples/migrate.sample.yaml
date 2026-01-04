@@ -1,14 +1,14 @@
 source:
   type: dragonfly
-  addr: 192.168.1.100:6380
-  password: ""
+  addr: localhost:6380          # Dragonfly address
+  password: ""                  # Optional password
   tls: false
 
 target:
   # type: redis-standalone or redis-cluster
   type: redis-cluster
-  seed: 192.168.2.200:6379
-  password: "your_redis_password"
+  seed: localhost:6379          # Redis seed node address
+  password: ""                  # Optional password
   tls: false
 
 stateDir: ../out

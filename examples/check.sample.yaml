@@ -4,15 +4,15 @@
 # 源端 Dragonfly 配置
 source:
   type: dragonfly
-  addr: 192.168.1.100:6380      # Dragonfly 地址（请修改为实际地址）
+  addr: localhost:6380          # Dragonfly 地址（请修改为实际地址）
   password: ""                  # Dragonfly 密码（如果有）
   tls: false
 
 # 目标端 Redis 配置
 target:
   type: redis-cluster           # redis-standalone 或 redis-cluster
-  seed: 192.168.2.200:6379      # Redis 地址（cluster 模式填写任意节点）
-  password: "your_redis_password"  # Redis 密码
+  seed: localhost:6379          # Redis 地址（cluster 模式填写任意节点）
+  password: ""                  # Redis 密码（如果有）
   tls: false
 
 # 以下参数用于兼容性（check 命令实际不使用这些配置）

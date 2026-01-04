@@ -258,13 +258,14 @@ class StreamReplicationTester:
 def main():
     """Main entry point."""
     # Configuration (modify as needed)
-    SOURCE_HOST = "192.168.1.100"
+    # For actual test environment configs, see CLAUDE.md "Internal Development Reference"
+    SOURCE_HOST = "localhost"
     SOURCE_PORT = 6380
     SOURCE_PASSWORD = ""
 
-    TARGET_HOST = "192.168.2.200"
+    TARGET_HOST = "localhost"
     TARGET_PORT = 6379
-    TARGET_PASSWORD = "your_redis_password"
+    TARGET_PASSWORD = ""
 
     tester = StreamReplicationTester(
         SOURCE_HOST, SOURCE_PORT, SOURCE_PASSWORD,

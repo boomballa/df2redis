@@ -13,11 +13,12 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration (modify these values as needed)
-SOURCE_HOST="192.168.1.100"
+# For actual test environment configs, see CLAUDE.md "Internal Development Reference"
+SOURCE_HOST="localhost"
 SOURCE_PORT="6380"
-TARGET_HOST="192.168.2.200"
+TARGET_HOST="localhost"
 TARGET_PORT="6379"
-TARGET_PASS="your_redis_password"
+TARGET_PASS=""
 
 TEST_PREFIX="df2redis_test:"
 NUM_KEYS_PER_TYPE=4
