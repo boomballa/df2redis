@@ -125,7 +125,7 @@ source:
 
 target:
   type: "redis-cluster"           # 或 "redis-standalone"
-  seed: "192.168.2.200:6379"      # Redis 地址
+  addr: "192.168.2.200:6379"      # Redis 地址
   password: "your-password"       # 可选
   tls: false
 ```

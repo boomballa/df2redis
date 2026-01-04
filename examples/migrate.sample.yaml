@@ -7,7 +7,7 @@ source:
 target:
   # type: redis-standalone or redis-cluster
   type: redis-cluster
-  seed: localhost:6379          # Redis seed node address
+  addr: localhost:6379          # Redis address
   password: ""                  # Optional password
   tls: false
 

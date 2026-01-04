@@ -826,7 +826,7 @@ source:
 
 target:
   type: redis-standalone
-  seed: 192.168.2.200:6379
+  addr: 192.168.2.200:6379
   password: "your_redis_password"
 
 stateDir: ./out
@@ -847,7 +847,7 @@ source:
 
 target:
   type: redis-standalone
-  seed: 192.168.2.200:6379
+  addr: 192.168.2.200:6379
   password: "your_redis_password"
 
 stateDir: ./out

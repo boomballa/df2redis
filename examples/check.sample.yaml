@@ -11,7 +11,7 @@ source:
 # Redis target configuration
 target:
   type: redis-cluster           # redis-standalone or redis-cluster
-  seed: localhost:6379          # Redis address (any node for cluster mode)
+  addr: localhost:6379          # Redis address (any node for cluster mode)
   password: ""                  # Redis password (optional)
   tls: false
 
