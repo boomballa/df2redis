@@ -258,7 +258,6 @@ class StreamReplicationTester:
 def main():
     """Main entry point."""
     # Configuration (modify as needed)
-    # For actual test environment configs, see CLAUDE.md "Internal Development Reference"
     SOURCE_HOST = "localhost"
     SOURCE_PORT = 6380
     SOURCE_PASSWORD = ""

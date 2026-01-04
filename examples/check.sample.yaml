@@ -1,21 +1,21 @@
-# df2redis 数据一致性校验配置示例
-# 使用方法: ./bin/df2redis check --config examples/check.sample.yaml
+# df2redis data consistency check configuration example
+# Usage: ./bin/df2redis check --config examples/check.sample.yaml
 
-# 源端 Dragonfly 配置
+# Dragonfly source configuration
 source:
   type: dragonfly
-  addr: localhost:6380          # Dragonfly 地址（请修改为实际地址）
-  password: ""                  # Dragonfly 密码（如果有）
+  addr: localhost:6380          # Dragonfly address (modify as needed)
+  password: ""                  # Dragonfly password (optional)
   tls: false
 
-# 目标端 Redis 配置
+# Redis target configuration
 target:
-  type: redis-cluster           # redis-standalone 或 redis-cluster
-  seed: localhost:6379          # Redis 地址（cluster 模式填写任意节点）
-  password: ""                  # Redis 密码（如果有）
+  type: redis-cluster           # redis-standalone or redis-cluster
+  seed: localhost:6379          # Redis address (any node for cluster mode)
+  password: ""                  # Redis password (optional)
   tls: false
 
-# 以下参数用于兼容性（check 命令实际不使用这些配置）
+# The following parameters are for compatibility (not actually used by check command)
 stateDir: ./out
 statusFile: ./out/status.json
 migrate:
@@ -23,23 +23,23 @@ migrate:
   shakeBinary: /tmp/placeholder
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 使用示例
+# Usage Examples
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #
-# 1. 基本校验（outline 模式，默认）
+# 1. Basic check (outline mode, default)
 #    ./bin/df2redis check --config examples/check.sample.yaml
 #
-# 2. 全量值对比（最严格）
+# 2. Full value comparison (most strict)
 #    ./bin/df2redis check --config examples/check.sample.yaml --mode full
 #
-# 3. 智能对比（大 key 只对比长度）
+# 3. Smart comparison (large keys only compare length)
 #    ./bin/df2redis check --config examples/check.sample.yaml --mode smart
 #
-# 4. 只校验特定 key（解决大数据集时间过长问题）
+# 4. Check specific keys only (solve large dataset timeout issues)
 #    ./bin/df2redis check --config examples/check.sample.yaml \
 #      --filter "user:*|session:*|cache:*"
 #
-# 5. 高级用法：智能模式 + key 过滤 + 多轮对比
+# 5. Advanced usage: smart mode + key filter + multiple rounds
 #    ./bin/df2redis check --config examples/check.sample.yaml \
 #      --mode smart \
 #      --filter "order:*|payment:*" \
@@ -49,17 +49,17 @@ migrate:
 #      --parallel 8
 #
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 命令行参数说明
+# Command-line Parameters
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #
-# --mode              校验模式: full/outline/length/smart (默认: outline)
-# --filter            Key 过滤列表: "user:*|session:*" (支持通配符)
-# --qps               QPS 限制 (默认: 500)
-# --parallel          并发度 (默认: 4)
-# --compare-times     对比轮次 (默认: 3)
-# --interval          每轮间隔秒数 (默认: 5)
-# --big-key-threshold 大 key 阈值，字节 (默认: 524288 = 512KB)
-# --result-dir        结果输出目录 (默认: ./check-results)
-# --log-file          日志文件路径
-# --log-level         日志级别: debug/info/warn/error (默认: info)
+# --mode              Check mode: full/outline/length/smart (default: outline)
+# --filter            Key filter list: "user:*|session:*" (supports wildcards)
+# --qps               QPS limit (default: 500)
+# --parallel          Concurrency level (default: 4)
+# --compare-times     Number of comparison rounds (default: 3)
+# --interval          Interval seconds between rounds (default: 5)
+# --big-key-threshold Big key threshold in bytes (default: 524288 = 512KB)
+# --result-dir        Result output directory (default: ./check-results)
+# --log-file          Log file path
+# --log-level         Log level: debug/info/warn/error (default: info)
 #

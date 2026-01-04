@@ -311,7 +311,6 @@ Phase 1 完成：成功与 Dragonfly v1.30.0 建立复制连接并完成握手�
 
 **修改文件：**
 - `internal/cli/cli.go` - 新增 replicate 子命令
-- `CLAUDE.md` - 更新项目说明（如需要）
 
 ## 测试清单
 

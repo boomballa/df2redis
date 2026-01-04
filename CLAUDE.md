@@ -36,6 +36,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **日志消息必须使用英文**（Log messages MUST be in English）
 - **错误信息必须使用英文**（Error messages MUST be in English）
 
+### 文档语言规范
+- **公开 README 文件**: 英文（README.md, scripts/README.md 等）
+- **中文 README 文件**: 仅限 README.zh-CN.md
+- **配置文件注释**: 英文（examples/*.yaml）
+- **测试脚本注释**: 英文（scripts/*.py, scripts/*.sh）
+- **内部 Phase 文档**: 中文（docs/zh/Phase-*.md）
+- **CLAUDE.md**: 本文件（混合中英文，仅供内部使用，已加入 .gitignore）
+
+**重要提醒：**
+- CLAUDE.md 是给 Claude Code 工具使用的内部文档，已加入 .gitignore
+- 不要在其他公开文件中引用或提示用户查看 CLAUDE.md
+- 所有面向用户的文档和配置示例都应该是自包含的
+
 ### Git 提交规范
 当完成重要的里程碑功能时，需要提供符合规范的英文 Git 提交信息。遵循 Conventional Commits 规范：
 
