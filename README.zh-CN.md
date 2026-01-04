@@ -146,7 +146,7 @@ source:
 
 target:
   type: "redis-cluster"           # or "redis-standalone"
-  seed: "192.168.2.200:6379"     # Redis seed node
+  addr: "192.168.2.200:6379"      # Redis address
   password: "your-password"
   tls: false
 
@@ -322,7 +322,7 @@ source:
 ```yaml
 target:
   type: "redis-cluster"       # "redis-standalone" or "redis-cluster" (required)
-  seed: "192.168.2.200:6379"  # Redis seed node address (required)
+  addr: "192.168.2.200:6379"  # Redis address (required)
   password: "your_redis_password"  # Authentication password (optional)
   tls: false                  # Enable TLS (optional)
 ```
