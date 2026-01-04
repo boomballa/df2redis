@@ -126,10 +126,35 @@ The embedded dashboard listens on `config.dashboard.addr` (default `:8080`). Ove
 
 ---
 
+## 🧪 Testing
+
+### Test Scripts
+
+The `scripts/` directory contains comprehensive test suites:
+
+```bash
+# Install test dependencies
+pip3 install -r scripts/requirements.txt
+
+# Test all data types during RDB phase
+bash scripts/manual_test_all_types.sh
+
+# Test Stream type replication
+python3 scripts/test_stream_replication.py
+
+# Test RDB phase data consistency
+python3 scripts/test_rdb_phase_sync.py
+```
+
+See [scripts/README.md](scripts/README.md) for detailed documentation on each test.
+
+---
+
 ## 📚 Documentation
 
 - [Chinese technical docs](docs/) – deep dives for each replication phase, environment setup guides, etc.
 - [English README (this file)](README.md) – concise overview.
+- [Test scripts guide](scripts/README.md) – comprehensive testing documentation.
 - [Dashboard API reference](docs/api/dashboard-api.md) – JSON endpoints consumed by the upcoming React UI.
 - [前端设计草案（ZH）](docs/zh/dashboard.md) – Material UI + Chart.js layout plan (English version WIP).
 

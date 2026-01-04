@@ -1,0 +1,7 @@
+# Python dependencies for df2redis test scripts
+
+# Redis client library (required for all test scripts)
+redis>=4.5.0,<6.0.0
+
+# YAML parser (required for test_rdb_phase_sync.py)
+PyYAML>=6.0,<7.0
