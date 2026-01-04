@@ -140,13 +140,13 @@ Edit `config.yaml`:
 
 ```yaml
 source:
-  addr: "10.46.128.12:7380"      # Dragonfly address
+  addr: "192.168.1.100:6380"     # Dragonfly address
   password: ""                    # Optional password
   tls: false
 
 target:
   type: "redis-cluster"           # or "redis-standalone"
-  seed: "10.180.50.231:6379"      # Redis seed node
+  seed: "192.168.2.200:6379"     # Redis seed node
   password: "your-password"
   tls: false
 
@@ -180,7 +180,7 @@ The tool outputs detailed progress information:
 ```
 🚀 启动 Dragonfly 复制器
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔗 连接到 Dragonfly: 10.46.128.12:7380
+🔗 连接到 Dragonfly: 192.168.1.100:6380
 ✓ 主连接建立成功
 
 🤝 开始握手流程
@@ -310,7 +310,7 @@ df2redis/
 
 ```yaml
 source:
-  addr: "10.46.128.12:7380"  # Dragonfly address (required)
+  addr: "192.168.1.100:6380" # Dragonfly address (required)
   password: ""                # Authentication password (optional)
   tls: false                  # Enable TLS (optional)
 ```
@@ -322,8 +322,8 @@ source:
 ```yaml
 target:
   type: "redis-cluster"       # "redis-standalone" or "redis-cluster" (required)
-  seed: "10.180.50.231:6379"  # Redis seed node address (required)
-  password: "pwd4dba"         # Authentication password (optional)
+  seed: "192.168.2.200:6379"  # Redis seed node address (required)
+  password: "your_redis_password"  # Authentication password (optional)
   tls: false                  # Enable TLS (optional)
 ```
 </details>

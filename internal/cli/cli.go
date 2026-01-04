@@ -733,7 +733,7 @@ func buildLogFilePrefix(cfg *config.Config, mode string) string {
 	}
 
 	// Otherwise derive from source address
-	// Example: "10.46.128.12:7380" -> "dragonfly_10.46.128.12_7380"
+	// Example: "192.168.1.100:6380" -> "dragonfly_192.168.1.100_6380"
 	sourceType := cfg.Source.Type
 	if sourceType == "" {
 		sourceType = "dragonfly"

@@ -13,11 +13,11 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration (modify these values as needed)
-SOURCE_HOST="10.46.128.12"
-SOURCE_PORT="7380"
-TARGET_HOST="10.180.7.93"
+SOURCE_HOST="192.168.1.100"
+SOURCE_PORT="6380"
+TARGET_HOST="192.168.2.200"
 TARGET_PORT="6379"
-TARGET_PASS="pwd4dba"
+TARGET_PASS="your_redis_password"
 
 TEST_PREFIX="df2redis_test:"
 NUM_KEYS_PER_TYPE=4

@@ -101,11 +101,11 @@ The script will:
 🧪 df2redis RDB Phase Data Sync Test
 ======================================================================
 
-Source: 10.46.128.12:7380
-Target: 10.180.7.93:6379 (redis-cluster)
+Source: 192.168.1.100:6380
+Target: 192.168.2.200:6379 (redis-cluster)
 
-✓ Connected to Source (Dragonfly): 10.46.128.12:7380
-✓ Connected to Target (Redis): 10.180.7.93:6379
+✓ Connected to Source (Dragonfly): 192.168.1.100:6380
+✓ Connected to Target (Redis): 192.168.2.200:6379
 
 Press Enter when df2redis RDB phase has started...
 
@@ -246,13 +246,13 @@ python3 scripts/test_stream_replication.py
 Edit the script to match your environment:
 
 ```python
-SOURCE_HOST = "10.46.128.12"
-SOURCE_PORT = 7380
+SOURCE_HOST = "192.168.1.100"
+SOURCE_PORT = 6380
 SOURCE_PASSWORD = ""
 
-TARGET_HOST = "10.180.7.93"
+TARGET_HOST = "192.168.2.200"
 TARGET_PORT = 6379
-TARGET_PASSWORD = "pwd4dba"
+TARGET_PASSWORD = "your_redis_password"
 ```
 
 ### Expected Output
@@ -370,11 +370,11 @@ Success rate: 100.00%
 ### Configuration Variables
 
 ```bash
-SOURCE_HOST="10.46.128.12"      # Dragonfly host
-SOURCE_PORT="7380"              # Dragonfly port
-TARGET_HOST="10.180.7.93"       # Redis host
+SOURCE_HOST="192.168.1.100"     # Dragonfly host
+SOURCE_PORT="6380"              # Dragonfly port
+TARGET_HOST="192.168.2.200"     # Redis host
 TARGET_PORT="6379"              # Redis port
-TARGET_PASS="pwd4dba"           # Redis password
+TARGET_PASS="your_redis_password"  # Redis password
 
 NUM_KEYS_PER_TYPE=4             # Keys per data type
 SYNC_WAIT_TIME=120              # Wait time in seconds

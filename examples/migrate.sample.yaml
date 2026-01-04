@@ -1,14 +1,14 @@
 source:
   type: dragonfly
-  addr: 10.46.128.12:7380
+  addr: 192.168.1.100:6380
   password: ""
   tls: false
 
 target:
   # type: redis-standalone or redis-cluster
-  type: redis-cluster 
-  seed: 10.180.50.231:6379
-  password: "pwd4dba"
+  type: redis-cluster
+  seed: 192.168.2.200:6379
+  password: "your_redis_password"
   tls: false
 
 stateDir: ../out
