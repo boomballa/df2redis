@@ -145,7 +145,7 @@ func (c *ClusterClient) connectNode(addr string) (*redisx.Client, error) {
 	return client, nil
 }
 
-// Do routes and executes a command
+// Do routes and executes a command with automatic MOVED/ASK redirection
 func (c *ClusterClient) Do(cmd string, args ...string) (interface{}, error) {
 	c.mu.RLock()
 	isCluster := c.isCluster
@@ -166,20 +166,91 @@ func (c *ClusterClient) Do(cmd string, args ...string) (interface{}, error) {
 		return standaloneClient.Do(cmd, interfaceArgs...)
 	}
 
-	// Cluster mode: compute slot and route
-	slot := c.calculateSlot(cmd, args)
+	// Cluster mode: compute slot and route with retry on MOVED/ASK
+	maxRedirects := 5 // Prevent infinite redirect loops
+	for attempt := 0; attempt < maxRedirects; attempt++ {
+		slot := c.calculateSlot(cmd, args)
 
-	c.mu.RLock()
-	addr, ok := c.slotMap[slot]
-	client := c.nodes[addr]
-	c.mu.RUnlock()
+		c.mu.RLock()
+		addr, ok := c.slotMap[slot]
+		client := c.nodes[addr]
+		c.mu.RUnlock()
 
-	if !ok || client == nil {
-		return nil, fmt.Errorf("no node found for slot %d", slot)
+		if !ok || client == nil {
+			return nil, fmt.Errorf("no node found for slot %d", slot)
+		}
+
+		// Execute command
+		resp, err := client.Do(cmd, interfaceArgs...)
+		if err == nil {
+			return resp, nil
+		}
+
+		// Check for MOVED or ASK error
+		errStr := fmt.Sprintf("%v", err)
+
+		// MOVED error format: "MOVED <slot> <host>:<port>"
+		if strings.HasPrefix(errStr, "MOVED ") {
+			parts := strings.Fields(errStr)
+			if len(parts) >= 3 {
+				newAddr := parts[2]
+
+				// Update slot mapping
+				c.mu.Lock()
+				c.slotMap[slot] = newAddr
+
+				// Connect to new node if not already connected
+				if _, exists := c.nodes[newAddr]; !exists {
+					newClient, connErr := c.connectNode(newAddr)
+					if connErr != nil {
+						c.mu.Unlock()
+						return nil, fmt.Errorf("failed to connect to redirected node %s: %w", newAddr, connErr)
+					}
+					c.nodes[newAddr] = newClient
+				}
+				c.mu.Unlock()
+
+				// Retry the command (loop continues)
+				continue
+			}
+		}
+
+		// ASK error format: "ASK <slot> <host>:<port>"
+		if strings.HasPrefix(errStr, "ASK ") {
+			parts := strings.Fields(errStr)
+			if len(parts) >= 3 {
+				askAddr := parts[2]
+
+				// Connect to ASK target if needed
+				c.mu.Lock()
+				askClient, exists := c.nodes[askAddr]
+				if !exists {
+					var connErr error
+					askClient, connErr = c.connectNode(askAddr)
+					if connErr != nil {
+						c.mu.Unlock()
+						return nil, fmt.Errorf("failed to connect to ASK node %s: %w", askAddr, connErr)
+					}
+					c.nodes[askAddr] = askClient
+				}
+				c.mu.Unlock()
+
+				// Send ASKING command first, then retry
+				_, askErr := askClient.Do("ASKING")
+				if askErr != nil {
+					return nil, fmt.Errorf("ASKING command failed: %w", askErr)
+				}
+
+				// Retry on ASK target
+				return askClient.Do(cmd, interfaceArgs...)
+			}
+		}
+
+		// Not a redirect error, return the error
+		return resp, err
 	}
 
-	// Forward command
-	return client.Do(cmd, interfaceArgs...)
+	return nil, fmt.Errorf("too many redirects (max %d) for command %s", maxRedirects, cmd)
 }
 
 // calculateSlot determines the key slot for a command
