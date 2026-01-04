@@ -822,12 +822,12 @@ SessionID:     r.masterInfo.SyncID,
 ```yaml
 source:
   type: dragonfly
-  addr: 10.46.128.12:7380
+  addr: 192.168.1.100:6380
 
 target:
   type: redis-standalone
-  seed: 10.180.7.93:6379
-  password: "pwd4dba"
+  seed: 192.168.2.200:6379
+  password: "your_redis_password"
 
 stateDir: ./out
 
@@ -843,12 +843,12 @@ migrate:
 ```yaml
 source:
   type: dragonfly
-  addr: 10.46.128.12:7380
+  addr: 192.168.1.100:6380
 
 target:
   type: redis-standalone
-  seed: 10.180.7.93:6379
-  password: "pwd4dba"
+  seed: 192.168.2.200:6379
+  password: "your_redis_password"
 
 stateDir: ./out
 statusFile: ./out/status.json
