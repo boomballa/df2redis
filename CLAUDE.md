@@ -121,8 +121,8 @@ Closes #123
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 📋 配置信息：
-  • 源库: dragonfly@192.168.1.100:6380
-  • 目标: redis-cluster@192.168.2.200:6379
+  • 源库: dragonfly@<SOURCE_HOST>:<SOURCE_PORT>
+  • 目标: redis-cluster@<TARGET_HOST>:<TARGET_PORT>
   • 状态目录: ../out
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -262,8 +262,8 @@ See `examples/migrate.sample.yaml` for reference. Key fields:
 ```yaml
 source:
   type: dragonfly          # Identifier (informational)
-  addr: 192.168.1.100:6380 # Source address
-  password: ""
+  addr: <host>:<port>      # Source address (e.g., localhost:6379)
+  password: ""             # Optional password
   tls: false
 ```
 
@@ -271,8 +271,8 @@ source:
 ```yaml
 target:
   type: redis-cluster      # "redis-standalone" or "redis-cluster"
-  seed: 192.168.2.200:6379 # Seed node address
-  password: "your_redis_password"
+  seed: <host>:<port>      # Seed node address (e.g., localhost:6379)
+  password: ""             # Optional password
   tls: false
 ```
 
@@ -396,3 +396,120 @@ The following features are planned but not yet implemented:
 - Error messages use Chinese format: `fmt.Errorf("连接源库失败: %w", err)`
 - Stage names use kebab-case: "precheck", "shake-config", "incremental-sync"
 - Configuration fields use camelCase in YAML: `autoBgsave`, `bgsaveTimeoutSeconds`
+
+---
+
+## 内部开发参考 (Internal Development Reference)
+
+**重要提醒：本部分包含实际测试环境的配置示例，仅供内部开发和测试使用。不要将具体的 IP 地址、端口、密码等敏感信息提交到公开文档（README、示例配置等）。**
+
+### 文档敏感信息策略
+
+1. **公开文档** (README.md, examples/*.yaml, scripts/README.md 等)
+   - 只使用占位符：`<host>:<port>`, `<password>`, `localhost:6379`
+   - 不包含任何真实的 IP 地址或密码
+   - 使用通用示例：`192.0.2.1`, `203.0.113.1` (RFC 5737 保留地址)
+
+2. **内部文档** (CLAUDE.md 本文件)
+   - 可以包含实际测试环境配置
+   - 仅用于开发和调试参考
+   - 不应复制到公开文档
+
+### 测试环境配置示例
+
+#### 开发测试环境
+
+```yaml
+# Dragonfly Source (测试环境)
+source:
+  type: dragonfly
+  addr: 192.168.1.100:6380
+  password: ""
+  tls: false
+
+# Redis Target (测试环境)
+target:
+  type: redis-cluster
+  seed: 192.168.2.200:6379
+  password: "your_test_password"
+  tls: false
+
+# State & Checkpoint
+stateDir: ./out
+checkpoint:
+  enabled: true
+  intervalSeconds: 10
+  path: "./out/checkpoint"
+
+# Logging
+log:
+  dir: "logs"
+  level: "info"
+  consoleEnabled: true
+```
+
+#### Python 测试脚本配置
+
+```python
+# scripts/test_stream_replication.py
+SOURCE_HOST = "192.168.1.100"
+SOURCE_PORT = 6380
+SOURCE_PASSWORD = ""
+
+TARGET_HOST = "192.168.2.200"
+TARGET_PORT = 6379
+TARGET_PASSWORD = "your_test_password"
+```
+
+#### Bash 测试脚本配置
+
+```bash
+# scripts/manual_test_all_types.sh
+SOURCE_HOST="192.168.1.100"
+SOURCE_PORT="6380"
+TARGET_HOST="192.168.2.200"
+TARGET_PORT="6379"
+TARGET_PASS="your_test_password"
+```
+
+### 常用测试命令
+
+```bash
+# 启动复制（使用内部测试配置）
+./bin/df2redis replicate --config out/replicate.yaml
+
+# 数据一致性检查
+./bin/df2redis check --config out/replicate.yaml --mode outline
+
+# 运行 Stream 类型测试
+python3 scripts/test_stream_replication.py
+
+# 运行全类型测试
+bash scripts/manual_test_all_types.sh
+```
+
+### 环境变量敏感信息处理
+
+对于需要在代码中使用敏感信息的场景，推荐使用环境变量：
+
+```bash
+# .env (不要提交到 git)
+DRAGONFLY_HOST=192.168.1.100
+DRAGONFLY_PORT=6380
+DRAGONFLY_PASSWORD=
+
+REDIS_HOST=192.168.2.200
+REDIS_PORT=6379
+REDIS_PASSWORD=your_test_password
+```
+
+```yaml
+# 配置文件中引用环境变量
+source:
+  addr: ${DRAGONFLY_HOST}:${DRAGONFLY_PORT}
+  password: ${DRAGONFLY_PASSWORD}
+
+target:
+  seed: ${REDIS_HOST}:${REDIS_PORT}
+  password: ${REDIS_PASSWORD}
+```
