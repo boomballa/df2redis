@@ -561,7 +561,7 @@ func (r *Replicator) loadAndResumeFromCheckpoint() error {
 
 ### 测试环境
 - Dragonfly 版本: v1.30.0
-- Dragonfly 地址: 10.46.128.12:7380
+- Dragonfly 地址: 192.168.1.100:6380
 - Shard 数量: 8
 - Checkpoint 间隔: 10 秒
 - 测试时长: 15 秒
@@ -571,7 +571,7 @@ func (r *Replicator) loadAndResumeFromCheckpoint() error {
 ```
 🚀 启动 Dragonfly 复制器
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔗 连接到 Dragonfly: 10.46.128.12:7380
+🔗 连接到 Dragonfly: 192.168.1.100:6380
 ✓ 主连接建立成功
 
 🤝 开始握手流程
