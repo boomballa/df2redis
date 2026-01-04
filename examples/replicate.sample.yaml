@@ -11,8 +11,8 @@ statusFile: ./out/status.json
 ########################################
 source:
   type: dragonfly
-  addr: 192.168.1.100:6380      # Replace with your Dragonfly address
-  password: ""
+  addr: localhost:6380          # Replace with your Dragonfly address
+  password: ""                  # Optional password
   tls: false
 
 ########################################
@@ -20,8 +20,8 @@ source:
 ########################################
 target:
   type: redis-standalone
-  addr: 192.168.2.200:6379
-  password: "your_redis_password"
+  addr: localhost:6379          # Replace with your Redis address
+  password: ""                  # Optional password
   tls: false
 
 ########################################
