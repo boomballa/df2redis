@@ -35,6 +35,9 @@ type Client struct {
 	// RDB read timeout (configurable, default 60 seconds)
 	rdbTimeout time.Duration
 
+	// Stream read timeout (used for journal streaming, default 60 seconds, can be adjusted to 24h for long-lived connections)
+	streamTimeout time.Duration
+
 	mu     sync.Mutex
 	closed bool
 }
@@ -53,15 +56,22 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("redisx: dial %s failed: %w", cfg.Addr, err)
 	}
 
-	// Enable TCP keepalive to align with Dragonfly's 30-second timeout detection
+	// Configure TCP keepalive for fast connection failure detection
 	// and increase receive buffer to prevent Dragonfly's sink->Write() from blocking
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		// Enable keepalive
-		if err := tcpConn.SetKeepAlive(true); err != nil {
+		// CRITICAL: Configure aggressive TCP Keepalive parameters
+		// Goal: Detect connection failure within 60 seconds (30s idle + 10s×3 probes)
+		// This prevents the replicator from blocking indefinitely when Dragonfly
+		// drops the connection due to slow writes.
+		keepAliveConfig := net.KeepAliveConfig{
+			Enable:   true,
+			Idle:     30 * time.Second, // Start probing after 30s of idle (aligned with Dragonfly's timeout)
+			Interval: 10 * time.Second, // Send probe every 10 seconds
+			Count:    3,                // Give up after 3 failed probes
+		}
+		if err := tcpConn.SetKeepAliveConfig(keepAliveConfig); err != nil {
 			// Non-fatal; log a warning and continue
-			fmt.Fprintf(os.Stderr, "Warning: failed to enable TCP KeepAlive: %v\n", err)
-		} else if err := tcpConn.SetKeepAlivePeriod(30 * time.Second); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to set KeepAlive period: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Warning: failed to configure TCP KeepAlive: %v\n", err)
 		}
 
 		// CRITICAL: Increase receive buffer to 16MB
@@ -85,12 +95,13 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	}
 
 	client := &Client{
-		addr:       cfg.Addr,
-		password:   cfg.Password,
-		conn:       conn,
-		reader:     bufio.NewReader(conn),
-		timeout:    defaultTimeout,
-		rdbTimeout: 60 * time.Second, // fixed 60s for snapshot/journal reads
+		addr:          cfg.Addr,
+		password:      cfg.Password,
+		conn:          conn,
+		reader:        bufio.NewReader(conn),
+		timeout:       defaultTimeout,
+		rdbTimeout:    60 * time.Second, // fixed 60s for RDB snapshot reads
+		streamTimeout: 60 * time.Second, // default 60s, will be adjusted to 24h for journal streaming
 	}
 
 	if cfg.Password != "" {
@@ -123,6 +134,15 @@ func (c *Client) Ping() error {
 	return err
 }
 
+// SetStreamReadTimeout adjusts the read timeout for streaming operations.
+// Use this to switch from RDB phase (60s timeout) to Journal streaming phase (24h timeout).
+// Example: client.SetStreamReadTimeout(24 * time.Hour) before starting journal reception.
+func (c *Client) SetStreamReadTimeout(timeout time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.streamTimeout = timeout
+}
+
 // RawRead reads directly from the underlying connection (RDB snapshot/journal)
 // honoring the configured timeout (default 60s).
 func (c *Client) RawRead(buf []byte) (int, error) {
@@ -140,17 +160,20 @@ func (c *Client) RawRead(buf []byte) (int, error) {
 	return c.conn.Read(buf)
 }
 
-// Read implements io.Reader for journal processing.
+// Read implements io.Reader for RDB parsing and journal processing.
 // It reads via bufio.Reader to avoid skipping buffered bytes.
+// Uses streamTimeout (default 60s for RDB phase, can be adjusted to 24h for journal streaming).
 func (c *Client) Read(buf []byte) (int, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	timeout := c.streamTimeout
+	c.mu.Unlock()
+
 	if c.closed {
 		return 0, errors.New("redisx: client closed")
 	}
-	// Journal streams are long-lived; relax the read deadline (~24h)
-	// and rely on TCP keepalive (30s) for liveness.
-	if err := c.conn.SetReadDeadline(time.Now().Add(24 * time.Hour)); err != nil {
+
+	// Apply read deadline based on current phase (RDB: 60s, Journal: 24h)
+	if err := c.conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 		return 0, err
 	}
 	// bufio.Reader manages buffering vs. the underlying conn
