@@ -360,6 +360,36 @@ func (c *ClusterClient) GetStandaloneClient() *redisx.Client {
 	return c.standaloneClient
 }
 
+// GetNodeForSlot returns the node address for a given slot
+func (c *ClusterClient) GetNodeForSlot(slot int) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	addr, ok := c.slotMap[slot]
+	return addr, ok
+}
+
+// PipelineForNode executes a batch of commands on a specific node using pipeline.
+// Commands can belong to different slots as long as they route to the same node.
+// This significantly improves write performance in cluster mode by reducing network round trips.
+//
+// Returns results array corresponding to each command, or error if pipeline fails.
+func (c *ClusterClient) PipelineForNode(nodeAddr string, cmds [][]interface{}) ([]interface{}, error) {
+	if len(cmds) == 0 {
+		return []interface{}{}, nil
+	}
+
+	c.mu.RLock()
+	client, exists := c.nodes[nodeAddr]
+	c.mu.RUnlock()
+
+	if !exists || client == nil {
+		return nil, fmt.Errorf("node %s not found", nodeAddr)
+	}
+
+	// Execute pipeline on the target node
+	return client.Pipeline(cmds)
+}
+
 // PipelineForSlot executes a batch of commands for a specific slot using pipeline.
 // All commands must belong to the same slot (same key or slot hash tag).
 // This significantly improves write performance in cluster mode by reducing network round trips.

@@ -326,33 +326,43 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 
 	// CRITICAL: Strategy selection based on target type
 	// - Standalone: treat batch as single group (enables pipeline batching)
-	// - Cluster: group by slot for parallel writes
-	var slotGroups [][]*RDBEntry
+	// - Cluster: group by node (NOT slot!) for better batching
+	//
+	// KEY INSIGHT: Grouping by slot (16384 slots) causes extreme fragmentation.
+	// Even with 100 entries, they scatter across 50-100 different slots,
+	// resulting in 1-2 entries per group. Pipeline has no benefit!
+	//
+	// Solution: Group by node (typically 3-6 master nodes). This concentrates
+	// entries into fewer groups (30-50 entries each), maximizing pipeline efficiency.
+	var nodeGroups map[string][]*RDBEntry
+	var numGroups int
+
 	if fw.targetType == "redis-standalone" {
-		// Standalone mode: treat entire batch as one group (no slot partitioning)
-		slotGroups = [][]*RDBEntry{batch}
+		// Standalone mode: single group for all entries
+		nodeGroups = map[string][]*RDBEntry{"standalone": batch}
+		numGroups = 1
 	} else {
-		// Cluster mode: group entries by slot for parallel processing
-		slotGroups = fw.groupBySlot(batch)
+		// Cluster mode: group entries by target node (NOT slot!)
+		nodeGroups = fw.groupByNode(batch)
+		numGroups = len(nodeGroups)
 	}
-	numGroups := len(slotGroups)
 
 	// Process groups in parallel using goroutines with concurrency limit
 	var wg sync.WaitGroup
 	resultChan := make(chan writeResult, numGroups)
 
-	for _, group := range slotGroups {
+	for nodeAddr, group := range nodeGroups {
 		// Acquire semaphore slot (blocks if limit reached)
 		fw.writeSemaphore <- struct{}{}
 
 		wg.Add(1)
-		go func(entries []*RDBEntry) {
+		go func(addr string, entries []*RDBEntry) {
 			defer wg.Done()
 			defer func() { <-fw.writeSemaphore }() // Release semaphore slot
 
-			result := fw.writeSlotGroup(entries)
+			result := fw.writeNodeGroup(addr, entries)
 			resultChan <- result
-		}(group)
+		}(nodeAddr, group)
 	}
 
 	// Wait for all groups to complete
@@ -397,7 +407,37 @@ type writeResult struct {
 	failed  int
 }
 
-// groupBySlot groups entries by Redis Cluster slot
+// groupByNode groups entries by Redis Cluster node (NOT by slot!)
+// This is critical for pipeline efficiency: grouping by node (3-6 groups)
+// is far better than grouping by slot (50-100+ groups).
+func (fw *FlowWriter) groupByNode(batch []*RDBEntry) map[string][]*RDBEntry {
+	nodeMap := make(map[string][]*RDBEntry)
+
+	// Try to get cluster client
+	clusterClient, ok := fw.clusterClientRaw.(*cluster.ClusterClient)
+	if !ok || clusterClient == nil {
+		// Fallback: treat all as unknown node
+		log.Printf("  [FLOW-%d] [WARNING] Cannot get cluster client, using fallback grouping", fw.flowID)
+		nodeMap["unknown"] = batch
+		return nodeMap
+	}
+
+	// Group entries by target node
+	for _, entry := range batch {
+		slot := calculateSlot(entry.Key)
+		nodeAddr, ok := clusterClient.GetNodeForSlot(int(slot))
+		if !ok {
+			// Unknown slot, use fallback
+			nodeAddr = "unknown"
+		}
+		nodeMap[nodeAddr] = append(nodeMap[nodeAddr], entry)
+	}
+
+	return nodeMap
+}
+
+// groupBySlot groups entries by Redis Cluster slot (DEPRECATED - causes fragmentation)
+// Kept for reference but no longer used. Use groupByNode() instead.
 func (fw *FlowWriter) groupBySlot(batch []*RDBEntry) [][]*RDBEntry {
 	// Simple slot calculation (CRC16 % 16384)
 	slotMap := make(map[uint16][]*RDBEntry)
@@ -416,17 +456,17 @@ func (fw *FlowWriter) groupBySlot(batch []*RDBEntry) [][]*RDBEntry {
 	return groups
 }
 
-// writeSlotGroup writes a group of entries for the same slot
-func (fw *FlowWriter) writeSlotGroup(entries []*RDBEntry) writeResult {
+// writeNodeGroup writes a group of entries to the same Redis Cluster node using pipeline
+func (fw *FlowWriter) writeNodeGroup(nodeAddr string, entries []*RDBEntry) writeResult {
 	var successCount, failCount int
 	startTime := time.Now()
 
-	// CRITICAL DEBUG: Log code path selection
-	log.Printf("  [FLOW-%d] [WRITER] writeSlotGroup called: entries=%d, targetType=%s, pipelineClient=%v",
-		fw.flowID, len(entries), fw.targetType, fw.pipelineClient != nil)
+	// CRITICAL: All entries in this group belong to the same node
+	// Use pipeline to batch them into a single network round trip
+	log.Printf("  [FLOW-%d] [WRITER] writeNodeGroup called: entries=%d, node=%s, targetType=%s",
+		fw.flowID, len(entries), nodeAddr, fw.targetType)
 
-	// Standalone mode: use pipeline for batch writes (CRITICAL OPTIMIZATION)
-	// This reduces network round trips from N to 1 per batch
+	// Standalone mode: use pipeline for batch writes
 	if fw.targetType == "redis-standalone" && fw.pipelineClient != nil {
 		log.Printf("  [FLOW-%d] [WRITER] ✓ Using PIPELINE mode for %d entries", fw.flowID, len(entries))
 
@@ -485,17 +525,15 @@ func (fw *FlowWriter) writeSlotGroup(entries []*RDBEntry) writeResult {
 	}
 
 	// CRITICAL OPTIMIZATION: Cluster mode pipeline support
-	// Use PipelineForSlot for batch writes within the same slot
+	// Use PipelineForNode for batch writes to the same node (grouped by groupByNode())
 	if fw.targetType == "redis-cluster" && len(entries) > 0 {
 		// Try to cast cluster client
 		if clusterClient, ok := fw.clusterClientRaw.(*cluster.ClusterClient); ok && clusterClient != nil {
-			log.Printf("  [FLOW-%d] [WRITER] ✓ Using CLUSTER PIPELINE mode for %d entries", fw.flowID, len(entries))
-
-			// All entries in this group should belong to the same slot (grouped by groupBySlot())
-			// Calculate slot from first entry's key
-			firstSlot := calculateSlot(entries[0].Key)
+			log.Printf("  [FLOW-%d] [WRITER] ✓ Using CLUSTER PIPELINE mode (node-based) for %d entries to node=%s",
+				fw.flowID, len(entries), nodeAddr)
 
 			// Build pipeline commands for all entries
+			// Note: All entries in this group already belong to the same node (grouped by groupByNode())
 			buildStart := time.Now()
 			cmds := make([][]interface{}, 0, len(entries))
 			for _, entry := range entries {
@@ -506,23 +544,23 @@ func (fw *FlowWriter) writeSlotGroup(entries []*RDBEntry) writeResult {
 			}
 			buildDuration := time.Since(buildStart)
 
-			log.Printf("  [FLOW-%d] [WRITER] Built %d commands in %v for slot %d",
-				fw.flowID, len(cmds), buildDuration, firstSlot)
+			log.Printf("  [FLOW-%d] [WRITER] Built %d commands in %v for node %s",
+				fw.flowID, len(cmds), buildDuration, nodeAddr)
 
-			// Execute pipeline batch for this slot
+			// Execute pipeline batch for this node
 			if len(cmds) > 0 {
 				pipelineStart := time.Now()
-				results, err := clusterClient.PipelineForSlot(int(firstSlot), cmds)
+				results, err := clusterClient.PipelineForNode(nodeAddr, cmds)
 				pipelineDuration := time.Since(pipelineStart)
 
 				if err != nil {
-					log.Printf("  [FLOW-%d] [WRITER] ✗ Cluster pipeline failed after %v: %v, fallback to sequential",
+					log.Printf("  [FLOW-%d] [WRITER] ✗ Node pipeline failed after %v: %v, fallback to sequential",
 						fw.flowID, pipelineDuration, err)
 					// Fallback to sequential writes on pipeline failure
 					goto sequential
 				}
 
-				log.Printf("  [FLOW-%d] [WRITER] ✓ Cluster pipeline executed in %v (%.0f ops/sec)",
+				log.Printf("  [FLOW-%d] [WRITER] ✓ Node pipeline executed in %v (%.0f ops/sec)",
 					fw.flowID, pipelineDuration, float64(len(cmds))/pipelineDuration.Seconds())
 
 				// Check results
@@ -541,7 +579,7 @@ func (fw *FlowWriter) writeSlotGroup(entries []*RDBEntry) writeResult {
 				}
 
 				totalDuration := time.Since(startTime)
-				log.Printf("  [FLOW-%d] [WRITER] ✓ Cluster pipeline batch complete: %d success, %d failed in %v",
+				log.Printf("  [FLOW-%d] [WRITER] ✓ Node pipeline batch complete: %d success, %d failed in %v",
 					fw.flowID, successCount, failCount, totalDuration)
 
 				return writeResult{success: successCount, failed: failCount}
