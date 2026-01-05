@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -48,9 +49,14 @@ type FlowWriter struct {
 	stats struct {
 		totalReceived int64
 		totalWritten  int64
+		totalFailed   int64 // CRITICAL: Track failed writes for data loss detection
+		totalSkipped  int64 // Track skipped entries (e.g., unsupported types)
 		totalBatches  int64
 		mu            sync.Mutex
 	}
+
+	// Debug mode enables detailed failure logging
+	debugMode bool
 
 	// Backpressure and monitoring
 	channelCapacity    int
@@ -154,6 +160,13 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 	//   - Reduced to 200K entries = ~200MB per FLOW (acceptable memory usage)
 	channelBuffer := 200000 // Huge buffer to absorb Dragonfly's fast full sync (increased from 50000)
 
+	// Check for debug mode via environment variable DF2REDIS_DEBUG
+	debugMode := false
+	if debugEnv := os.Getenv("DF2REDIS_DEBUG"); debugEnv == "1" || debugEnv == "true" {
+		debugMode = true
+		log.Printf("  [FLOW-%d] [INIT] ⚠ DEBUG MODE ENABLED - detailed failure logging active", flowID)
+	}
+
 	fw := &FlowWriter{
 		flowID:              flowID,
 		entryChan:           make(chan *RDBEntry, channelBuffer),             // Huge buffer for full sync bursts
@@ -169,6 +182,7 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 		channelCapacity:     channelBuffer,
 		maxConcurrentWrites: maxConcurrent,
 		writeSemaphore:      make(chan struct{}, maxConcurrent), // Semaphore for concurrency control
+		debugMode:           debugMode,                          // Enable detailed failure logging
 		lastMonitorTime:     time.Now(),
 		monitorInterval:     5 * time.Second, // Log channel usage every 5 seconds (more frequent)
 	}
@@ -254,10 +268,10 @@ func (fw *FlowWriter) Enqueue(entry *RDBEntry) error {
 }
 
 // GetStats returns current statistics
-func (fw *FlowWriter) GetStats() (received, written, batches int64) {
+func (fw *FlowWriter) GetStats() (received, written, failed, skipped, batches int64) {
 	fw.stats.mu.Lock()
 	defer fw.stats.mu.Unlock()
-	return fw.stats.totalReceived, fw.stats.totalWritten, fw.stats.totalBatches
+	return fw.stats.totalReceived, fw.stats.totalWritten, fw.stats.totalFailed, fw.stats.totalSkipped, fw.stats.totalBatches
 }
 
 // batchWriteLoop is the main async write loop
@@ -386,6 +400,7 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 	// Update statistics
 	fw.stats.mu.Lock()
 	fw.stats.totalWritten += int64(successCount)
+	fw.stats.totalFailed += int64(failCount)
 	fw.stats.totalBatches++
 	fw.stats.mu.Unlock()
 
@@ -393,6 +408,13 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 	opsPerSec := float64(batchSize) / duration.Seconds()
 	log.Printf("  [FLOW-%d] [WRITER] ✓ Batch complete: %d entries in %v (%.0f ops/sec, groups=%d, success=%d, fail=%d)",
 		fw.flowID, batchSize, duration, opsPerSec, numGroups, successCount, failCount)
+
+	// CRITICAL: Warn if any failures detected
+	if failCount > 0 {
+		failRate := float64(failCount) / float64(batchSize) * 100
+		log.Printf("  [FLOW-%d] [WRITER] ⚠ FAILURE DETECTED: %d/%d entries failed (%.1f%%) in batch",
+			fw.flowID, failCount, batchSize, failRate)
+	}
 
 	// Warn if slow
 	if duration > time.Second {
@@ -473,15 +495,30 @@ func (fw *FlowWriter) writeNodeGroup(nodeAddr string, entries []*RDBEntry) write
 		// Build pipeline commands for all entries
 		buildStart := time.Now()
 		cmds := make([][]interface{}, 0, len(entries))
+		skippedCount := 0
 		for _, entry := range entries {
 			cmd := fw.buildCommand(entry)
 			if cmd != nil {
 				cmds = append(cmds, cmd)
+			} else {
+				// CRITICAL: Track skipped entries (unsupported types like Stream, empty collections)
+				skippedCount++
+				if fw.debugMode {
+					log.Printf("  [FLOW-%d] [WRITER] [DEBUG] Skipped key=%s type=%d (unsupported for pipeline)",
+						fw.flowID, entry.Key, entry.Type)
+				}
 			}
 		}
 		buildDuration := time.Since(buildStart)
 
-		log.Printf("  [FLOW-%d] [WRITER] Built %d commands in %v", fw.flowID, len(cmds), buildDuration)
+		// Update skip statistics
+		if skippedCount > 0 {
+			fw.stats.mu.Lock()
+			fw.stats.totalSkipped += int64(skippedCount)
+			fw.stats.mu.Unlock()
+		}
+
+		log.Printf("  [FLOW-%d] [WRITER] Built %d commands in %v (skipped=%d)", fw.flowID, len(cmds), buildDuration, skippedCount)
 
 		// Execute pipeline batch
 		if len(cmds) > 0 {
@@ -499,12 +536,18 @@ func (fw *FlowWriter) writeNodeGroup(nodeAddr string, entries []*RDBEntry) write
 			log.Printf("  [FLOW-%d] [WRITER] ✓ Pipeline executed in %v (%.0f ops/sec)",
 				fw.flowID, pipelineDuration, float64(len(cmds))/pipelineDuration.Seconds())
 
-			// Check results
+			// Check results and track failures
 			for i, result := range results {
 				if result != nil {
 					// Check if result is an error
 					if errStr, ok := result.(string); ok && strings.HasPrefix(errStr, "ERR") {
-						log.Printf("  [FLOW-%d] [WRITER] ✗ Command %d failed: %v", fw.flowID, i, errStr)
+						// CRITICAL: Record failure with detailed info in debug mode
+						if fw.debugMode && i < len(entries) {
+							log.Printf("  [FLOW-%d] [WRITER] [DEBUG] ✗ Command %d failed for key=%s: %v",
+								fw.flowID, i, entries[i].Key, errStr)
+						} else {
+							log.Printf("  [FLOW-%d] [WRITER] ✗ Command %d failed: %v", fw.flowID, i, errStr)
+						}
 						failCount++
 					} else {
 						successCount++
@@ -536,16 +579,31 @@ func (fw *FlowWriter) writeNodeGroup(nodeAddr string, entries []*RDBEntry) write
 			// Note: All entries in this group already belong to the same node (grouped by groupByNode())
 			buildStart := time.Now()
 			cmds := make([][]interface{}, 0, len(entries))
+			skippedCount := 0
 			for _, entry := range entries {
 				cmd := fw.buildCommand(entry)
 				if cmd != nil {
 					cmds = append(cmds, cmd)
+				} else {
+					// CRITICAL: Track skipped entries (unsupported types like Stream, empty collections)
+					skippedCount++
+					if fw.debugMode {
+						log.Printf("  [FLOW-%d] [WRITER] [DEBUG] Skipped key=%s type=%d (unsupported for pipeline)",
+							fw.flowID, entry.Key, entry.Type)
+					}
 				}
 			}
 			buildDuration := time.Since(buildStart)
 
-			log.Printf("  [FLOW-%d] [WRITER] Built %d commands in %v for node %s",
-				fw.flowID, len(cmds), buildDuration, nodeAddr)
+			// Update skip statistics
+			if skippedCount > 0 {
+				fw.stats.mu.Lock()
+				fw.stats.totalSkipped += int64(skippedCount)
+				fw.stats.mu.Unlock()
+			}
+
+			log.Printf("  [FLOW-%d] [WRITER] Built %d commands in %v for node %s (skipped=%d)",
+				fw.flowID, len(cmds), buildDuration, nodeAddr, skippedCount)
 
 			// Execute pipeline batch for this node
 			if len(cmds) > 0 {
@@ -563,12 +621,18 @@ func (fw *FlowWriter) writeNodeGroup(nodeAddr string, entries []*RDBEntry) write
 				log.Printf("  [FLOW-%d] [WRITER] ✓ Node pipeline executed in %v (%.0f ops/sec)",
 					fw.flowID, pipelineDuration, float64(len(cmds))/pipelineDuration.Seconds())
 
-				// Check results
+				// Check results and track failures
 				for i, result := range results {
 					if result != nil {
 						// Check if result is an error
 						if errStr, ok := result.(string); ok && strings.HasPrefix(errStr, "ERR") {
-							log.Printf("  [FLOW-%d] [WRITER] ✗ Command %d failed: %v", fw.flowID, i, errStr)
+							// CRITICAL: Record failure with detailed info in debug mode
+							if fw.debugMode && i < len(entries) {
+								log.Printf("  [FLOW-%d] [WRITER] [DEBUG] ✗ Command %d failed for key=%s: %v",
+									fw.flowID, i, entries[i].Key, errStr)
+							} else {
+								log.Printf("  [FLOW-%d] [WRITER] ✗ Command %d failed: %v", fw.flowID, i, errStr)
+							}
 							failCount++
 						} else {
 							successCount++
