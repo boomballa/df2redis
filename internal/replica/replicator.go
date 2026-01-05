@@ -2,12 +2,16 @@ package replica
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"df2redis/internal/checkpoint"
@@ -670,8 +674,11 @@ func (r *Replicator) receiveSnapshot() error {
 				}
 
 				if err != nil {
-					// EOF: Dragonfly sent EOF (either after STARTSTABLE or directly)
-					if err == io.EOF {
+					// Classify the error to provide clear diagnostics
+					errCategory, errMsg := classifyReadError(err)
+
+					// Handle normal EOF
+					if errCategory == "EOF" {
 						stats.mu.Lock()
 						inlineJournalOps := stats.InlineJournalOps
 						stats.mu.Unlock()
@@ -711,9 +718,11 @@ func (r *Replicator) receiveSnapshot() error {
 							fmt.Sprintf("success=%d skipped=%d failed=%d inline_journal=%d", stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps))
 						return
 					}
-					// Other errors: real parsing failure
-					errChan <- fmt.Errorf("FLOW-%d: parsing failed: %w", flowID, err)
-					r.recordFlowStage(flowID, "error", fmt.Sprintf("Parsing failed: %v", err))
+					// Other errors: real parsing failure (timeout, connection reset, etc.)
+					log.Printf("  [FLOW-%d] ✗ RDB stream error [%s]: %s (raw_error: %v)",
+						flowID, errCategory, errMsg, err)
+					errChan <- fmt.Errorf("FLOW-%d: RDB stream error [%s]: %s", flowID, errCategory, errMsg)
+					r.recordFlowStage(flowID, "error", fmt.Sprintf("[%s] %s", errCategory, errMsg))
 					return
 				}
 
@@ -1078,6 +1087,15 @@ func (r *Replicator) receiveJournal() error {
 	r.recordPipelineStatus("incremental", "Replaying journal incrementally")
 	r.recordStage("replicator", "journal", "Listening to journal stream")
 
+	// CRITICAL: Switch to long read timeout for journal streaming (24 hours)
+	// Journal streams can be idle for extended periods without data.
+	// We rely on TCP Keepalive (30s) to detect connection failures.
+	log.Println("  • Adjusting read timeout to 24h for long-lived journal connections...")
+	for i, flowConn := range r.flowConns {
+		flowConn.SetStreamReadTimeout(24 * time.Hour)
+		log.Printf("    [FLOW-%d] Read timeout set to 24h", i)
+	}
+
 	numFlows := len(r.flowConns)
 	if numFlows == 0 {
 		return fmt.Errorf("no FLOW connections available")
@@ -1190,17 +1208,25 @@ func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg
 		// Read entry
 		entry, err := reader.ReadEntry()
 		if err != nil {
-			if err == io.EOF {
-				log.Printf("  [FLOW-%d] Journal stream ended (EOF)", flowID)
+			// Classify the error to provide clear diagnostics
+			errCategory, errMsg := classifyReadError(err)
+
+			if errCategory == "EOF" {
+				log.Printf("  [FLOW-%d] ✓ Journal stream ended (EOF)", flowID)
 				r.recordFlowStage(flowID, "journal_done", "Journal stream finished")
 				return
 			}
+
+			// Log detailed error classification
+			log.Printf("  [FLOW-%d] ✗ Journal stream error [%s]: %s (raw_error: %v)",
+				flowID, errCategory, errMsg, err)
+
 			// Send error to channel
 			entryChan <- &FlowEntry{
 				FlowID: flowID,
-				Error:  fmt.Errorf("read failed: %w", err),
+				Error:  fmt.Errorf("[%s] %s", errCategory, errMsg),
 			}
-			r.recordFlowStage(flowID, "error", fmt.Sprintf("Journal read failed: %v", err))
+			r.recordFlowStage(flowID, "error", fmt.Sprintf("[%s] %s", errCategory, errMsg))
 			return
 		}
 
@@ -2076,4 +2102,62 @@ func (r *Replicator) recordFlowLSN(flowID int, lsn uint64) {
 
 	r.rdbStats.mu.Unlock()
 	r.replayStats.mu.Unlock()
+}
+
+// classifyReadError analyzes a read error and returns a human-readable classification
+// to help diagnose connection issues.
+//
+// Categories:
+//   - "EOF" - Normal end of stream
+//   - "TIMEOUT" - Read deadline exceeded (60s for RDB, longer for journal)
+//   - "CONNECTION_RESET" - Remote peer closed connection abruptly
+//   - "BROKEN_PIPE" - Write to closed connection
+//   - "NETWORK" - Other network-related errors
+//   - "UNKNOWN" - Unrecognized error
+func classifyReadError(err error) (category string, message string) {
+	if err == nil {
+		return "OK", "no error"
+	}
+
+	// Check for normal EOF
+	if errors.Is(err, io.EOF) {
+		return "EOF", "normal end of stream"
+	}
+
+	// Check for read timeout
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return "TIMEOUT", "read deadline exceeded (check network latency or Dragonfly stall)"
+	}
+
+	// Check for network errors
+	var netErr *net.OpError
+	if errors.As(err, &netErr) {
+		// Connection reset by peer
+		if errors.Is(netErr.Err, syscall.ECONNRESET) {
+			return "CONNECTION_RESET", "connection reset by peer (Dragonfly may have closed the connection)"
+		}
+		// Broken pipe
+		if errors.Is(netErr.Err, syscall.EPIPE) {
+			return "BROKEN_PIPE", "broken pipe (connection closed)"
+		}
+		// Connection refused
+		if errors.Is(netErr.Err, syscall.ECONNREFUSED) {
+			return "CONNECTION_REFUSED", "connection refused (Dragonfly may be down)"
+		}
+		// Timeout within OpError
+		if netErr.Timeout() {
+			return "TIMEOUT", "network operation timeout"
+		}
+		return "NETWORK", fmt.Sprintf("network error: %v", netErr.Err)
+	}
+
+	// Generic timeout check
+	type timeoutError interface {
+		Timeout() bool
+	}
+	if te, ok := err.(timeoutError); ok && te.Timeout() {
+		return "TIMEOUT", "operation timeout"
+	}
+
+	return "UNKNOWN", fmt.Sprintf("unclassified error: %v", err)
 }
