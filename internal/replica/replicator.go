@@ -622,7 +622,23 @@ func (r *Replicator) receiveSnapshot() error {
 			log.Printf("  [FLOW-%d] ✓ RDB header parsed successfully", flowID)
 
 			// 2. Parse entries
+			lastActivityTime := time.Now()
+			entriesProcessed := 0
+
+			// Heartbeat ticker for monitoring stuck FLOWs
+			heartbeatTicker := time.NewTicker(30 * time.Second)
+			defer heartbeatTicker.Stop()
+
 			for {
+				// Check heartbeat
+				select {
+				case <-heartbeatTicker.C:
+					elapsed := time.Since(lastActivityTime)
+					log.Printf("  [FLOW-%d] [HEARTBEAT] Still processing... (entries: %d, last_activity: %v ago)",
+						flowID, entriesProcessed, elapsed.Round(time.Second))
+				default:
+				}
+
 				// Observe cancellation
 				select {
 				case <-r.ctx.Done():
@@ -631,8 +647,28 @@ func (r *Replicator) receiveSnapshot() error {
 				default:
 				}
 
-				// Parse next entry
+				// Parse next entry (debug log every 10000 entries or if completed RDB)
+				if entriesProcessed%10000 == 0 || rdbCompleted {
+					log.Printf("  [FLOW-%d] [DEBUG] Calling ParseNext() (entries_so_far: %d, rdbCompleted: %v)...",
+						flowID, entriesProcessed, rdbCompleted)
+				}
 				entry, err := parser.ParseNext()
+				lastActivityTime = time.Now()
+				entriesProcessed++
+
+				// Log entry type for debugging
+				if err == nil && (entriesProcessed%10000 == 0 || entry.Type == RDB_TYPE_FULLSYNC_END_MARKER) {
+					log.Printf("  [FLOW-%d] [DEBUG] Received entry: type=%d (%s), key=%s",
+						flowID, entry.Type,
+						func() string {
+							if entry.Type == RDB_TYPE_FULLSYNC_END_MARKER {
+								return "FULLSYNC_END"
+							}
+							return "data"
+						}(),
+						entry.Key)
+				}
+
 				if err != nil {
 					// EOF: Dragonfly sent EOF (either after STARTSTABLE or directly)
 					if err == io.EOF {
@@ -707,8 +743,25 @@ func (r *Replicator) receiveSnapshot() error {
 					}
 
 					// Wait for the barrier (blocks until all FLOWs reach this point)
-					<-rdbCompletionBarrier
-					log.Printf("  [FLOW-%d] ✓ Barrier released, proceeding to stable sync preparation", flowID)
+					// Use a ticker to periodically log that we're still waiting
+					barrierWaitStart := time.Now()
+					barrierTicker := time.NewTicker(30 * time.Second)
+					waitingForBarrier := true
+
+					for waitingForBarrier {
+						select {
+						case <-rdbCompletionBarrier:
+							elapsed := time.Since(barrierWaitStart)
+							log.Printf("  [FLOW-%d] ✓ Barrier released after %v, proceeding to stable sync preparation", flowID, elapsed.Round(time.Second))
+							barrierTicker.Stop()
+							waitingForBarrier = false
+						case <-barrierTicker.C:
+							elapsed := time.Since(barrierWaitStart)
+							log.Printf("  [FLOW-%d] ⚠ Still waiting for barrier... (%d/%d done, elapsed: %v)",
+								flowID, completedCount, numFlows, elapsed.Round(time.Second))
+						}
+					}
+
 					rdbCompleted = true
 
 					// CRITICAL: Continue ParseNext() loop to read journal blobs!
