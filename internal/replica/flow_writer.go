@@ -136,8 +136,12 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 	// CRITICAL OPTIMIZATION: Increase batch size to reduce round trips
 	// Old: 100 entries/batch → ~700 ops/sec
 	// New: 2000 entries/batch → expected ~14000 ops/sec (20x reduction in round trips)
+	//
+	// CRITICAL FIX: Increase flush interval to accumulate larger batches
+	// Problem: 100ms is too short when Dragonfly sends slowly (10-20s per batch)
+	// Solution: Use 3000ms (3 seconds) to allow batch to accumulate hundreds of entries
 	batchSize := 2000     // Process 2000 entries per batch (increased from 100)
-	flushInterval := 100  // Flush every 100ms (increased from 50ms to match larger batch)
+	flushInterval := 3000 // Flush every 3 seconds (increased from 100ms to accumulate batch)
 
 	// CRITICAL: Even larger buffer to handle full sync bursts
 	// During full sync, Dragonfly can send data extremely fast (600万keys in 3 seconds)
