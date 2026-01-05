@@ -868,13 +868,49 @@ func (r *Replicator) receiveSnapshot() error {
 	// Stop all writers and wait for remaining batches to flush
 	log.Println("")
 	log.Println("⏸  Stopping async writers and flushing remaining batches...")
+
+	// Aggregate writer statistics
+	var totalReceived, totalWritten, totalFailed, totalSkippedPipeline int64
 	for i, fw := range flowWriters {
 		fw.Stop()
-		received, written, batches := fw.GetStats()
-		log.Printf("  [FLOW-%d] Writer stats: received=%d, written=%d, batches=%d",
-			i, received, written, batches)
+		received, written, failed, skipped, batches := fw.GetStats()
+		totalReceived += received
+		totalWritten += written
+		totalFailed += failed
+		totalSkippedPipeline += skipped
+
+		log.Printf("  [FLOW-%d] Writer stats: received=%d, written=%d, failed=%d, skipped=%d, batches=%d",
+			i, received, written, failed, skipped, batches)
 	}
 	log.Println("  ✓ All writers stopped, all data flushed")
+
+	// CRITICAL: Data loss detection
+	log.Println("")
+	log.Println("📊 FlowWriter Statistics:")
+	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	log.Printf("  • Total received: %d entries", totalReceived)
+	log.Printf("  • Successfully written: %d entries", totalWritten)
+	log.Printf("  • Failed to write: %d entries", totalFailed)
+	log.Printf("  • Skipped (unsupported types): %d entries", totalSkippedPipeline)
+
+	if totalReceived > 0 {
+		successRate := float64(totalWritten) / float64(totalReceived) * 100
+		failRate := float64(totalFailed) / float64(totalReceived) * 100
+		skipRate := float64(totalSkippedPipeline) / float64(totalReceived) * 100
+
+		log.Printf("  • Success rate: %.2f%%", successRate)
+		log.Printf("  • Failure rate: %.2f%%", failRate)
+		log.Printf("  • Skip rate: %.2f%%", skipRate)
+
+		// CRITICAL WARNING: Alert if data loss detected
+		if totalFailed > 0 {
+			log.Printf("")
+			log.Printf("⚠️  WARNING: DATA LOSS DETECTED!")
+			log.Printf("⚠️  %d entries (%.2f%%) FAILED to write to target Redis", totalFailed, failRate)
+			log.Printf("⚠️  Enable debug mode (DF2REDIS_DEBUG=1) for detailed failure logs")
+			log.Printf("")
+		}
+	}
 
 	// Final stats after all journal blobs processed
 	log.Println("")
