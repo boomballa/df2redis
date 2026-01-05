@@ -110,7 +110,7 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 
 	// Adaptive concurrency control based on target type and number of FLOWs:
 	// - Standalone mode: pipeline batching = lower concurrency needed
-	// - Cluster mode: slot-based parallel writes = higher concurrency needed
+	// - Cluster mode: node-based parallel writes = higher concurrency needed
 	// - Physical machine (56 cores, 200G RAM) can handle high concurrency
 	//
 	// Strategy:
@@ -122,13 +122,23 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 	//   Cluster mode - 2 FLOWs:  800/2  = 400 → 200 concurrent per FLOW
 	//   Cluster mode - 8 FLOWs:  800/8  = 100 → 100 concurrent per FLOW
 	//   Cluster mode - 16 FLOWs: 800/16 = 50  → 50 concurrent per FLOW
+	//
+	// TODO: Implement node-aware adaptive concurrency for large clusters
+	// Current implementation uses fixed concurrency limits (50-200 per FLOW).
+	// For large Redis Clusters (20+ nodes), we should:
+	//   1. Query cluster node count via ClusterClient.GetNodeCount()
+	//   2. Calculate optimal concurrency: nodeCount * K (e.g., K=3 concurrent per node)
+	//   3. Cap at reasonable limits: min(nodeCount * 3, 50) to avoid excessive goroutines
+	// Example: 20-node cluster → 60 concurrent per FLOW (vs current 50-200)
+	// This ensures write throughput scales with cluster size while maintaining stability.
 
 	var maxConcurrent int
 	if targetType == "redis-standalone" {
 		// Standalone mode: pipeline batching, only need 1 concurrent per FLOW
 		maxConcurrent = 1
 	} else {
-		// Cluster mode: slot-based parallelism, need high concurrency
+		// Cluster mode: node-based parallelism, need high concurrency
+		// TODO: Replace hardcoded limit with node-aware calculation
 		totalConcurrencyLimit := 800
 		maxConcurrent = totalConcurrencyLimit / numFlows
 		if maxConcurrent < 50 {
