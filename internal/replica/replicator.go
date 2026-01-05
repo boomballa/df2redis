@@ -578,6 +578,11 @@ func (r *Replicator) receiveSnapshot() error {
 		mu    sync.Mutex
 	}{}
 
+	// CRITICAL FIX: Track FLOW completeness to detect incomplete transfers
+	// Map tracks which FLOWs received FULLSYNC_END marker (true) vs direct EOF (false)
+	flowReceivedFullsyncEnd := make(map[int]bool)
+	var flowCompletionMu sync.Mutex
+
 	// Start a goroutine per FLOW to read and parse RDB data
 	for i := 0; i < numFlows; i++ {
 		statsMap[i] = &FlowStats{}
@@ -687,8 +692,14 @@ func (r *Replicator) receiveSnapshot() error {
 						// we still need to synchronize via barrier before exiting.
 						// This handles the case where Dragonfly sends EOF directly without FULLSYNC_END.
 						if !rdbCompleted {
-							log.Printf("  [FLOW-%d] ✓ RDB stream terminated with EOF (no FULLSYNC_END received) (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
+							log.Printf("  [FLOW-%d] ✗ RDB stream terminated with EOF (no FULLSYNC_END received) (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
 								flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps)
+							log.Printf("  [FLOW-%d] ⚠️  WARNING: Incomplete FLOW detected - connection likely dropped mid-transfer!", flowID)
+
+							// Mark this FLOW as incomplete (did NOT receive FULLSYNC_END)
+							flowCompletionMu.Lock()
+							flowReceivedFullsyncEnd[flowID] = false
+							flowCompletionMu.Unlock()
 
 							// Participate in barrier synchronization
 							flowCompletionCount.mu.Lock()
@@ -706,7 +717,7 @@ func (r *Replicator) receiveSnapshot() error {
 
 							// Wait for barrier release
 							<-rdbCompletionBarrier
-							log.Printf("  [FLOW-%d] ✓ Barrier released, EOF FLOW exiting", flowID)
+							log.Printf("  [FLOW-%d] ✓ Barrier released, incomplete FLOW exiting", flowID)
 							rdbCompleted = true
 						} else {
 							// Normal case: EOF after STARTSTABLE (already participated in barrier)
@@ -735,6 +746,11 @@ func (r *Replicator) receiveSnapshot() error {
 					stats.mu.Unlock()
 					log.Printf("  [FLOW-%d] ✓ RDB parsing done (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
 						flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps)
+
+					// CRITICAL FIX: Mark this FLOW as complete (received FULLSYNC_END marker)
+					flowCompletionMu.Lock()
+					flowReceivedFullsyncEnd[flowID] = true
+					flowCompletionMu.Unlock()
 
 					// CRITICAL FIX: Wait for all FLOWs to complete RDB before main thread sends STARTSTABLE
 					// This matches Dragonfly's BlockingCounter::Wait() behavior
@@ -817,6 +833,39 @@ func (r *Replicator) receiveSnapshot() error {
 	log.Println("⏸  Waiting for all FLOWs to complete RDB static snapshot...")
 	<-rdbCompletionBarrier
 	log.Println("  ✓ All FLOWs completed RDB static snapshot")
+
+	// CRITICAL FIX: Validate FLOW completeness BEFORE sending STARTSTABLE
+	// Check if all FLOWs received FULLSYNC_END marker (true) vs direct EOF (false)
+	// Direct EOF indicates incomplete transfer (connection drop mid-RDB)
+	log.Println("")
+	log.Println("🔍 Validating FLOW completeness...")
+	flowCompletionMu.Lock()
+	incompleteFLOWs := []int{}
+	for flowID := 0; flowID < numFlows; flowID++ {
+		receivedFullsyncEnd, exists := flowReceivedFullsyncEnd[flowID]
+		if !exists || !receivedFullsyncEnd {
+			incompleteFLOWs = append(incompleteFLOWs, flowID)
+		}
+	}
+	flowCompletionMu.Unlock()
+
+	if len(incompleteFLOWs) > 0 {
+		log.Printf("")
+		log.Printf("❌ CRITICAL ERROR: FLOW COMPLETENESS VALIDATION FAILED!")
+		log.Printf("❌ Detected %d incomplete FLOW(s): %v", len(incompleteFLOWs), incompleteFLOWs)
+		log.Printf("❌ These FLOWs received EOF without FULLSYNC_END marker")
+		log.Printf("❌ Root cause: Connection dropped mid-RDB transfer")
+		log.Printf("❌")
+		log.Printf("❌ ABORTING to prevent data loss!")
+		log.Printf("❌ Recommended actions:")
+		log.Printf("❌   1. Check Dragonfly logs for 'Stalled heartbeat' warnings")
+		log.Printf("❌   2. Verify network stability between source and target")
+		log.Printf("❌   3. Consider reducing write speed (current: 200 total concurrency)")
+		log.Printf("")
+		return fmt.Errorf("FLOW completeness validation failed: %d incomplete FLOWs detected %v", len(incompleteFLOWs), incompleteFLOWs)
+	}
+
+	log.Printf("  ✓ All %d FLOWs complete (received FULLSYNC_END marker)", numFlows)
 
 	// Intermediate stats - at this point RDB snapshot is complete but journal blobs may still be coming
 	log.Println("")
@@ -948,11 +997,17 @@ func (r *Replicator) sendStartStable() error {
 	log.Println("")
 	log.Println("🔄 Switching to stable sync mode...")
 
-	// STARTSTABLE may take longer than the default 5s timeout as it coordinates
-	// multiple shards and prepares for stable sync transition. Use 180s timeout.
-	log.Printf("  → Sending DFLY STARTSTABLE (sync_id=%s, timeout=180s)...", r.masterInfo.SyncID)
-	log.Printf("  → Please wait, this may take a few minutes for Dragonfly to coordinate all shards...")
-	resp, err := r.mainConn.DoWithTimeout(180*time.Second, "DFLY", "STARTSTABLE", r.masterInfo.SyncID)
+	// CRITICAL FIX: Increase STARTSTABLE timeout to prevent premature abort
+	// STARTSTABLE may take longer when Dragonfly is recovering from heavy load:
+	//   - Coordinates multiple shards (FlowSet barrier)
+	//   - Waits for heartbeat fiber to recover
+	//   - Flushes pending journal entries
+	// Previous: 180s timeout caused premature abort when Dragonfly heartbeat stalled
+	// New: 600s (10 minutes) timeout to allow Dragonfly time to recover
+	log.Printf("  → Sending DFLY STARTSTABLE (sync_id=%s, timeout=600s)...", r.masterInfo.SyncID)
+	log.Printf("  → Please wait, this may take several minutes for Dragonfly to coordinate all shards...")
+	log.Printf("  → (Dragonfly may need time to recover from write pressure)")
+	resp, err := r.mainConn.DoWithTimeout(600*time.Second, "DFLY", "STARTSTABLE", r.masterInfo.SyncID)
 	if err != nil {
 		return fmt.Errorf("DFLY STARTSTABLE failed: %w", err)
 	}

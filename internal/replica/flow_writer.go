@@ -137,26 +137,31 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 		// Standalone mode: pipeline batching, only need 1 concurrent per FLOW
 		maxConcurrent = 1
 	} else {
-		// Cluster mode: node-based parallelism, need high concurrency
+		// Cluster mode: node-based parallelism, need moderate concurrency
 		// TODO: Replace hardcoded limit with node-aware calculation
-		totalConcurrencyLimit := 800
+		//
+		// CRITICAL FIX: Reduce concurrency to prevent overwhelming Dragonfly
+		// High-speed writes (90k ops/sec with 800 total) caused Dragonfly heartbeat stalling
+		// and FLOW connection drops mid-RDB transfer (missing 400k+ keys).
+		// New conservative limits: 200 total (was 800), 10-30 per FLOW (was 50-200)
+		totalConcurrencyLimit := 200 // Reduced from 800 to prevent Dragonfly overload
 		maxConcurrent = totalConcurrencyLimit / numFlows
-		if maxConcurrent < 50 {
-			maxConcurrent = 50
+		if maxConcurrent < 10 { // Reduced from 50
+			maxConcurrent = 10
 		}
-		if maxConcurrent > 200 {
-			maxConcurrent = 200
+		if maxConcurrent > 30 { // Reduced from 200
+			maxConcurrent = 30
 		}
 	}
 
-	// CRITICAL OPTIMIZATION: Increase batch size to reduce round trips
-	// Old: 100 entries/batch → ~700 ops/sec
-	// New: 2000 entries/batch → expected ~14000 ops/sec (20x reduction in round trips)
+	// CRITICAL FIX: Reduce batch size to prevent overwhelming Dragonfly
+	// Previous: 2000 entries/batch at 90k ops/sec caused Dragonfly heartbeat stalling
+	// New: 500 entries/batch with 10ms inter-batch delay for gentler write pattern
 	//
 	// CRITICAL FIX: Increase flush interval to accumulate larger batches
 	// Problem: 100ms is too short when Dragonfly sends slowly (10-20s per batch)
 	// Solution: Use 3000ms (3 seconds) to allow batch to accumulate hundreds of entries
-	batchSize := 2000     // Process 2000 entries per batch (increased from 100)
+	batchSize := 500      // Process 500 entries per batch (reduced from 2000 to prevent overload)
 	flushInterval := 3000 // Flush every 3 seconds (increased from 100ms to accumulate batch)
 
 	// CRITICAL: Even larger buffer to handle full sync bursts
@@ -431,6 +436,12 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 		log.Printf("  [FLOW-%d] [WRITER] ⚠ Slow batch detected: %v for %d entries",
 			fw.flowID, duration, batchSize)
 	}
+
+	// CRITICAL FIX: Add inter-batch delay to prevent overwhelming Dragonfly
+	// High-speed continuous writes (90k ops/sec) caused Dragonfly heartbeat stalling
+	// and FLOW connection drops. Add 10ms delay between batches to give Dragonfly
+	// breathing room for internal housekeeping (heartbeat fiber, snapshot coordination).
+	time.Sleep(10 * time.Millisecond)
 }
 
 // writeResult holds the result of writing a slot group
