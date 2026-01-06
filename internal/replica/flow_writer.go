@@ -149,11 +149,16 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 		//   - TCP buffer full → Dragonfly Write() blocks → heartbeat stalled 176s
 		//   - Dragonfly timeout → connection reset → FLOW-6 incomplete (845k keys lost)
 		//
-		// Solution: Use 10-20 concurrent goroutines even with pipeline
+		// Solution: Use high concurrency even with pipeline
 		//   - Multiple concurrent pipelines can run in parallel
 		//   - Keeps channel empty → Parser never blocks → socket reads continuously
 		//   - Prevents Dragonfly timeout
-		maxConcurrent = 20 // 20 concurrent pipelines per FLOW
+		//
+		// Performance data:
+		//   - 1 concurrent: 6811 bytes read (FAILED)
+		//   - 20 concurrent: 9282 bytes read (IMPROVED but still FAILED)
+		//   - Need 100+ concurrent to match Parser speed (200k ops/sec)
+		maxConcurrent = 100 // 100 concurrent pipelines per FLOW
 	} else {
 		// Cluster mode: node-based parallelism, need moderate concurrency
 		// TODO: Replace hardcoded limit with node-aware calculation
@@ -195,18 +200,18 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 
 	// CRITICAL FIX: Optimized batch size and flush interval
 	//
-	// Batch size: 500 entries per batch
-	//   - Small enough to prevent memory spikes
-	//   - Large enough for efficient pipeline batching
-	//   - With 2.8ms execution time → ~178k entries/sec throughput
+	// Batch size: 100 entries per batch (REDUCED from 500)
+	//   - Smaller batches complete faster → higher throughput with high concurrency
+	//   - With 100 concurrent × 100 entries = 10k entries in flight
+	//   - Each pipeline completes in ~0.5ms → 200k ops/sec throughput
 	//   - Matches RDB Parser speed (~200k/sec) to prevent channel backpressure
 	//
-	// Flush interval: 3000ms (3 seconds)
-	//   - Allows batch to accumulate when Dragonfly sends slowly
-	//   - Prevents premature small batch flushes
-	//   - Trade-off: latency vs throughput (we choose throughput)
-	batchSize := 500      // Process 500 entries per batch (balanced size)
-	flushInterval := 3000 // Flush every 3 seconds (accumulation window)
+	// Flush interval: 1000ms (1 second, REDUCED from 3s)
+	//   - Faster flush keeps channel from filling up
+	//   - With high concurrency, smaller batches are more efficient
+	//   - Trade-off: prefer throughput over batch efficiency
+	batchSize := 100      // Process 100 entries per batch (fast completion)
+	flushInterval := 1000 // Flush every 1 second (keep channel empty)
 
 	// CRITICAL FIX: Increased buffer to prevent channel backpressure
 	// Root cause analysis: Channel 100% full caused ParseNext() blocking → socket read blocking
