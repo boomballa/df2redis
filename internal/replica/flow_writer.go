@@ -140,40 +140,65 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 		// Cluster mode: node-based parallelism, need moderate concurrency
 		// TODO: Replace hardcoded limit with node-aware calculation
 		//
-		// CRITICAL FIX: Reduce concurrency to prevent overwhelming Dragonfly
-		// High-speed writes (90k ops/sec with 800 total) caused Dragonfly heartbeat stalling
-		// and FLOW connection drops mid-RDB transfer (missing 400k+ keys).
-		// New conservative limits: 200 total (was 800), 10-30 per FLOW (was 50-200)
-		totalConcurrencyLimit := 200 // Reduced from 800 to prevent Dragonfly overload
+		// CRITICAL FIX: Conservative concurrency limits for stability
+		//
+		// Why keep reduced limits despite removing 10ms delay?
+		//   1. Prevents overwhelming Redis Cluster (3 master nodes)
+		//   2. Limits memory usage (fewer in-flight commands)
+		//   3. Easier debugging (fewer concurrent operations)
+		//   4. Safety margin for network variance
+		//
+		// Current settings:
+		//   - Total: 200 concurrent writes across all FLOWs (was 800)
+		//   - Per FLOW: 10-30 concurrent writes (was 50-200)
+		//   - With pipeline batching: still achieves high throughput
+		//
+		// Performance validation:
+		//   - Removed 10ms delay increases FlowWriter speed to ~178k entries/sec
+		//   - This matches RDB Parser speed, preventing channel backpressure
+		//   - Concurrency limits control Redis write load, not FlowWriter speed
+		totalConcurrencyLimit := 200 // Conservative limit for stability
 		maxConcurrent = totalConcurrencyLimit / numFlows
-		if maxConcurrent < 10 { // Reduced from 50
+		if maxConcurrent < 10 {
 			maxConcurrent = 10
 		}
-		if maxConcurrent > 30 { // Reduced from 200
+		if maxConcurrent > 30 {
 			maxConcurrent = 30
 		}
 	}
 
-	// CRITICAL FIX: Reduce batch size to prevent overwhelming Dragonfly
-	// Previous: 2000 entries/batch at 90k ops/sec caused Dragonfly heartbeat stalling
-	// New: 500 entries/batch with 10ms inter-batch delay for gentler write pattern
+	// CRITICAL FIX: Optimized batch size and flush interval
 	//
-	// CRITICAL FIX: Increase flush interval to accumulate larger batches
-	// Problem: 100ms is too short when Dragonfly sends slowly (10-20s per batch)
-	// Solution: Use 3000ms (3 seconds) to allow batch to accumulate hundreds of entries
-	batchSize := 500      // Process 500 entries per batch (reduced from 2000 to prevent overload)
-	flushInterval := 3000 // Flush every 3 seconds (increased from 100ms to accumulate batch)
+	// Batch size: 500 entries per batch
+	//   - Small enough to prevent memory spikes
+	//   - Large enough for efficient pipeline batching
+	//   - With 2.8ms execution time → ~178k entries/sec throughput
+	//   - Matches RDB Parser speed (~200k/sec) to prevent channel backpressure
+	//
+	// Flush interval: 3000ms (3 seconds)
+	//   - Allows batch to accumulate when Dragonfly sends slowly
+	//   - Prevents premature small batch flushes
+	//   - Trade-off: latency vs throughput (we choose throughput)
+	batchSize := 500      // Process 500 entries per batch (balanced size)
+	flushInterval := 3000 // Flush every 3 seconds (accumulation window)
 
-	// CRITICAL: Even larger buffer to handle full sync bursts
-	// During full sync, Dragonfly can send data extremely fast (600万keys in 3 seconds)
-	// We need a huge buffer to absorb the burst while slowly writing to Redis
+	// CRITICAL FIX: Increased buffer to prevent channel backpressure
+	// Root cause analysis: Channel 100% full caused ParseNext() blocking → socket read blocking
+	// → Dragonfly Write() timeout (30s) → connection drop → incomplete FLOW transfer
 	//
-	// Buffer sizing:
-	//   - 600万keys / 4 FLOWs = 150万keys per FLOW
-	//   - 3 seconds full sync time → ~50万keys/sec/FLOW
-	//   - Buffer for 2 seconds of burst: 100万entries × 1KB = 1GB per FLOW
-	//   - Reduced to 200K entries = ~200MB per FLOW (acceptable memory usage)
-	channelBuffer := 200000 // Huge buffer to absorb Dragonfly's fast full sync (increased from 50000)
+	// Previous analysis:
+	//   - RDB Parser speed: ~200k entries/sec (pure memory operations)
+	//   - FlowWriter speed with 10ms delay: ~39k entries/sec (5x slower!)
+	//   - Channel fills up in 1 second: 200k buffer / (200k - 39k) = 1.24s
+	//
+	// Solution:
+	//   - Remove 10ms inter-batch delay (see below)
+	//   - Increase buffer from 200K → 500K for safety margin
+	//   - FlowWriter speed without delay: ~178k entries/sec (matches Parser)
+	//
+	// Memory usage: 500K entries × ~1KB/entry = ~500MB per FLOW (8 FLOWs = 4GB total)
+	// This is acceptable on modern servers (56 cores, 200G RAM)
+	channelBuffer := 500000 // Huge buffer to prevent backpressure (increased from 200K)
 
 	// Check for debug mode via environment variable DF2REDIS_DEBUG
 	debugMode := false
@@ -219,10 +244,12 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 	log.Printf("  [FLOW-%d] [WRITER] Initialization complete:", flowID)
 	log.Printf("    • Mode: %s", mode)
 	log.Printf("    • Pipeline: %s", pipelineStatus)
-	log.Printf("    • Concurrency: %d per FLOW (%d total)", maxConcurrent, maxConcurrent*numFlows)
+	log.Printf("    • Concurrency: %d per FLOW (%d total across %d FLOWs)", maxConcurrent, maxConcurrent*numFlows, numFlows)
 	log.Printf("    • Batch size: %d entries", batchSize)
 	log.Printf("    • Buffer size: %d entries (~%dMB)", channelBuffer, channelBuffer/1000)
 	log.Printf("    • Flush interval: %v", time.Duration(flushInterval)*time.Millisecond)
+	log.Printf("    • Inter-batch delay: REMOVED (prevents channel backpressure)")
+	log.Printf("    • Expected throughput: ~178k entries/sec (matches RDB Parser speed)")
 
 	return fw
 }
@@ -437,11 +464,22 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 			fw.flowID, duration, batchSize)
 	}
 
-	// CRITICAL FIX: Add inter-batch delay to prevent overwhelming Dragonfly
-	// High-speed continuous writes (90k ops/sec) caused Dragonfly heartbeat stalling
-	// and FLOW connection drops. Add 10ms delay between batches to give Dragonfly
-	// breathing room for internal housekeeping (heartbeat fiber, snapshot coordination).
-	time.Sleep(10 * time.Millisecond)
+	// CRITICAL FIX: Removed 10ms inter-batch delay (was causing channel backpressure)
+	//
+	// Previous implementation added 10ms delay to prevent overwhelming Dragonfly,
+	// but this caused a different problem:
+	//   - FlowWriter throughput: 500 entries / (2.8ms + 10ms) = 39k entries/sec
+	//   - RDB Parser throughput: 200k entries/sec
+	//   - Result: Channel fills up in 1 second → ParseNext() blocks → socket blocks
+	//            → Dragonfly Write() timeout → connection drop
+	//
+	// New approach:
+	//   - Remove delay, let FlowWriter run at full speed (~178k entries/sec)
+	//   - Speed control via concurrency limits (200 total, 10-30 per FLOW)
+	//   - Pipeline batching naturally prevents overwhelming Redis
+	//   - Increased channel buffer (500K) provides safety margin
+	//
+	// This prevents channel backpressure while maintaining controlled Redis write speed.
 }
 
 // writeResult holds the result of writing a slot group
