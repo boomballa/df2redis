@@ -94,11 +94,21 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 		}
 	}
 
+	// CRITICAL: Use large bufio.Reader buffer to reduce syscall overhead
+	// Default bufio.NewReader() uses only 4KB, causing frequent read() syscalls
+	// which slows down socket draining and causes Dragonfly Write() to block.
+	//
+	// With 1MB buffer:
+	//   - Fewer syscalls (1MB/4KB = 256x reduction)
+	//   - Faster socket draining
+	//   - Prevents Dragonfly 30s timeout from Write() blocking
+	const readerBufferSize = 1 * 1024 * 1024 // 1MB
+
 	client := &Client{
 		addr:          cfg.Addr,
 		password:      cfg.Password,
 		conn:          conn,
-		reader:        bufio.NewReader(conn),
+		reader:        bufio.NewReaderSize(conn, readerBufferSize), // 1MB buffer (was 4KB)
 		timeout:       defaultTimeout,
 		rdbTimeout:    60 * time.Second, // fixed 60s for RDB snapshot reads
 		streamTimeout: 60 * time.Second, // default 60s, will be adjusted to 24h for journal streaming
