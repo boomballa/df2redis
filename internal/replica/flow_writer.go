@@ -135,8 +135,25 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 
 	var maxConcurrent int
 	if targetType == "redis-standalone" {
-		// Standalone mode: pipeline batching, only need 1 concurrent per FLOW
-		maxConcurrent = 1
+		// Standalone mode: pipeline batching with moderate concurrency
+		//
+		// CRITICAL FIX: 1 concurrent is TOO LOW!
+		// Even with pipeline batching, we need multiple concurrent goroutines
+		// to keep up with RDB Parser speed (200k ops/sec).
+		//
+		// Root cause of FLOW-6 failure:
+		//   - RDB Parser: 200k ops/sec
+		//   - FlowWriter (1 concurrent + pipeline): 30-40k ops/sec
+		//   - Gap: 160k ops/sec → fills 2M channel in 12.5 seconds
+		//   - Channel full → Enqueue() blocks → Parser blocks → socket read stops
+		//   - TCP buffer full → Dragonfly Write() blocks → heartbeat stalled 176s
+		//   - Dragonfly timeout → connection reset → FLOW-6 incomplete (845k keys lost)
+		//
+		// Solution: Use 10-20 concurrent goroutines even with pipeline
+		//   - Multiple concurrent pipelines can run in parallel
+		//   - Keeps channel empty → Parser never blocks → socket reads continuously
+		//   - Prevents Dragonfly timeout
+		maxConcurrent = 20 // 20 concurrent pipelines per FLOW
 	} else {
 		// Cluster mode: node-based parallelism, need moderate concurrency
 		// TODO: Replace hardcoded limit with node-aware calculation
