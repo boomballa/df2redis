@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"df2redis/internal/cluster"
@@ -291,45 +292,29 @@ func (fw *FlowWriter) Stop() {
 }
 
 // Enqueue adds an entry to the write queue (blocks if channel is full - backpressure)
+//
+// CRITICAL PERFORMANCE: This function is called at very high frequency (200k/sec per FLOW).
+// It MUST be fast and lock-free to avoid blocking RDB Parser and causing Dragonfly timeout.
 func (fw *FlowWriter) Enqueue(entry *RDBEntry) error {
 	select {
 	case fw.entryChan <- entry:
-		fw.stats.mu.Lock()
-		fw.stats.totalReceived++
-
-		// Monitor channel usage to detect backpressure
-		// CRITICAL: If channel is frequently full, socket reads will block,
-		// causing Dragonfly's sink->Write() to timeout (30s)
-		now := time.Now()
-		if now.Sub(fw.lastMonitorTime) >= fw.monitorInterval {
-			fw.lastMonitorTime = now
-			channelLen := len(fw.entryChan)
-			usagePercent := float64(channelLen) * 100.0 / float64(fw.channelCapacity)
-
-			// Always log periodic status
-			log.Printf("  [FLOW-%d] [MONITOR] Channel usage: %d/%d (%.1f%%)",
-				fw.flowID, channelLen, fw.channelCapacity, usagePercent)
-
-			// Track high watermark events
-			if usagePercent > 80.0 {
-				fw.highWatermarkCount++
-				log.Printf("  [FLOW-%d] [WARNING] Channel usage high! This may cause socket read blocking. "+
-					"High watermark events: %d", fw.flowID, fw.highWatermarkCount)
-			}
-		}
-
-		fw.stats.mu.Unlock()
+		// CRITICAL: Use atomic increment instead of mutex lock
+		// This is 10-100x faster than mutex in high-contention scenarios
+		// With 8 FLOWs at 200k/sec each, mutex causes severe lock contention
+		atomic.AddInt64(&fw.stats.totalReceived, 1)
 		return nil
 	case <-fw.ctx.Done():
 		return fmt.Errorf("flow writer stopped")
 	}
 }
 
-// GetStats returns current statistics
+// GetStats returns current statistics (lock-free using atomic loads)
 func (fw *FlowWriter) GetStats() (received, written, failed, skipped, batches int64) {
-	fw.stats.mu.Lock()
-	defer fw.stats.mu.Unlock()
-	return fw.stats.totalReceived, fw.stats.totalWritten, fw.stats.totalFailed, fw.stats.totalSkipped, fw.stats.totalBatches
+	return atomic.LoadInt64(&fw.stats.totalReceived),
+		atomic.LoadInt64(&fw.stats.totalWritten),
+		atomic.LoadInt64(&fw.stats.totalFailed),
+		atomic.LoadInt64(&fw.stats.totalSkipped),
+		atomic.LoadInt64(&fw.stats.totalBatches)
 }
 
 // batchWriteLoop is the main async write loop
