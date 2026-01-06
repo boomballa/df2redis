@@ -204,9 +204,17 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 	//   - Increase buffer from 200K → 500K for safety margin
 	//   - FlowWriter speed without delay: ~178k entries/sec (matches Parser)
 	//
-	// Memory usage: 500K entries × ~1KB/entry = ~500MB per FLOW (8 FLOWs = 4GB total)
+	// Memory usage: 2M entries × ~1KB/entry = ~2GB per FLOW (8 FLOWs = 16GB total)
 	// This is acceptable on modern servers (56 cores, 200G RAM)
-	channelBuffer := 500000 // Huge buffer to prevent backpressure (increased from 200K)
+	//
+	// Buffer sizing calculation:
+	//   - Measured FlowWriter speed: 40k entries/sec (slow due to Redis Cluster)
+	//   - Measured Parser speed: 200k entries/sec
+	//   - Speed difference: 160k entries/sec
+	//   - Dragonfly timeout: 30 seconds
+	//   - Required buffer: 160k × 30s = 4.8M entries
+	//   - Use 2M as conservative value (gives ~12.5 seconds buffer time)
+	channelBuffer := 2000000 // Huge buffer to survive Dragonfly 30s timeout (increased from 500K)
 
 	// Check for debug mode via environment variable DF2REDIS_DEBUG
 	debugMode := false
