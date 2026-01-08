@@ -367,8 +367,28 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 
 	// Warn if slow
 	if duration > time.Second {
-		log.Printf("  [FLOW-%d] [WRITER] ⚠ Slow batch detected: %v for %d entries",
-			fw.flowID, duration, batchSize)
+		// Calculate batch size in bytes
+		var loopTotalBytes int
+		for _, e := range batch {
+			loopTotalBytes += len(e.Key)
+			if e.Value != nil {
+				// Approximation of value size
+				switch v := e.Value.(type) {
+				case []byte:
+					loopTotalBytes += len(v)
+				case string:
+					loopTotalBytes += len(v)
+				}
+			}
+		}
+
+		firstKey := "N/A"
+		if len(batch) > 0 {
+			firstKey = batch[0].Key
+		}
+
+		log.Printf("  [FLOW-%d] [WRITER] ⚠ Slow batch detected: %v for %d entries. TotalBytes: %d. FirstKey: %s",
+			fw.flowID, duration, batchSize, loopTotalBytes, firstKey)
 	}
 }
 
