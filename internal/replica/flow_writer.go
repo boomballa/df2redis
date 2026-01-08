@@ -358,6 +358,8 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 	fw.stats.totalBatches++
 	fw.stats.mu.Unlock()
 
+	DebugTotalFlushed.Add(int64(successCount)) // DEBUG COUNTER
+
 	// Log performance
 	opsPerSec := float64(batchSize) / duration.Seconds()
 	log.Printf("  [FLOW-%d] [WRITER] ✓ Batch complete: %d entries in %v (%.0f ops/sec, groups=%d, success=%d, fail=%d)",
