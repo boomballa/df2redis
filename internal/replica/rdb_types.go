@@ -9,6 +9,7 @@ const (
 	// Database selection
 	// Database selection
 	RDB_OPCODE_SELECTDB = 0xFE // SELECT <db>
+	RDB_OPCODE_RESIZEDB = 0xFB // RESIZEDB (db_size, expires_size)
 
 	// RDB terminator
 	RDB_OPCODE_EOF = 0xFF // EOF + 8-byte checksum
