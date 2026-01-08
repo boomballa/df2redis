@@ -70,7 +70,7 @@ func main() {
 	iterSrc := src.Scan(ctx, 0, "", *batch).Iterator()
 	startSrc := time.Now()
 
-	// Sample missing types
+	// Track types of missing keys
 	missingTypes := make(map[string]int)
 
 	for iterSrc.Next(ctx) {
@@ -80,14 +80,12 @@ func main() {
 		if _, exists := tgtKeys[key]; !exists {
 			missingCount++
 
-			// Get type of missing key (sampling first 1000 to avoid slow down)
-			if missingCount <= 1000 {
-				info, _ := src.Type(ctx, key).Result()
-				missingTypes[info]++
-			}
+			// Get type of missing key
+			keyType, _ := src.Type(ctx, key).Result()
+			missingTypes[keyType]++
 
-			// Log missing key
-			f.WriteString(key + "\n")
+			// Log missing key with type
+			f.WriteString(fmt.Sprintf("%s (%s)\n", key, keyType))
 		}
 
 		if srcCount%100000 == 0 {
@@ -102,7 +100,7 @@ func main() {
 
 	if missingCount > 0 {
 		log.Printf("❌ Found %d missing keys! See missing_keys.log for details.", missingCount)
-		log.Printf("Missing Key Types Sample (Top 1000): %v", missingTypes)
+		log.Printf("Missing Key Types Breakdown: %v", missingTypes)
 	} else {
 		log.Println("✅ Data Consistency Verified: No missing keys.")
 	}
