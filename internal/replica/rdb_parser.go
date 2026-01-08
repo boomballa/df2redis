@@ -120,22 +120,6 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			}
 			p.currentDB = int(dbIndex)
 			p.currentDB = int(dbIndex)
-			continue
-
-		case RDB_OPCODE_RESIZEDB:
-			// Resize DB hint: db_size, expires_size
-			// We just consume these lengths to keep the stream verifying correctly
-			dbSize, _, err := p.readLength()
-			if err != nil {
-				return nil, fmt.Errorf("failed to read RESIZEDB db_size: %w", err)
-			}
-			expireSize, _, err := p.readLength()
-			if err != nil {
-				return nil, fmt.Errorf("failed to read RESIZEDB expire_size: %w", err)
-			}
-			log.Printf("  [FLOW-%d] RESIZEDB: db_size=%d, expire_size=%d", p.flowID, dbSize, expireSize)
-			continue
-
 		case RDB_OPCODE_JOURNAL_BLOB:
 			// Dragonfly inline journal entry during RDB streaming
 			// Format per Dragonfly source: [0xD2][num_entries: packed_uint][journal_blob: RDB string]

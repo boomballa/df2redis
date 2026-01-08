@@ -602,6 +602,7 @@ func (r *Replicator) receiveSnapshot() error {
 				if err := r.replayCommand(flowID, entry); err != nil {
 					return fmt.Errorf("failed to apply inline journal entry: %w", err)
 				}
+				DebugTotalParsedJournal.Add(1) // DEBUG COUNTER
 				// Update local flow stats
 				stats.mu.Lock()
 				stats.InlineJournalOps++
@@ -737,6 +738,7 @@ func (r *Replicator) receiveSnapshot() error {
 					statsMu.Unlock()
 					r.recordFlowStage(flowID, "error", fmt.Sprintf("Write failed key=%s", entry.Key))
 				} else {
+					DebugTotalEnqueued.Add(1) // DEBUG COUNTER
 					statsMu.Lock()
 					stats.KeyCount++
 					statsMu.Unlock()
@@ -984,8 +986,20 @@ func (r *Replicator) verifyEofTokens() error {
 		}(i)
 	}
 
+	log.Println("")
+	log.Println("⏸  Waiting for all FLOWs to receive EOF and terminate...")
 	wg.Wait()
 	close(errChan)
+
+	// PRINT FINAL DEBUG STATS
+	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	log.Printf("🛑 DEBUG STATS (Missing Key Investigation):")
+	log.Printf("  • Total Parsed (RDB):    %d", DebugTotalParsedRDB.Load())
+	log.Printf("  • Total Parsed (Journal): %d", DebugTotalParsedJournal.Load())
+	log.Printf("  • Total Enqueued:        %d", DebugTotalEnqueued.Load())
+	log.Printf("  • Total Flushed:         %d", DebugTotalFlushed.Load())
+	log.Printf("  • Difference (Enqueue-Flush): %d", DebugTotalEnqueued.Load()-DebugTotalFlushed.Load())
+	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	// Surface the first error if any
 	for err := range errChan {
