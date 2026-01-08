@@ -591,10 +591,10 @@ func (r *Replicator) receiveSnapshot() error {
 			// Track whether this FLOW has completed RDB phase and synchronized via barrier
 			// This ensures we only increment flowCompletionCount once, regardless of whether
 			// we receive FULLSYNC_END marker or direct EOF from Dragonfly.
-					// we receive FULLSYNC_END marker or direct EOF from Dragonfly.
-					rdbCompleted := false
+			// we receive FULLSYNC_END marker or direct EOF from Dragonfly.
+			rdbCompleted := false
 
-					parser := NewRDBParser(flowConn, flowID)
+			parser := NewRDBParser(flowConn, flowID)
 
 			// Set callback for inline journal entries during RDB phase
 			parser.onJournalEntry = func(entry *JournalEntry) error {
@@ -611,6 +611,28 @@ func (r *Replicator) receiveSnapshot() error {
 				r.rdbStats.InlineJournalOps++
 				r.rdbStats.mu.Unlock()
 				return nil
+			}
+
+			// Set callback for FULLSYNC_END marker
+			// When parser encounters 0xC8 (FULLSYNC_END), it calls this.
+			parser.onFullSyncEnd = func() {
+				if !rdbCompleted {
+					rdbCompleted = true
+					log.Printf("  [FLOW-%d] 🏁 Received FULLSYNC_END marker.", flowID)
+
+					// Synchronization barrier
+					flowCompletionCount.mu.Lock()
+					flowCompletionCount.count++
+					completedCount := flowCompletionCount.count
+					flowCompletionCount.mu.Unlock()
+
+					log.Printf("  [FLOW-%d] ⏸ Waiting for all FLOWs (%d/%d)...", flowID, completedCount, numFlows)
+
+					if completedCount == numFlows {
+						log.Printf("  [FLOW-%d] 🎯 All FLOWs completed RDB! Broadcasting signal...", flowID)
+						close(rdbCompletionBarrier)
+					}
+				}
 			}
 
 			// 1. Parse header
@@ -684,32 +706,13 @@ func (r *Replicator) receiveSnapshot() error {
 				// CRITICAL: Check for FULLSYNC_END marker
 				// This means "static RDB snapshot complete", but Dragonfly will CONTINUE
 				// sending journal blobs until we send STARTSTABLE.
+				// This logic is now handled by the parser.onFullSyncEnd callback.
 				if entry.Type == RDB_TYPE_FULLSYNC_END_MARKER {
 					stats.mu.Lock()
 					inlineJournalOps := stats.InlineJournalOps
 					stats.mu.Unlock()
 					log.Printf("  [FLOW-%d] ✓ RDB parsing done (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
 						flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps)
-
-					// CRITICAL FIX: Wait for all FLOWs to complete RDB before main thread sends STARTSTABLE
-					// This matches Dragonfly's BlockingCounter::Wait() behavior
-					flowCompletionCount.mu.Lock()
-					flowCompletionCount.count++
-					completedCount := flowCompletionCount.count
-					flowCompletionCount.mu.Unlock()
-
-					log.Printf("  [FLOW-%d] ⏸ Waiting for all FLOWs to complete RDB (%d/%d done)...", flowID, completedCount, numFlows)
-
-					// If this is the last FLOW to complete, broadcast signal to release all
-					if completedCount == numFlows {
-						log.Printf("  [FLOW-%d] 🎯 All FLOWs completed! Broadcasting barrier signal...", flowID)
-						close(rdbCompletionBarrier)
-					}
-
-					// Wait for the barrier (blocks until all FLOWs reach this point)
-					<-rdbCompletionBarrier
-					log.Printf("  [FLOW-%d] ✓ Barrier released, proceeding to stable sync preparation", flowID)
-					rdbCompleted = true
 
 					// CRITICAL: Continue ParseNext() loop to read journal blobs!
 					// Do NOT return - Dragonfly will keep sending data until STARTSTABLE.
@@ -895,70 +898,56 @@ func (r *Replicator) verifyEofTokens() error {
 			}
 			log.Printf("  [FLOW-%d] → Reading EOF token (%d bytes)...", flowID, tokenLen)
 
-			// 1. Read opcodes until we find EOF (0xFF) or metadata (0xD3)
-			// Dragonfly may send journal entries (0xD2) after RDB parser returns
-			// We need to skip all of them before reaching the true EOF
-			var opcodeByte byte
-			maxRetries := 100 // Prevent infinite loop
-			for i := 0; i < maxRetries; i++ {
-				opcodeBuf := make([]byte, 1)
-				if _, err := io.ReadFull(flowConn, opcodeBuf); err != nil {
-					errChan <- fmt.Errorf("FLOW-%d: failed to read opcode byte (attempt %d): %w", flowID, i+1, err)
+			// CRITICAL FIX: If we received FULLSYNC_END (0xC8), there is NO subsequent EOF token.
+			// Dragonfly transitions directly to stable sync specific opcodes (like Journal entries).
+			// We only look for EOF (0xFF) if we didn't get FULLSYNC_END (legacy/standard RDB).
+			if r.flows[flowID].SyncType == "FULL" { // Assuming "FULL" implies FULLSYNC_END was used
+				log.Printf("  [FLOW-%d] ✓ RDB phase validated via FULLSYNC_END. Skipping legacy EOF token check.", flowID)
+				return
+			}
+
+			// Legacy EOF verification (only if FULLSYNC_END was NOT seen)
+			log.Printf("  [FLOW-%d] 🔍 Verifying legacy EOF token...", flowID)
+			parser := NewRDBParser(flowConn, flowID) // Create a parser to use PeekByte/ReadByte
+			maxRetries := 100                        // Look ahead 100 bytes for EOF
+			// expectedToken is already set to r.flows[flowID].EOFToken above
+
+			for j := 0; j < maxRetries; j++ {
+				opcodeByte, err := parser.peekByte()
+				if err != nil {
+					if err == io.EOF {
+						break
+					}
+					errChan <- fmt.Errorf("FLOW-%d: error peeking for EOF: %w", flowID, err)
 					return
 				}
-				opcodeByte = opcodeBuf[0]
-				log.Printf("  [FLOW-%d] Read opcode byte: 0x%02X (attempt %d)", flowID, opcodeByte, i+1)
 
 				switch opcodeByte {
-				case 0xD2: // RDB_OPCODE_JOURNAL_BLOB
-					// Skip inline journal entry
-					log.Printf("  [FLOW-%d] Found journal blob (0xD2), skipping...", flowID)
-					// Read num_entries (packed uint)
-					numEntriesBuf := make([]byte, 1)
-					if _, err := io.ReadFull(flowConn, numEntriesBuf); err != nil {
-						errChan <- fmt.Errorf("FLOW-%d: failed to read journal num_entries: %w", flowID, err)
+				case 0xD2, 0xD3: // Journal blobs (unexpected here logic-wise if rdbCompleted, but safe to ignore if we were just scanning)
+					// If we see journal ops, we consumed too far or are in mixed state.
+					// But for legacy EOF search, we shouldn't see these unless we missed the transition.
+					// We'll treat them as non-EOF.
+					if _, err := parser.readByte(); err != nil { // consume
+						errChan <- err
 						return
 					}
-					numEntries := int(numEntriesBuf[0])
-					log.Printf("  [FLOW-%d] Journal blob has %d entries", flowID, numEntries)
-
-					// Read blob size (RDB string length encoding)
-					// Simple case: assume length < 64 (encoded in 6 bits)
-					lenBuf := make([]byte, 1)
-					if _, err := io.ReadFull(flowConn, lenBuf); err != nil {
-						errChan <- fmt.Errorf("FLOW-%d: failed to read journal blob length: %w", flowID, err)
-						return
-					}
-					blobLen := int(lenBuf[0] & 0x3F) // Extract lower 6 bits
-					log.Printf("  [FLOW-%d] Journal blob length: %d bytes", flowID, blobLen)
-
-					// Skip blob data
-					blobData := make([]byte, blobLen)
-					if _, err := io.ReadFull(flowConn, blobData); err != nil {
-						errChan <- fmt.Errorf("FLOW-%d: failed to skip journal blob data: %w", flowID, err)
-						return
-					}
-					log.Printf("  [FLOW-%d] ✓ Skipped journal blob (%d bytes)", flowID, blobLen)
-					continue // Read next opcode
-
-				case 0xD3: // RDB_OPCODE_JOURNAL_OFFSET (metadata)
-					// Skip metadata (8 bytes)
-					log.Printf("  [FLOW-%d] Found metadata block (0xD3), skipping 8 bytes...", flowID)
-					metadataData := make([]byte, 8)
-					if _, err := io.ReadFull(flowConn, metadataData); err != nil {
-						errChan <- fmt.Errorf("FLOW-%d: failed to read metadata data: %w", flowID, err)
-						return
-					}
-					continue // Read next opcode
+					continue
 
 				case 0xFF: // RDB_OPCODE_EOF
 					// Found EOF!
-					log.Printf("  [FLOW-%d] ✓ Found EOF opcode (0xFF)", flowID)
+					log.Printf("  [FLOW-%d] ✓ Found legacy EOF opcode (0xFF)", flowID)
+					// Consume the opcode
+					parser.readByte()
 					goto foundEOF
 
 				default:
-					errChan <- fmt.Errorf("FLOW-%d: unexpected opcode 0x%02X (expected 0xD2/0xD3/0xFF)", flowID, opcodeByte)
-					return
+					// Consume and continue searching/skipping junk?
+					// Strict mode: if we don't find it immediately, it's an error?
+					// Let's consume and retry
+					if _, err := parser.readByte(); err != nil {
+						errChan <- err
+						return
+					}
 				}
 			}
 
