@@ -37,7 +37,7 @@ type FlowWriter struct {
 	clusterClient  interface{} // Store original cluster client for debugging
 
 	// Concurrency control
-	maxConcurrentWrites int        // Maximum concurrent write goroutines
+	maxConcurrentWrites int           // Maximum concurrent write goroutines
 	writeSemaphore      chan struct{} // Semaphore to limit concurrency
 
 	// Statistics
@@ -53,6 +53,9 @@ type FlowWriter struct {
 	lastMonitorTime    time.Time
 	monitorInterval    time.Duration
 	highWatermarkCount int64 // Count of times channel usage exceeded 80%
+
+	// Async flush helper
+	asyncFlush func([]*RDBEntry)
 }
 
 // NewFlowWriter creates a new async batch writer for a flow
@@ -104,47 +107,39 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 	// - Physical machine (56 cores, 200G RAM) can handle high concurrency
 	//
 	// Strategy:
-	//   - Standalone: 1 concurrent per FLOW (pipeline handles batching)
-	//   - Cluster: adaptive concurrency based on FLOW count
-	//
-	// Examples:
-	//   Standalone mode (any FLOWs): 1 concurrent per FLOW (pipeline does the work)
-	//   Cluster mode - 2 FLOWs:  800/2  = 400 → 200 concurrent per FLOW
-	//   Cluster mode - 8 FLOWs:  800/8  = 100 → 100 concurrent per FLOW
-	//   Cluster mode - 16 FLOWs: 800/16 = 50  → 50 concurrent per FLOW
-
+	//   - Async Batching Mode: Limit number of concurrent in-flight batches
+	//   - maxConcurrent now means "Max In-Flight Batches"
+	//   - 20-50 concurrent batches is plenty for high throughput
 	var maxConcurrent int
 	if targetType == "redis-standalone" {
-		// Standalone mode: pipeline batching, only need 1 concurrent per FLOW
-		maxConcurrent = 1
+		maxConcurrent = 50 // High concurrency for pipeline batches
 	} else {
-		// Cluster mode: slot-based parallelism, need high concurrency
-		totalConcurrencyLimit := 800
+		// Cluster mode: limit total batches per flow to avoid exploding connection pool
+		totalConcurrencyLimit := 400
 		maxConcurrent = totalConcurrencyLimit / numFlows
-		if maxConcurrent < 50 {
-			maxConcurrent = 50
+		if maxConcurrent < 20 {
+			maxConcurrent = 20
 		}
-		if maxConcurrent > 200 {
-			maxConcurrent = 200
+		if maxConcurrent > 50 {
+			maxConcurrent = 50
 		}
 	}
 
 	// CRITICAL OPTIMIZATION: Increase batch size to reduce round trips
 	// Old: 100 entries/batch → ~700 ops/sec
 	// New: 2000 entries/batch → expected ~14000 ops/sec (20x reduction in round trips)
-	batchSize := 2000     // Process 2000 entries per batch (increased from 100)
-	flushInterval := 100  // Flush every 100ms (increased from 50ms to match larger batch)
+	batchSize := 2000    // Process 2000 entries per batch (increased from 100)
+	flushInterval := 100 // Flush every 100ms (increased from 50ms to match larger batch)
 
 	// CRITICAL: Even larger buffer to handle full sync bursts
 	// During full sync, Dragonfly can send data extremely fast (600万keys in 3 seconds)
 	// We need a huge buffer to absorb the burst while slowly writing to Redis
 	//
 	// Buffer sizing:
-	//   - 600万keys / 4 FLOWs = 150万keys per FLOW
-	//   - 3 seconds full sync time → ~50万keys/sec/FLOW
-	//   - Buffer for 2 seconds of burst: 100万entries × 1KB = 1GB per FLOW
-	//   - Reduced to 200K entries = ~200MB per FLOW (acceptable memory usage)
-	channelBuffer := 200000 // Huge buffer to absorb Dragonfly's fast full sync (increased from 50000)
+	//   - Increased buffer to prevent blocking parser while writing to Redis
+	//   - 2M entries × ~1KB per entry = ~2GB memory per FLOW
+	//   - With 8 FLOWs: 8 × 2GB = 16GB total (acceptable on 200GB machine)
+	channelBuffer := 2000000 // Huge buffer to absorb full sync bursts
 
 	fw := &FlowWriter{
 		flowID:              flowID,
@@ -210,36 +205,18 @@ func (fw *FlowWriter) Stop() {
 	log.Printf("  [FLOW-%d] [WRITER] Shutdown complete, all data flushed", fw.flowID)
 }
 
-// Enqueue adds an entry to the write queue (blocks if channel is full - backpressure)
+// Enqueue adds an entry to the write queue (blocking)
+// CRITICAL: We must NOT drop data. If channel is full, we block until space is available.
+// Backpressure is handled by large 2M buffer; blocking is preferred over data loss.
 func (fw *FlowWriter) Enqueue(entry *RDBEntry) error {
 	select {
 	case fw.entryChan <- entry:
+		// Successfully enqueued
 		fw.stats.mu.Lock()
 		fw.stats.totalReceived++
-
-		// Monitor channel usage to detect backpressure
-		// CRITICAL: If channel is frequently full, socket reads will block,
-		// causing Dragonfly's sink->Write() to timeout (30s)
-		now := time.Now()
-		if now.Sub(fw.lastMonitorTime) >= fw.monitorInterval {
-			fw.lastMonitorTime = now
-			channelLen := len(fw.entryChan)
-			usagePercent := float64(channelLen) * 100.0 / float64(fw.channelCapacity)
-
-			// Always log periodic status
-			log.Printf("  [FLOW-%d] [MONITOR] Channel usage: %d/%d (%.1f%%)",
-				fw.flowID, channelLen, fw.channelCapacity, usagePercent)
-
-			// Track high watermark events
-			if usagePercent > 80.0 {
-				fw.highWatermarkCount++
-				log.Printf("  [FLOW-%d] [WARNING] Channel usage high! This may cause socket read blocking. "+
-					"High watermark events: %d", fw.flowID, fw.highWatermarkCount)
-			}
-		}
-
 		fw.stats.mu.Unlock()
 		return nil
+
 	case <-fw.ctx.Done():
 		return fmt.Errorf("flow writer stopped")
 	}
@@ -263,13 +240,25 @@ func (fw *FlowWriter) batchWriteLoop() {
 	log.Printf("  [FLOW-%d] [WRITER] Async batch writer started (batch=%d, interval=%v)",
 		fw.flowID, fw.batchSize, fw.flushInterval)
 
+	// Helper for async flushing
+	fw.asyncFlush = func(batch []*RDBEntry) {
+		// Acquire batch semaphore
+		fw.writeSemaphore <- struct{}{}
+		fw.wg.Add(1)
+		go func(b []*RDBEntry) {
+			defer fw.wg.Done()
+			defer func() { <-fw.writeSemaphore }() // Release semaphore
+			fw.flushBatch(b)
+		}(batch)
+	}
+
 	for {
 		select {
 		case entry, ok := <-fw.entryChan:
 			if !ok {
 				// Channel closed, flush remaining batch and exit
 				if len(batch) > 0 {
-					fw.flushBatch(batch)
+					fw.asyncFlush(batch)
 				}
 				log.Printf("  [FLOW-%d] [WRITER] Channel closed, shutting down (total written: %d, batches: %d)",
 					fw.flowID, fw.stats.totalWritten, fw.stats.totalBatches)
@@ -280,21 +269,21 @@ func (fw *FlowWriter) batchWriteLoop() {
 
 			// Flush if batch size reached
 			if len(batch) >= fw.batchSize {
-				fw.flushBatch(batch)
-				batch = batch[:0] // Reset batch
+				fw.asyncFlush(batch)
+				batch = make([]*RDBEntry, 0, fw.batchSize) // New batch
 			}
 
 		case <-ticker.C:
 			// Flush on timer if batch not empty
 			if len(batch) > 0 {
-				fw.flushBatch(batch)
-				batch = batch[:0]
+				fw.asyncFlush(batch)
+				batch = make([]*RDBEntry, 0, fw.batchSize) // New batch
 			}
 
 		case <-fw.ctx.Done():
 			// Context cancelled, flush and exit
 			if len(batch) > 0 {
-				fw.flushBatch(batch)
+				fw.asyncFlush(batch)
 			}
 			log.Printf("  [FLOW-%d] [WRITER] Context cancelled, shutting down", fw.flowID)
 			return
@@ -334,13 +323,11 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 	resultChan := make(chan writeResult, numGroups)
 
 	for _, group := range slotGroups {
-		// Acquire semaphore slot (blocks if limit reached)
-		fw.writeSemaphore <- struct{}{}
-
+		// NOTE: In async batch mode, we don't use the semaphore here (it's used for batch limiting).
+		// We launch slot groups in parallel without further limiting, as the batch limit controls overall concurrency.
 		wg.Add(1)
 		go func(entries []*RDBEntry) {
 			defer wg.Done()
-			defer func() { <-fw.writeSemaphore }() // Release semaphore slot
 
 			result := fw.writeSlotGroup(entries)
 			resultChan <- result
@@ -567,4 +554,3 @@ var crc16Table = [256]uint16{
 func (fw *FlowWriter) writeEntry(entry *RDBEntry) error {
 	return fw.writeFn(entry)
 }
-

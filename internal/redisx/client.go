@@ -64,15 +64,18 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 			fmt.Fprintf(os.Stderr, "Warning: failed to set KeepAlive period: %v\n", err)
 		}
 
-		// CRITICAL: Increase receive buffer to 16MB
-		// Dragonfly's Channel buffer is only 2 elements, and sink->Write() blocks if
+		// CRITICAL: Increase receive buffer to 128MB
+		// Dragonfly's Channel buffer is only 2 elements (kChannelLen=2), and sink->Write() blocks if
 		// client doesn't read fast enough. With a large SO_RCVBUF, kernel can buffer
 		// more data, allowing Dragonfly to continue sending even if application is busy
 		// processing/writing to Redis.
 		//
-		// This prevents the 30-second timeout error:
-		//   "Master detected replication timeout, breaking full sync"
-		const recvBufferSize = 16 * 1024 * 1024 // 16MB
+		// Dragonfly monitors last_write_time_ns_ and breaks the connection if no write activity
+		// for 30 seconds (FLAGS_replication_timeout). Large TCP buffer prevents this timeout
+		// by allowing kernel to continue accepting data even when application is busy.
+		//
+		// Memory usage: 128MB × 8 FLOWs = 1GB kernel memory (acceptable)
+		const recvBufferSize = 128 * 1024 * 1024 // 128MB
 		if rawConn, err := tcpConn.SyscallConn(); err == nil {
 			_ = rawConn.Control(func(fd uintptr) {
 				// Set SO_RCVBUF on the socket file descriptor
