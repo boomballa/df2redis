@@ -119,6 +119,21 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 				return nil, fmt.Errorf("failed to read db index: %w", err)
 			}
 			p.currentDB = int(dbIndex)
+			p.currentDB = int(dbIndex)
+			continue
+
+		case RDB_OPCODE_RESIZEDB:
+			// Resize DB hint: db_size, expires_size
+			// We just consume these lengths to keep the stream verifying correctly
+			dbSize, _, err := p.readLength()
+			if err != nil {
+				return nil, fmt.Errorf("failed to read RESIZEDB db_size: %w", err)
+			}
+			expireSize, _, err := p.readLength()
+			if err != nil {
+				return nil, fmt.Errorf("failed to read RESIZEDB expire_size: %w", err)
+			}
+			log.Printf("  [FLOW-%d] RESIZEDB: db_size=%d, expire_size=%d", p.flowID, dbSize, expireSize)
 			continue
 
 		case RDB_OPCODE_JOURNAL_BLOB:
