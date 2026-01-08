@@ -173,10 +173,22 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			continue
 
 		case RDB_OPCODE_FULLSYNC_END:
+			log.Printf("  [FLOW-%d] [PARSER] ⚠ Found FULLSYNC_END (0xC8). Reading 8-byte suffix...", p.flowID)
+
 			// Dragonfly FULLSYNC_END marker, followed by eight zero bytes
 			zeros := make([]byte, 8)
 			if _, err := io.ReadFull(p.reader, zeros); err != nil {
+				log.Printf("  [FLOW-%d] [PARSER] ✗ FAILED to read FULLSYNC_END suffix: %v", p.flowID, err)
 				return nil, fmt.Errorf("failed to read FULLSYNC_END suffix: %w", err)
+			}
+			log.Printf("  [FLOW-%d] [PARSER] ✓ FULLSYNC_END suffix read.", p.flowID)
+
+			if p.onFullSyncEnd != nil {
+				log.Printf("  [FLOW-%d] [PARSER] 📞 Invoking onFullSyncEnd callback...", p.flowID)
+				p.onFullSyncEnd()
+				log.Printf("  [FLOW-%d] [PARSER] ✓ onFullSyncEnd callback returned.", p.flowID)
+			} else {
+				log.Printf("  [FLOW-%d] [PARSER] ⚠ No onFullSyncEnd callback registered!", p.flowID)
 			}
 
 			// CRITICAL: FULLSYNC_END means "static RDB snapshot complete, preparing to switch to stable sync"
