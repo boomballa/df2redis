@@ -20,14 +20,17 @@ type RDBParser struct {
 	flowID         int
 
 	// State tracked during parsing
-	currentDB       int   // current database index
-	expireMs        int64 // current key expiration (absolute ms timestamp)
-	lz4BlobCount    int   // number of LZ4 blobs processed
-	zstdBlobCount   int   // number of ZSTD blobs processed
-	journalBlobCount int  // number of journal blobs processed
+	currentDB        int   // current database index
+	expireMs         int64 // current key expiration (absolute ms timestamp)
+	lz4BlobCount     int   // number of LZ4 blobs processed
+	zstdBlobCount    int   // number of ZSTD blobs processed
+	journalBlobCount int   // number of journal blobs processed
 
 	// Callback for applying inline journal entries during RDB phase
 	onJournalEntry func(*JournalEntry) error
+
+	// Callback for FULLSYNC_END marker
+	onFullSyncEnd func()
 }
 
 // NewRDBParser creates a parser bound to a reader
@@ -211,12 +214,12 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			log.Printf("  [FLOW-%d] AUX: %s = %s", p.flowID, auxKey, auxValue)
 			continue
 
-	case RDB_OPCODE_COMPRESSED_ZSTD_BLOB_START:
-		// Dragonfly ZSTD compressed blob start
-		if err := p.handleZstdBlob(); err != nil {
-			return nil, fmt.Errorf("failed to handle ZSTD compressed blob: %w", err)
-		}
-		continue
+		case RDB_OPCODE_COMPRESSED_ZSTD_BLOB_START:
+			// Dragonfly ZSTD compressed blob start
+			if err := p.handleZstdBlob(); err != nil {
+				return nil, fmt.Errorf("failed to handle ZSTD compressed blob: %w", err)
+			}
+			continue
 
 		case RDB_OPCODE_COMPRESSED_LZ4_BLOB_START:
 			// Dragonfly LZ4 compressed blob start

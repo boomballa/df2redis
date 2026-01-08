@@ -81,4 +81,4 @@ bin/df2redis*
 .log/
 .log/*
 examples/logs/*
-examples/logs
+examples/logslog/
