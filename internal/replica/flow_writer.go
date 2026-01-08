@@ -366,13 +366,13 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 		fw.flowID, batchSize, duration, opsPerSec, numGroups, successCount, failCount)
 
 	// Warn if slow
-	if duration > time.Second {
+	// Warn if slow or empty key detected
+	if duration > time.Second || (len(batch) > 0 && len(batch[0].Key) == 0) {
 		// Calculate batch size in bytes
 		var loopTotalBytes int
 		for _, e := range batch {
 			loopTotalBytes += len(e.Key)
 			if e.Value != nil {
-				// Approximation of value size
 				switch v := e.Value.(type) {
 				case []byte:
 					loopTotalBytes += len(v)
@@ -383,12 +383,18 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 		}
 
 		firstKey := "N/A"
+		firstType := -1
+		valType := "nil"
 		if len(batch) > 0 {
-			firstKey = batch[0].Key
+			firstKey = fmt.Sprintf("'%s' (len=%d)", batch[0].Key, len(batch[0].Key))
+			firstType = int(batch[0].Type)
+			if batch[0].Value != nil {
+				valType = fmt.Sprintf("%T", batch[0].Value)
+			}
 		}
 
-		log.Printf("  [FLOW-%d] [WRITER] ⚠ Slow batch detected: %v for %d entries. TotalBytes: %d. FirstKey: %s",
-			fw.flowID, duration, batchSize, loopTotalBytes, firstKey)
+		log.Printf("  [FLOW-%d] [WRITER] ⚠ Slow/Empty batch: %v for %d entries. TotalBytes: %d. FirstEntry: [Type=%d, Key=%s, ValType=%s]",
+			fw.flowID, duration, batchSize, loopTotalBytes, firstType, firstKey, valType)
 	}
 }
 
