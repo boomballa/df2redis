@@ -526,7 +526,12 @@ func (p *RDBParser) processJournalBlob(blobData string, numEntries uint64) error
 	var appliedCommands uint64
 
 	for processed < numEntries {
-		log.Printf("  [FLOW-%d] [JOURNAL-BLOB-PROCESS] Reading entry %d/%d", p.flowID, processed+1, numEntries)
+		// Reduce logging frequency: only log every 100 entries or first/last
+		shouldLog := (processed == 0) || (processed+1 == numEntries) || ((processed+1)%100 == 0)
+
+		if shouldLog {
+			log.Printf("  [FLOW-%d] [JOURNAL-BLOB-PROCESS] Processing entry %d/%d", p.flowID, processed+1, numEntries)
+		}
 
 		entry, err := journalReader.ReadEntry()
 		if err != nil {
@@ -539,41 +544,41 @@ func (p *RDBParser) processJournalBlob(blobData string, numEntries uint64) error
 			return fmt.Errorf("failed to parse journal entry %d/%d: %w", processed+1, numEntries, err)
 		}
 
-		log.Printf("  [FLOW-%d] [JOURNAL-BLOB-PROCESS] Entry %d: opcode=%d (%s), dbIndex=%d, txid=%d",
-			p.flowID, processed+1, entry.Opcode, entry.Opcode.String(), entry.DbIndex, entry.TxID)
-
 		// Apply the entry via callback
 		switch entry.Opcode {
 		case OpSelect:
 			p.currentDB = int(entry.DbIndex)
-			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] SELECT DB %d", p.flowID, entry.DbIndex)
+			if shouldLog {
+				log.Printf("  [FLOW-%d] [INLINE-JOURNAL] SELECT DB %d", p.flowID, entry.DbIndex)
+			}
 
 		case OpCommand, OpExpired:
-			// Log the command with full details
-			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] → Applying %s: cmd=%s, args=%v (db=%d, txid=%d)",
-				p.flowID, entry.Opcode.String(), entry.Command, entry.Args, entry.DbIndex, entry.TxID)
-
-			// Apply the command
+			// Apply the command without logging every single one (too slow)
 			if err := p.onJournalEntry(entry); err != nil {
-				log.Printf("  [FLOW-%d] [INLINE-JOURNAL] ✗ Failed to apply command: %v", p.flowID, err)
+				// Always log errors
+				log.Printf("  [FLOW-%d] [INLINE-JOURNAL] ✗ Failed to apply command at entry %d/%d: %v", p.flowID, processed+1, numEntries, err)
 				return fmt.Errorf("failed to apply inline journal entry: %w", err)
 			}
 
 			appliedCommands++
-			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] ✓ Command applied successfully (total applied: %d)",
-				p.flowID, appliedCommands)
+			// Only log progress periodically
+			if shouldLog {
+				log.Printf("  [FLOW-%d] [INLINE-JOURNAL] Progress: applied %d/%d commands", p.flowID, appliedCommands, numEntries)
+			}
 
 		case OpLSN:
-			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] LSN update: %d", p.flowID, entry.LSN)
+			if shouldLog {
+				log.Printf("  [FLOW-%d] [INLINE-JOURNAL] LSN update: %d", p.flowID, entry.LSN)
+			}
 
 		case OpPing:
-			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] PING", p.flowID)
+			// Silent - heartbeat doesn't need logging
 
 		case OpNoop:
-			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] NOOP", p.flowID)
+			// Silent - noop doesn't need logging
 
 		default:
-			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] ⚠ Unknown opcode: %d", p.flowID, entry.Opcode)
+			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] ⚠ Unknown opcode at entry %d: %d", p.flowID, processed+1, entry.Opcode)
 		}
 
 		processed++
