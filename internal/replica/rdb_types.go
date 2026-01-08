@@ -7,7 +7,9 @@ const (
 	RDB_OPCODE_EXPIRETIME    = 0xFD // expire time in seconds (4 bytes)
 
 	// Database selection
+	// Database selection
 	RDB_OPCODE_SELECTDB = 0xFE // SELECT <db>
+	RDB_OPCODE_RESIZEDB = 0xFB // RESIZEDB (db_size, expires_size)
 
 	// RDB terminator
 	RDB_OPCODE_EOF = 0xFF // EOF + 8-byte checksum
