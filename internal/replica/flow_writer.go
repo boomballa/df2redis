@@ -205,9 +205,9 @@ func (fw *FlowWriter) Stop() {
 	log.Printf("  [FLOW-%d] [WRITER] Shutdown complete, all data flushed", fw.flowID)
 }
 
-// Enqueue adds an entry to the write queue (blocking)
-// CRITICAL: We must NOT drop data. If channel is full, we block until space is available.
-// Backpressure is handled by large 2M buffer; blocking is preferred over data loss.
+// Enqueue adds an entry to the write queue (blocking with 2M buffer)
+// With 2M buffer, blocking is acceptable as it provides sufficient backpressure protection
+// If channel somehow fills up (extreme case), we block Parser briefly
 func (fw *FlowWriter) Enqueue(entry *RDBEntry) error {
 	select {
 	case fw.entryChan <- entry:
@@ -345,10 +345,8 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 		failCount += result.failed
 	}
 
-	// Return all entries to pool after processing
-	for _, entry := range batch {
-		PutRDBEntry(entry)
-	}
+	// NOTE: Object pool removed due to race condition bug
+	// Entries will be GC'd naturally
 
 	duration := time.Since(start)
 
