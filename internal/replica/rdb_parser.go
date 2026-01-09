@@ -35,7 +35,10 @@ type RDBParser struct {
 
 // NewRDBParser creates a parser bound to a reader
 func NewRDBParser(reader io.Reader, flowID int) *RDBParser {
-	bufReader := bufio.NewReader(reader)
+	// Use 1MB bufio.Reader to handle large RDB strings without fragmentation
+	// Prevents "expected N bytes, got M bytes" EOF errors during large string reads
+	const bufSize = 1024 * 1024 // 1MB
+	bufReader := bufio.NewReaderSize(reader, bufSize)
 	return &RDBParser{
 		reader:         bufReader,
 		originalReader: bufReader,
@@ -277,12 +280,13 @@ func (p *RDBParser) parseKeyValue(typeByte byte) (*RDBEntry, error) {
 	// 1. Read key
 	key := p.readString()
 
-	// Get entry from pool for object reuse
-	entry := GetRDBEntry()
-	entry.Key = key
-	entry.Type = typeByte
-	entry.DbIndex = p.currentDB
-	entry.ExpireMs = p.expireMs
+	// Create new entry (object pool removed due to race condition bug)
+	entry := &RDBEntry{
+		Key:      key,
+		Type:     typeByte,
+		DbIndex:  p.currentDB,
+		ExpireMs: p.expireMs,
+	}
 
 	// 2. Parse value based on encoding
 	var err error
