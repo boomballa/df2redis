@@ -87,11 +87,14 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 		}
 	}
 
+	// Use 1MB bufio.Reader to match high-throughput RDB streaming
+	// Default 4KB buffer causes excessive system calls and may contribute to read timeout issues
+	const bufSize = 1024 * 1024 // 1MB
 	client := &Client{
 		addr:       cfg.Addr,
 		password:   cfg.Password,
 		conn:       conn,
-		reader:     bufio.NewReader(conn),
+		reader:     bufio.NewReaderSize(conn, bufSize),
 		timeout:    defaultTimeout,
 		rdbTimeout: 60 * time.Second, // fixed 60s for snapshot/journal reads
 	}
