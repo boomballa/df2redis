@@ -26,6 +26,11 @@ type RDBParser struct {
 	zstdBlobCount    int   // number of ZSTD blobs processed
 	journalBlobCount int   // number of journal blobs processed
 
+	// Debug tracking for deadlock diagnosis
+	keysProcessed    int       // total keys processed (for progress logging)
+	lastKeyName      string    // last key processed (for debugging hangs)
+	lastActivityTime time.Time // last activity timestamp (for timeout detection)
+
 	// Callback for applying inline journal entries during RDB phase
 	onJournalEntry func(*JournalEntry) error
 
@@ -40,11 +45,14 @@ func NewRDBParser(reader io.Reader, flowID int) *RDBParser {
 	const bufSize = 1024 * 1024 // 1MB
 	bufReader := bufio.NewReaderSize(reader, bufSize)
 	return &RDBParser{
-		reader:         bufReader,
-		originalReader: bufReader,
-		flowID:         flowID,
-		currentDB:      0,
-		expireMs:       0,
+		reader:           bufReader,
+		originalReader:   bufReader,
+		flowID:           flowID,
+		currentDB:        0,
+		expireMs:         0,
+		keysProcessed:    0,
+		lastKeyName:      "",
+		lastActivityTime: time.Now(),
 	}
 }
 
@@ -87,6 +95,9 @@ func (p *RDBParser) ParseHeader() error {
 // ParseNext reads the next RDB entry. Returns (nil, io.EOF) when the stream ends.
 func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 	for {
+		// Update activity timestamp before read (to detect hangs)
+		p.lastActivityTime = time.Now()
+
 		opcode, err := p.readByte()
 		if err != nil {
 			return nil, err
@@ -94,7 +105,7 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 
 		// Debug: Log every opcode encountered (helps diagnose missing JOURNAL_BLOB)
 		if opcode >= 0xC8 { // Log only special opcodes (not regular type codes)
-			log.Printf("  [FLOW-%d] [DEBUG] Opcode encountered: 0x%02X", p.flowID, opcode)
+			log.Printf("  [FLOW-%d] [DEBUG] Opcode encountered: 0x%02X, keysProcessed=%d", p.flowID, opcode, p.keysProcessed)
 		}
 
 		switch opcode {
@@ -279,6 +290,17 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 func (p *RDBParser) parseKeyValue(typeByte byte) (*RDBEntry, error) {
 	// 1. Read key
 	key := p.readString()
+
+	// Update debug tracking
+	p.keysProcessed++
+	p.lastKeyName = key
+	p.lastActivityTime = time.Now()
+
+	// Progress logging: every 10000 keys
+	if p.keysProcessed%10000 == 0 {
+		log.Printf("  [FLOW-%d] [PROGRESS] Processed %d keys, last key: '%s' (type=%d)",
+			p.flowID, p.keysProcessed, truncateKey(key, 50), typeByte)
+	}
 
 	// Create new entry (object pool removed due to race condition bug)
 	entry := &RDBEntry{
@@ -626,4 +648,12 @@ func (p *RDBParser) processJournalBlob(blobData string, numEntries uint64) error
 	}
 
 	return nil
+}
+
+// truncateKey truncates a key name to maxLen for logging purposes
+func truncateKey(key string, maxLen int) string {
+	if len(key) <= maxLen {
+		return key
+	}
+	return key[:maxLen] + "..."
 }
