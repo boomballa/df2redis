@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"strconv"
+	"time"
 
 	lzf "github.com/zhuyie/golzf"
 )
@@ -21,9 +22,10 @@ func (p *RDBParser) readStringFull() (string, error) {
 		return "", fmt.Errorf("failed to read string length: %w", err)
 	}
 
-	// Debug: log large lengths
+	// Debug: log large lengths and track read activity
 	if length > 100000 {
-		log.Printf("  [FLOW-%d] ⚠ readStringFull: unusually large length=%d, special=%v", p.flowID, length, special)
+		log.Printf("  [FLOW-%d] ⚠ readStringFull: unusually large length=%d, special=%v, lastKey='%s'",
+			p.flowID, length, special, truncateKey(p.lastKeyName, 50))
 	}
 
 	if special {
@@ -36,15 +38,29 @@ func (p *RDBParser) readStringFull() (string, error) {
 		return "", nil
 	}
 
+	// Log before attempting large reads (>10KB) to diagnose hangs
+	if length > 10240 {
+		log.Printf("  [FLOW-%d] [READ-DEBUG] About to read %d bytes for key '%s'",
+			p.flowID, length, truncateKey(p.lastKeyName, 50))
+	}
+
 	buf := make([]byte, length)
 	n, err := io.ReadFull(p.reader, buf)
 	if err != nil {
 		// Enhanced error logging for EOF issues
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
 			log.Printf("  [FLOW-%d] ✗ readStringFull: expected %d bytes, got %d bytes, special=%v", p.flowID, length, n, special)
+			log.Printf("  [FLOW-%d] ✗ Context: lastKey='%s', keysProcessed=%d, lastActivity=%v ago",
+				p.flowID, truncateKey(p.lastKeyName, 50), p.keysProcessed, time.Since(p.lastActivityTime))
 			return "", fmt.Errorf("failed to read string data: expected %d bytes, got %d bytes (stream ended prematurely, possible network issue or Dragonfly bug): %w", length, n, err)
 		}
 		return "", fmt.Errorf("failed to read string data: %w", err)
+	}
+
+	// Log completion of large reads
+	if length > 10240 {
+		log.Printf("  [FLOW-%d] [READ-DEBUG] Successfully read %d bytes for key '%s'",
+			p.flowID, length, truncateKey(p.lastKeyName, 50))
 	}
 
 	return string(buf), nil
