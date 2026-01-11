@@ -3,16 +3,16 @@
 ########################################
 # Optional task name (used for log file prefix, can be overridden via --task-name)
 taskName: ""
-stateDir: ./out
-statusFile: ./out/status.json
+stateDir: ../out
+statusFile: ../out/status.json
 
 ########################################
 ##### 🗄️ Dragonfly Source #############
 ########################################
 source:
   type: dragonfly
-  addr: localhost:6380          # Replace with your Dragonfly address
-  password: ""                  # Optional password
+  addr: 10.46.128.12:7380       # Replace with your Dragonfly address
+  password: ""
   tls: false
 
 ########################################
@@ -20,15 +20,18 @@ source:
 ########################################
 target:
   type: redis-standalone
-  addr: localhost:6379          # Replace with your Redis address
-  password: ""                  # Optional password
+  addr: 10.180.7.93:6379
+  #  type: redis-cluster
+  #  addr: 10.180.50.231:6379
+  password: "pwd4dba"
   tls: false
 
 ########################################
 ##### 📊 Dashboard config ##############
 ########################################
+# Embedded dashboard listen address (empty to disable)
 dashboard:
-  addr: ":8080"                # Embedded dashboard listen address (empty to disable)
+  addr: ":7777"                
 
 ########################################
 ##### 💾 Checkpoint config #############
@@ -42,19 +45,24 @@ checkpoint:
 ##### 📝 log config ####################
 ########################################
 log:
-  dir: "logs"                # Relative to this config directory (e.g. ../logs)
-  level: "info"              # debug | info | warn | error
-  consoleEnabled: true        # Print highlights to stdout (false = silent)
+  dir: "../log"                # Relative to this config directory (e.g. ../log)
+  level: "debug"               # debug | info | warn | error
+  consoleEnabled: true         # Print highlights to stdout (false = silent)
 
 ########################################
 ##### ⚖️ Conflict Policy ##############
 ########################################
+# overwrite | panic | skip
+# overwrite: fastest path; incoming keys always replace existing ones without checks—ideal when the target DB can be fully overridden.
+# panic: safest; performs an EXISTS check and stops replication immediately if a duplicate key is found—use for pristine targets where any collision is a hard error.
+# skip: middle ground; duplicates are detected but silently skipped so existing target data wins—useful when you know the destination already holds valid values you don’t want to overwrite.
+# Heads-up: the skip policy performs an EXISTS check before every write, so it has the heaviest performance overhead and will slow down the migration the most.
 conflict:
-  policy: "overwrite"          # overwrite | panic | skip
+  policy: "overwrite"          
 
 ########################################
-##### 🛠️ Cold import / shake config ###
+##### 🛠️ Legacy shake placeholders ###
 ########################################
 migrate:
-  snapshotPath: ../tmp/placeholder.rdb    # Path to existing RDB (used by cold-import / legacy migrate)
-  shakeBinary: ../redis-shake-v4/redis-shake
+  snapshotPath: ../tmp/placeholder.rdb
+  shakeBinary: ../redis-shake-v4

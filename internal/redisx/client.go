@@ -35,9 +35,6 @@ type Client struct {
 	// RDB read timeout (configurable, default 60 seconds)
 	rdbTimeout time.Duration
 
-	// Stream read timeout (used for journal streaming, default 60 seconds, can be adjusted to 24h for long-lived connections)
-	streamTimeout time.Duration
-
 	mu     sync.Mutex
 	closed bool
 }
@@ -56,33 +53,29 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("redisx: dial %s failed: %w", cfg.Addr, err)
 	}
 
-	// Configure TCP keepalive for fast connection failure detection
+	// Enable TCP keepalive to align with Dragonfly's 30-second timeout detection
 	// and increase receive buffer to prevent Dragonfly's sink->Write() from blocking
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		// CRITICAL: Configure aggressive TCP Keepalive parameters
-		// Goal: Detect connection failure within 60 seconds (30s idle + 10s×3 probes)
-		// This prevents the replicator from blocking indefinitely when Dragonfly
-		// drops the connection due to slow writes.
-		keepAliveConfig := net.KeepAliveConfig{
-			Enable:   true,
-			Idle:     30 * time.Second, // Start probing after 30s of idle (aligned with Dragonfly's timeout)
-			Interval: 10 * time.Second, // Send probe every 10 seconds
-			Count:    3,                // Give up after 3 failed probes
-		}
-		if err := tcpConn.SetKeepAliveConfig(keepAliveConfig); err != nil {
+		// Enable keepalive
+		if err := tcpConn.SetKeepAlive(true); err != nil {
 			// Non-fatal; log a warning and continue
-			fmt.Fprintf(os.Stderr, "Warning: failed to configure TCP KeepAlive: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Warning: failed to enable TCP KeepAlive: %v\n", err)
+		} else if err := tcpConn.SetKeepAlivePeriod(30 * time.Second); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to set KeepAlive period: %v\n", err)
 		}
 
-		// CRITICAL: Increase receive buffer to 16MB
-		// Dragonfly's Channel buffer is only 2 elements, and sink->Write() blocks if
+		// CRITICAL: Increase receive buffer to 128MB
+		// Dragonfly's Channel buffer is only 2 elements (kChannelLen=2), and sink->Write() blocks if
 		// client doesn't read fast enough. With a large SO_RCVBUF, kernel can buffer
 		// more data, allowing Dragonfly to continue sending even if application is busy
 		// processing/writing to Redis.
 		//
-		// This prevents the 30-second timeout error:
-		//   "Master detected replication timeout, breaking full sync"
-		const recvBufferSize = 16 * 1024 * 1024 // 16MB
+		// Dragonfly monitors last_write_time_ns_ and breaks the connection if no write activity
+		// for 30 seconds (FLAGS_replication_timeout). Large TCP buffer prevents this timeout
+		// by allowing kernel to continue accepting data even when application is busy.
+		//
+		// Memory usage: 128MB × 8 FLOWs = 1GB kernel memory (acceptable)
+		const recvBufferSize = 128 * 1024 * 1024 // 128MB
 		if rawConn, err := tcpConn.SyscallConn(); err == nil {
 			_ = rawConn.Control(func(fd uintptr) {
 				// Set SO_RCVBUF on the socket file descriptor
@@ -94,24 +87,16 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 		}
 	}
 
-	// CRITICAL: Use large bufio.Reader buffer to reduce syscall overhead
-	// Default bufio.NewReader() uses only 4KB, causing frequent read() syscalls
-	// which slows down socket draining and causes Dragonfly Write() to block.
-	//
-	// With 1MB buffer:
-	//   - Fewer syscalls (1MB/4KB = 256x reduction)
-	//   - Faster socket draining
-	//   - Prevents Dragonfly 30s timeout from Write() blocking
-	const readerBufferSize = 1 * 1024 * 1024 // 1MB
-
+	// Use 1MB bufio.Reader to match high-throughput RDB streaming
+	// Default 4KB buffer causes excessive system calls and may contribute to read timeout issues
+	const bufSize = 1024 * 1024 // 1MB
 	client := &Client{
-		addr:          cfg.Addr,
-		password:      cfg.Password,
-		conn:          conn,
-		reader:        bufio.NewReaderSize(conn, readerBufferSize), // 1MB buffer (was 4KB)
-		timeout:       defaultTimeout,
-		rdbTimeout:    60 * time.Second, // fixed 60s for RDB snapshot reads
-		streamTimeout: 60 * time.Second, // default 60s, will be adjusted to 24h for journal streaming
+		addr:       cfg.Addr,
+		password:   cfg.Password,
+		conn:       conn,
+		reader:     bufio.NewReaderSize(conn, bufSize),
+		timeout:    defaultTimeout,
+		rdbTimeout: 60 * time.Second, // fixed 60s for snapshot/journal reads
 	}
 
 	if cfg.Password != "" {
@@ -144,15 +129,6 @@ func (c *Client) Ping() error {
 	return err
 }
 
-// SetStreamReadTimeout adjusts the read timeout for streaming operations.
-// Use this to switch from RDB phase (60s timeout) to Journal streaming phase (24h timeout).
-// Example: client.SetStreamReadTimeout(24 * time.Hour) before starting journal reception.
-func (c *Client) SetStreamReadTimeout(timeout time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.streamTimeout = timeout
-}
-
 // RawRead reads directly from the underlying connection (RDB snapshot/journal)
 // honoring the configured timeout (default 60s).
 func (c *Client) RawRead(buf []byte) (int, error) {
@@ -170,20 +146,17 @@ func (c *Client) RawRead(buf []byte) (int, error) {
 	return c.conn.Read(buf)
 }
 
-// Read implements io.Reader for RDB parsing and journal processing.
+// Read implements io.Reader for journal processing.
 // It reads via bufio.Reader to avoid skipping buffered bytes.
-// Uses streamTimeout (default 60s for RDB phase, can be adjusted to 24h for journal streaming).
 func (c *Client) Read(buf []byte) (int, error) {
 	c.mu.Lock()
-	timeout := c.streamTimeout
-	c.mu.Unlock()
-
+	defer c.mu.Unlock()
 	if c.closed {
 		return 0, errors.New("redisx: client closed")
 	}
-
-	// Apply read deadline based on current phase (RDB: 60s, Journal: 24h)
-	if err := c.conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+	// Journal streams are long-lived; relax the read deadline (~24h)
+	// and rely on TCP keepalive (30s) for liveness.
+	if err := c.conn.SetReadDeadline(time.Now().Add(24 * time.Hour)); err != nil {
 		return 0, err
 	}
 	// bufio.Reader manages buffering vs. the underlying conn

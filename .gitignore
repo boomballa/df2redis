@@ -76,3 +76,9 @@ bin/df2redis*
 
 # 
 .git
+
+# 
+.log/
+.log/*
+examples/logs/*
+examples/logslog/

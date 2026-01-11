@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"strconv"
 )
@@ -616,48 +617,54 @@ func parseIntset(data []byte) ([]string, error) {
 // parseStream handles stream types (RDB_TYPE_STREAM_LISTPACKS = 15, 19, 21)
 // Format: length + last_id + listpacks + consumer_groups
 func (p *RDBParser) parseStream(typeByte byte) (*StreamValue, error) {
-	// Read stream length (number of entries)
-	length, _, err := p.readLength()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read stream length: %w", err)
-	}
+	log.Printf("  [FLOW-%d] [STREAM-PARSE] Starting to parse stream key '%s', type=0x%02X",
+		p.flowID, truncateKey(p.lastKeyName, 50), typeByte)
 
-	// Read last stream ID (ms-seq format)
-	lastIDMs, _, err := p.readLength()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read last ID ms: %w", err)
-	}
-	lastIDSeq, _, err := p.readLength()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read last ID seq: %w", err)
-	}
-	lastID := fmt.Sprintf("%d-%d", lastIDMs, lastIDSeq)
+	// CRITICAL FIX: Dragonfly saves listpacks FIRST, not stream length!
+	// Correct order: listpacks count → listpack nodes → stream length → last_id
 
-	// Read number of listpacks
+	// 1. Read number of listpacks
 	numListpacks, _, err := p.readLength()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read num listpacks: %w", err)
 	}
+	log.Printf("  [FLOW-%d] [STREAM-PARSE] Number of listpacks: %d", p.flowID, numListpacks)
 
 	var messages []StreamMessage
 
-	// Parse each listpack
+	// 2. Parse each listpack node
 	for i := uint64(0); i < numListpacks; i++ {
-		// Read master entry (first message ID in this listpack)
-		masterMs, _, err := p.readLength()
-		if err != nil {
-			return nil, fmt.Errorf("failed to read master ID ms: %w", err)
+		log.Printf("  [FLOW-%d] [STREAM-PARSE] Processing listpack %d/%d", p.flowID, i+1, numListpacks)
+
+		// Each listpack node: Stream ID (key) + listpack data (value)
+		// Read the master entry ID (used as radix tree key)
+		streamIDKey := p.readString()
+		if len(streamIDKey) != 16 {
+			return nil, fmt.Errorf("stream node key is not 16 bytes: got %d bytes", len(streamIDKey))
 		}
-		masterSeq, _, err := p.readLength()
-		if err != nil {
-			return nil, fmt.Errorf("failed to read master ID seq: %w", err)
-		}
+		log.Printf("  [FLOW-%d] [STREAM-PARSE] Listpack %d key size: %d bytes", p.flowID, i+1, len(streamIDKey))
 
 		// Read listpack data
 		listpackBytes := p.readString()
+		log.Printf("  [FLOW-%d] [STREAM-PARSE] Listpack %d data size: %d bytes", p.flowID, i+1, len(listpackBytes))
+
+		if len(listpackBytes) == 0 {
+			return nil, fmt.Errorf("listpack %d is empty", i+1)
+		}
+
 		entries, err := parseListpack([]byte(listpackBytes))
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse listpack: %w", err)
+			return nil, fmt.Errorf("failed to parse listpack %d: %w", i+1, err)
+		}
+		log.Printf("  [FLOW-%d] [STREAM-PARSE] Listpack %d parsed: %d entries", p.flowID, i+1, len(entries))
+
+		// Extract master ID (ms and seq) from the 16-byte streamIDKey (big endian)
+		var masterMs, masterSeq uint64
+		if len(streamIDKey) == 16 {
+			// Parse as big endian
+			masterMs = binary.BigEndian.Uint64([]byte(streamIDKey[0:8]))
+			masterSeq = binary.BigEndian.Uint64([]byte(streamIDKey[8:16]))
+			log.Printf("  [FLOW-%d] [STREAM-PARSE] Listpack %d master ID: %d-%d", p.flowID, i+1, masterMs, masterSeq)
 		}
 
 		// Parse listpack entries into stream messages
@@ -668,7 +675,7 @@ func (p *RDBParser) parseStream(typeByte byte) (*StreamValue, error) {
 
 		// First entry is the count
 		idx := 1
-		
+
 		// Next entries are master fields (field names that apply to all messages in this listpack)
 		var masterFields []string
 		if idx < len(entries) {
@@ -755,45 +762,150 @@ func (p *RDBParser) parseStream(typeByte byte) (*StreamValue, error) {
 		}
 	}
 
-	// Skip consumer groups (not needed for basic migration)
-	// Read number of consumer groups
+	log.Printf("  [FLOW-%d] [STREAM-PARSE] Parsed %d messages from listpacks", p.flowID, len(messages))
+
+	// 3. Read stream metadata (AFTER all listpacks)
+	// Read stream length (total number of entries)
+	length, _, err := p.readLength()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read stream length: %w", err)
+	}
+	log.Printf("  [FLOW-%d] [STREAM-PARSE] Stream length: %d entries", p.flowID, length)
+
+	// 4. Read last stream ID
+	lastIDMs, _, err := p.readLength()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read last ID ms: %w", err)
+	}
+	lastIDSeq, _, err := p.readLength()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read last ID seq: %w", err)
+	}
+	lastID := fmt.Sprintf("%d-%d", lastIDMs, lastIDSeq)
+	log.Printf("  [FLOW-%d] [STREAM-PARSE] Last ID: %s", p.flowID, lastID)
+
+	// 5. Read V2+ fields (if applicable)
+	if typeByte >= RDB_TYPE_STREAM_LISTPACKS_2 {
+		// First ID
+		firstIDMs, _, _ := p.readLength()
+		firstIDSeq, _, _ := p.readLength()
+		log.Printf("  [FLOW-%d] [STREAM-PARSE] First ID: %d-%d", p.flowID, firstIDMs, firstIDSeq)
+
+		// Max deleted entry ID
+		maxDelMs, _, _ := p.readLength()
+		maxDelSeq, _, _ := p.readLength()
+		log.Printf("  [FLOW-%d] [STREAM-PARSE] Max deleted ID: %d-%d", p.flowID, maxDelMs, maxDelSeq)
+
+		// Entries added
+		entriesAdded, _, _ := p.readLength()
+		log.Printf("  [FLOW-%d] [STREAM-PARSE] Entries added: %d", p.flowID, entriesAdded)
+	}
+
+	// 6. Read number of consumer groups
 	numGroups, _, err := p.readLength()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read num consumer groups: %w", err)
 	}
+	log.Printf("  [FLOW-%d] [STREAM-PARSE] Number of consumer groups: %d", p.flowID, numGroups)
 
 	// Skip consumer group data
 	for i := uint64(0); i < numGroups; i++ {
+		log.Printf("  [FLOW-%d] [STREAM-PARSE] Processing consumer group %d/%d", p.flowID, i+1, numGroups)
+
 		// Group name
-		p.readString()
+		groupName := p.readString()
+		log.Printf("  [FLOW-%d] [STREAM-PARSE] Group %d name: '%s'", p.flowID, i+1, groupName)
+
 		// Last delivered ID (ms + seq)
 		p.readLength()
 		p.readLength()
-		// PEL (pending entry list)
-		pelSize, _, _ := p.readLength()
-		for j := uint64(0); j < pelSize; j++ {
-			// Stream ID
-			p.readInt64()
-			// Delivery time
-			p.readInt64()
-			// Delivery count
-			p.readLength()
+
+		// V2+ fields
+		if typeByte >= RDB_TYPE_STREAM_LISTPACKS_2 {
+			// Entries read
+			entriesRead, _, _ := p.readLength()
+			log.Printf("  [FLOW-%d] [STREAM-PARSE] Group %d entries_read: %d", p.flowID, i+1, entriesRead)
 		}
+
+		// Global PEL (pending entry list)
+		pelSize, _, _ := p.readLength()
+		log.Printf("  [FLOW-%d] [STREAM-PARSE] Group %d PEL size: %d", p.flowID, i+1, pelSize)
+
+		for j := uint64(0); j < pelSize; j++ {
+			// CRITICAL FIX: Stream ID is 16 bytes (sizeof(streamID)), not 8!
+			// Read as raw bytes (big endian format)
+			streamIDBytes := make([]byte, 16)
+			for k := 0; k < 16; k++ {
+				b, err := p.readByte()
+				if err != nil {
+					return nil, fmt.Errorf("failed to read PEL stream ID byte %d: %w", k, err)
+				}
+				streamIDBytes[k] = b
+			}
+
+			// Delivery time (8 bytes, little endian)
+			deliveryTime, err := p.readInt64()
+			if err != nil {
+				return nil, fmt.Errorf("failed to read PEL delivery time: %w", err)
+			}
+
+			// Delivery count (length encoded)
+			deliveryCount, _, err := p.readLength()
+			if err != nil {
+				return nil, fmt.Errorf("failed to read PEL delivery count: %w", err)
+			}
+
+			if j < 3 { // Log first 3 entries only
+				log.Printf("  [FLOW-%d] [STREAM-PARSE] Group %d PEL[%d]: delivery_time=%d, count=%d",
+					p.flowID, i+1, j, deliveryTime, deliveryCount)
+			}
+		}
+
 		// Consumers
 		numConsumers, _, _ := p.readLength()
+		log.Printf("  [FLOW-%d] [STREAM-PARSE] Group %d has %d consumers", p.flowID, i+1, numConsumers)
+
 		for j := uint64(0); j < numConsumers; j++ {
 			// Consumer name
-			p.readString()
-			// Seen time
-			p.readInt64()
+			consumerName := p.readString()
+			log.Printf("  [FLOW-%d] [STREAM-PARSE] Group %d consumer %d: '%s'", p.flowID, i+1, j+1, consumerName)
+
+			// Seen time (8 bytes, little endian)
+			seenTime, err := p.readInt64()
+			if err != nil {
+				return nil, fmt.Errorf("failed to read consumer seen_time: %w", err)
+			}
+			log.Printf("  [FLOW-%d] [STREAM-PARSE] Group %d consumer %d seen_time: %d", p.flowID, i+1, j+1, seenTime)
+
+			// Active time (V3+ only)
+			if typeByte >= RDB_TYPE_STREAM_LISTPACKS_3 {
+				activeTime, err := p.readInt64()
+				if err != nil {
+					return nil, fmt.Errorf("failed to read consumer active_time: %w", err)
+				}
+				log.Printf("  [FLOW-%d] [STREAM-PARSE] Group %d consumer %d active_time: %d", p.flowID, i+1, j+1, activeTime)
+			}
+
 			// Consumer PEL
 			consumerPEL, _, _ := p.readLength()
+			log.Printf("  [FLOW-%d] [STREAM-PARSE] Group %d consumer %d PEL size: %d", p.flowID, i+1, j+1, consumerPEL)
+
 			for k := uint64(0); k < consumerPEL; k++ {
-				// Stream ID
-				p.readInt64()
+				// CRITICAL FIX: Consumer PEL only has Stream ID (16 bytes)
+				// NO delivery_time, NO delivery_count!
+				streamIDBytes := make([]byte, 16)
+				for m := 0; m < 16; m++ {
+					b, err := p.readByte()
+					if err != nil {
+						return nil, fmt.Errorf("failed to read consumer PEL stream ID byte %d: %w", m, err)
+					}
+					streamIDBytes[m] = b
+				}
 			}
 		}
 	}
+
+	log.Printf("  [FLOW-%d] [STREAM-PARSE] ✓ Successfully parsed stream key '%s'", p.flowID, truncateKey(p.lastKeyName, 50))
 
 	return &StreamValue{
 		Messages: messages,
