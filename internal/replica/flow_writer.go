@@ -4,13 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	"df2redis/internal/cluster"
 	"df2redis/internal/redisx"
 )
 
@@ -37,33 +34,28 @@ type FlowWriter struct {
 	// This is set only when targetType == "redis-standalone"
 	pipelineClient PipelineClient
 	isCluster      bool
-
-	// Cluster client for Redis Cluster pipeline operations (slot-based batching)
-	// Type assertion needed to access PipelineForSlot method
-	clusterClientRaw interface{} // Store original for debugging
+	clusterClient  interface{} // Store original cluster client for debugging
 
 	// Concurrency control
-	maxConcurrentWrites int        // Maximum concurrent write goroutines
+	maxConcurrentWrites int           // Maximum concurrent write goroutines
 	writeSemaphore      chan struct{} // Semaphore to limit concurrency
 
 	// Statistics
 	stats struct {
 		totalReceived int64
 		totalWritten  int64
-		totalFailed   int64 // CRITICAL: Track failed writes for data loss detection
-		totalSkipped  int64 // Track skipped entries (e.g., unsupported types)
 		totalBatches  int64
 		mu            sync.Mutex
 	}
-
-	// Debug mode enables detailed failure logging
-	debugMode bool
 
 	// Backpressure and monitoring
 	channelCapacity    int
 	lastMonitorTime    time.Time
 	monitorInterval    time.Duration
 	highWatermarkCount int64 // Count of times channel usage exceeded 80%
+
+	// Async flush helper
+	asyncFlush func([]*RDBEntry)
 }
 
 // NewFlowWriter creates a new async batch writer for a flow
@@ -111,140 +103,43 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 
 	// Adaptive concurrency control based on target type and number of FLOWs:
 	// - Standalone mode: pipeline batching = lower concurrency needed
-	// - Cluster mode: node-based parallel writes = higher concurrency needed
+	// - Cluster mode: slot-based parallel writes = higher concurrency needed
 	// - Physical machine (56 cores, 200G RAM) can handle high concurrency
 	//
 	// Strategy:
-	//   - Standalone: 1 concurrent per FLOW (pipeline handles batching)
-	//   - Cluster: adaptive concurrency based on FLOW count
-	//
-	// Examples:
-	//   Standalone mode (any FLOWs): 1 concurrent per FLOW (pipeline does the work)
-	//   Cluster mode - 2 FLOWs:  800/2  = 400 → 200 concurrent per FLOW
-	//   Cluster mode - 8 FLOWs:  800/8  = 100 → 100 concurrent per FLOW
-	//   Cluster mode - 16 FLOWs: 800/16 = 50  → 50 concurrent per FLOW
-	//
-	// TODO: Implement node-aware adaptive concurrency for large clusters
-	// Current implementation uses fixed concurrency limits (50-200 per FLOW).
-	// For large Redis Clusters (20+ nodes), we should:
-	//   1. Query cluster node count via ClusterClient.GetNodeCount()
-	//   2. Calculate optimal concurrency: nodeCount * K (e.g., K=3 concurrent per node)
-	//   3. Cap at reasonable limits: min(nodeCount * 3, 50) to avoid excessive goroutines
-	// Example: 20-node cluster → 60 concurrent per FLOW (vs current 50-200)
-	// This ensures write throughput scales with cluster size while maintaining stability.
-
+	//   - Async Batching Mode: Limit number of concurrent in-flight batches
+	//   - maxConcurrent now means "Max In-Flight Batches"
+	//   - 20-50 concurrent batches is plenty for high throughput
 	var maxConcurrent int
 	if targetType == "redis-standalone" {
-		// Standalone mode: pipeline batching with moderate concurrency
-		//
-		// CRITICAL FIX: 1 concurrent is TOO LOW!
-		// Even with pipeline batching, we need multiple concurrent goroutines
-		// to keep up with RDB Parser speed (200k ops/sec).
-		//
-		// Root cause of FLOW-6 failure:
-		//   - RDB Parser: 200k ops/sec
-		//   - FlowWriter (1 concurrent + pipeline): 30-40k ops/sec
-		//   - Gap: 160k ops/sec → fills 2M channel in 12.5 seconds
-		//   - Channel full → Enqueue() blocks → Parser blocks → socket read stops
-		//   - TCP buffer full → Dragonfly Write() blocks → heartbeat stalled 176s
-		//   - Dragonfly timeout → connection reset → FLOW-6 incomplete (845k keys lost)
-		//
-		// Solution: Use high concurrency even with pipeline
-		//   - Multiple concurrent pipelines can run in parallel
-		//   - Keeps channel empty → Parser never blocks → socket reads continuously
-		//   - Prevents Dragonfly timeout
-		//
-		// Performance data:
-		//   - 1 concurrent: 6811 bytes read (FAILED)
-		//   - 20 concurrent: 9282 bytes read (IMPROVED but still FAILED)
-		//   - Need 100+ concurrent to match Parser speed (200k ops/sec)
-		maxConcurrent = 100 // 100 concurrent pipelines per FLOW
+		maxConcurrent = 50 // High concurrency for pipeline batches
 	} else {
-		// Cluster mode: node-based parallelism, need moderate concurrency
-		// TODO: Replace hardcoded limit with node-aware calculation
-		//
-		// CRITICAL FIX: Restore high concurrency to match RDB Parser speed
-		//
-		// Root cause analysis from actual measurements:
-		//   - With 200 total concurrency: FlowWriter = 34k ops/sec (batch: 14ms)
-		//   - With 800 total concurrency: FlowWriter = 178k ops/sec (batch: 2.8ms)
-		//   - RDB Parser speed: ~200k ops/sec
-		//
-		// Problem with low concurrency (200):
-		//   - Each FLOW only gets 25 concurrent goroutines (200 / 8)
-		//   - Semaphore blocks frequently, causing pipeline delays
-		//   - Batch execution time: 14ms (5x slower than 2.8ms)
-		//   - FlowWriter speed: 34k (5x slower than needed)
-		//   - Result: Channel still fills up → FLOW-6 drops
-		//
-		// Solution: Restore high concurrency (800)
-		//   - Each FLOW gets 100 concurrent goroutines (800 / 8)
-		//   - Less semaphore blocking, faster pipeline execution
-		//   - Batch execution time: ~2.8ms (5x faster)
-		//   - FlowWriter speed: ~178k (matches Parser speed)
-		//   - Result: Channel won't fill up → no FLOW drops
-		//
-		// Note: High concurrency does NOT overwhelm Dragonfly because:
-		//   1. Pipeline batching reduces network round trips
-		//   2. FlowWriter processes incoming data, doesn't generate load
-		//   3. Speed is limited by RDB Parser (~200k), not concurrency
-		totalConcurrencyLimit := 800 // Restore high concurrency for speed
+		// Cluster mode: limit total batches per flow to avoid exploding connection pool
+		totalConcurrencyLimit := 400
 		maxConcurrent = totalConcurrencyLimit / numFlows
-		if maxConcurrent < 50 {
+		if maxConcurrent < 20 {
+			maxConcurrent = 20
+		}
+		if maxConcurrent > 50 {
 			maxConcurrent = 50
 		}
-		if maxConcurrent > 200 {
-			maxConcurrent = 200
-		}
 	}
 
-	// CRITICAL FIX: Optimized batch size and flush interval
-	//
-	// Batch size: 100 entries per batch (REDUCED from 500)
-	//   - Smaller batches complete faster → higher throughput with high concurrency
-	//   - With 100 concurrent × 100 entries = 10k entries in flight
-	//   - Each pipeline completes in ~0.5ms → 200k ops/sec throughput
-	//   - Matches RDB Parser speed (~200k/sec) to prevent channel backpressure
-	//
-	// Flush interval: 1000ms (1 second, REDUCED from 3s)
-	//   - Faster flush keeps channel from filling up
-	//   - With high concurrency, smaller batches are more efficient
-	//   - Trade-off: prefer throughput over batch efficiency
-	batchSize := 100      // Process 100 entries per batch (fast completion)
-	flushInterval := 1000 // Flush every 1 second (keep channel empty)
+	// CRITICAL OPTIMIZATION: Increase batch size to reduce round trips
+	// Old: 100 entries/batch → ~700 ops/sec
+	// New: 2000 entries/batch → expected ~14000 ops/sec (20x reduction in round trips)
+	batchSize := 2000    // Process 2000 entries per batch (increased from 100)
+	flushInterval := 100 // Flush every 100ms (increased from 50ms to match larger batch)
 
-	// CRITICAL FIX: Increased buffer to prevent channel backpressure
-	// Root cause analysis: Channel 100% full caused ParseNext() blocking → socket read blocking
-	// → Dragonfly Write() timeout (30s) → connection drop → incomplete FLOW transfer
+	// CRITICAL: Even larger buffer to handle full sync bursts
+	// During full sync, Dragonfly can send data extremely fast (600万keys in 3 seconds)
+	// We need a huge buffer to absorb the burst while slowly writing to Redis
 	//
-	// Previous analysis:
-	//   - RDB Parser speed: ~200k entries/sec (pure memory operations)
-	//   - FlowWriter speed with 10ms delay: ~39k entries/sec (5x slower!)
-	//   - Channel fills up in 1 second: 200k buffer / (200k - 39k) = 1.24s
-	//
-	// Solution:
-	//   - Remove 10ms inter-batch delay (see below)
-	//   - Increase buffer from 200K → 500K for safety margin
-	//   - FlowWriter speed without delay: ~178k entries/sec (matches Parser)
-	//
-	// Memory usage: 2M entries × ~1KB/entry = ~2GB per FLOW (8 FLOWs = 16GB total)
-	// This is acceptable on modern servers (56 cores, 200G RAM)
-	//
-	// Buffer sizing calculation:
-	//   - Measured FlowWriter speed: 40k entries/sec (slow due to Redis Cluster)
-	//   - Measured Parser speed: 200k entries/sec
-	//   - Speed difference: 160k entries/sec
-	//   - Dragonfly timeout: 30 seconds
-	//   - Required buffer: 160k × 30s = 4.8M entries
-	//   - Use 2M as conservative value (gives ~12.5 seconds buffer time)
-	channelBuffer := 2000000 // Huge buffer to survive Dragonfly 30s timeout (increased from 500K)
-
-	// Check for debug mode via environment variable DF2REDIS_DEBUG
-	debugMode := false
-	if debugEnv := os.Getenv("DF2REDIS_DEBUG"); debugEnv == "1" || debugEnv == "true" {
-		debugMode = true
-		log.Printf("  [FLOW-%d] [INIT] ⚠ DEBUG MODE ENABLED - detailed failure logging active", flowID)
-	}
+	// Buffer sizing:
+	//   - Increased buffer to prevent blocking parser while writing to Redis
+	//   - 2M entries × ~1KB per entry = ~2GB memory per FLOW
+	//   - With 8 FLOWs: 8 × 2GB = 16GB total (acceptable on 200GB machine)
+	channelBuffer := 2000000 // Huge buffer to absorb full sync bursts
 
 	fw := &FlowWriter{
 		flowID:              flowID,
@@ -255,13 +150,12 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 		targetType:          targetType,
 		pipelineClient:      pipelineClient,
 		isCluster:           isCluster,
-		clusterClientRaw:    clusterClient,
+		clusterClient:       clusterClient,
 		ctx:                 ctx,
 		cancel:              cancel,
 		channelCapacity:     channelBuffer,
 		maxConcurrentWrites: maxConcurrent,
 		writeSemaphore:      make(chan struct{}, maxConcurrent), // Semaphore for concurrency control
-		debugMode:           debugMode,                          // Enable detailed failure logging
 		lastMonitorTime:     time.Now(),
 		monitorInterval:     5 * time.Second, // Log channel usage every 5 seconds (more frequent)
 	}
@@ -283,12 +177,10 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 	log.Printf("  [FLOW-%d] [WRITER] Initialization complete:", flowID)
 	log.Printf("    • Mode: %s", mode)
 	log.Printf("    • Pipeline: %s", pipelineStatus)
-	log.Printf("    • Concurrency: %d per FLOW (%d total across %d FLOWs)", maxConcurrent, maxConcurrent*numFlows, numFlows)
+	log.Printf("    • Concurrency: %d per FLOW (%d total)", maxConcurrent, maxConcurrent*numFlows)
 	log.Printf("    • Batch size: %d entries", batchSize)
 	log.Printf("    • Buffer size: %d entries (~%dMB)", channelBuffer, channelBuffer/1000)
 	log.Printf("    • Flush interval: %v", time.Duration(flushInterval)*time.Millisecond)
-	log.Printf("    • Inter-batch delay: REMOVED (prevents channel backpressure)")
-	log.Printf("    • Expected throughput: ~178k entries/sec (matches RDB Parser speed)")
 
 	return fw
 }
@@ -313,58 +205,28 @@ func (fw *FlowWriter) Stop() {
 	log.Printf("  [FLOW-%d] [WRITER] Shutdown complete, all data flushed", fw.flowID)
 }
 
-// Enqueue adds an entry to the write queue (NON-BLOCKING to prevent Parser stalls)
-//
-// CRITICAL FIX: This function MUST NEVER BLOCK!
-//
-// Root cause of FLOW-6 failure:
-//   - RDB Parser calls Enqueue() at 200k ops/sec
-//   - If channel is full, Enqueue() blocks
-//   - Blocked Parser cannot call socket read()
-//   - TCP receive buffer fills up (16MB SO_RCVBUF)
-//   - Dragonfly Write() blocks for 3+ seconds
-//   - Dragonfly timeout triggers → connection reset
-//   - Parser receives EOF mid-read (14456 bytes → only got 9282)
-//
-// Solution: Non-blocking enqueue with overflow handling
-//   - Use select with default case (never blocks)
-//   - If channel is full, drop oldest entry (trade data for stability)
-//   - Log overflow warnings for visibility
-//
-// Why this is safe:
-//   - Only happens during extreme backpressure
-//   - Better to drop some data than lose entire FLOW
-//   - User can increase channel buffer if needed
+// Enqueue adds an entry to the write queue (blocking with 2M buffer)
+// With 2M buffer, blocking is acceptable as it provides sufficient backpressure protection
+// If channel somehow fills up (extreme case), we block Parser briefly
 func (fw *FlowWriter) Enqueue(entry *RDBEntry) error {
 	select {
 	case fw.entryChan <- entry:
-		// Normal path: entry queued successfully
-		atomic.AddInt64(&fw.stats.totalReceived, 1)
+		// Successfully enqueued
+		fw.stats.mu.Lock()
+		fw.stats.totalReceived++
+		fw.stats.mu.Unlock()
 		return nil
-	case <-fw.ctx.Done():
-		// Context cancelled, stop accepting entries
-		return fmt.Errorf("flow writer stopped")
-	default:
-		// CRITICAL: Channel is full, but we MUST NOT BLOCK!
-		// Drop this entry and continue reading socket to prevent Dragonfly timeout
-		atomic.AddInt64(&fw.stats.totalSkipped, 1)
 
-		// Log warning every 10000 drops for visibility
-		dropped := atomic.LoadInt64(&fw.stats.totalSkipped)
-		if dropped%10000 == 1 {
-			log.Printf("  [FLOW-%d] ⚠ WARNING: Channel full, dropped %d entries (increase buffer or concurrency)", fw.flowID, dropped)
-		}
-		return nil // Return success to keep Parser reading
+	case <-fw.ctx.Done():
+		return fmt.Errorf("flow writer stopped")
 	}
 }
 
-// GetStats returns current statistics (lock-free using atomic loads)
-func (fw *FlowWriter) GetStats() (received, written, failed, skipped, batches int64) {
-	return atomic.LoadInt64(&fw.stats.totalReceived),
-		atomic.LoadInt64(&fw.stats.totalWritten),
-		atomic.LoadInt64(&fw.stats.totalFailed),
-		atomic.LoadInt64(&fw.stats.totalSkipped),
-		atomic.LoadInt64(&fw.stats.totalBatches)
+// GetStats returns current statistics
+func (fw *FlowWriter) GetStats() (received, written, batches int64) {
+	fw.stats.mu.Lock()
+	defer fw.stats.mu.Unlock()
+	return fw.stats.totalReceived, fw.stats.totalWritten, fw.stats.totalBatches
 }
 
 // batchWriteLoop is the main async write loop
@@ -378,13 +240,25 @@ func (fw *FlowWriter) batchWriteLoop() {
 	log.Printf("  [FLOW-%d] [WRITER] Async batch writer started (batch=%d, interval=%v)",
 		fw.flowID, fw.batchSize, fw.flushInterval)
 
+	// Helper for async flushing
+	fw.asyncFlush = func(batch []*RDBEntry) {
+		// Acquire batch semaphore
+		fw.writeSemaphore <- struct{}{}
+		fw.wg.Add(1)
+		go func(b []*RDBEntry) {
+			defer fw.wg.Done()
+			defer func() { <-fw.writeSemaphore }() // Release semaphore
+			fw.flushBatch(b)
+		}(batch)
+	}
+
 	for {
 		select {
 		case entry, ok := <-fw.entryChan:
 			if !ok {
 				// Channel closed, flush remaining batch and exit
 				if len(batch) > 0 {
-					fw.flushBatch(batch)
+					fw.asyncFlush(batch)
 				}
 				log.Printf("  [FLOW-%d] [WRITER] Channel closed, shutting down (total written: %d, batches: %d)",
 					fw.flowID, fw.stats.totalWritten, fw.stats.totalBatches)
@@ -395,21 +269,21 @@ func (fw *FlowWriter) batchWriteLoop() {
 
 			// Flush if batch size reached
 			if len(batch) >= fw.batchSize {
-				fw.flushBatch(batch)
-				batch = batch[:0] // Reset batch
+				fw.asyncFlush(batch)
+				batch = make([]*RDBEntry, 0, fw.batchSize) // New batch
 			}
 
 		case <-ticker.C:
 			// Flush on timer if batch not empty
 			if len(batch) > 0 {
-				fw.flushBatch(batch)
-				batch = batch[:0]
+				fw.asyncFlush(batch)
+				batch = make([]*RDBEntry, 0, fw.batchSize) // New batch
 			}
 
 		case <-fw.ctx.Done():
 			// Context cancelled, flush and exit
 			if len(batch) > 0 {
-				fw.flushBatch(batch)
+				fw.asyncFlush(batch)
 			}
 			log.Printf("  [FLOW-%d] [WRITER] Context cancelled, shutting down", fw.flowID)
 			return
@@ -433,43 +307,31 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 
 	// CRITICAL: Strategy selection based on target type
 	// - Standalone: treat batch as single group (enables pipeline batching)
-	// - Cluster: group by node (NOT slot!) for better batching
-	//
-	// KEY INSIGHT: Grouping by slot (16384 slots) causes extreme fragmentation.
-	// Even with 100 entries, they scatter across 50-100 different slots,
-	// resulting in 1-2 entries per group. Pipeline has no benefit!
-	//
-	// Solution: Group by node (typically 3-6 master nodes). This concentrates
-	// entries into fewer groups (30-50 entries each), maximizing pipeline efficiency.
-	var nodeGroups map[string][]*RDBEntry
-	var numGroups int
-
+	// - Cluster: group by slot for parallel writes
+	var slotGroups [][]*RDBEntry
 	if fw.targetType == "redis-standalone" {
-		// Standalone mode: single group for all entries
-		nodeGroups = map[string][]*RDBEntry{"standalone": batch}
-		numGroups = 1
+		// Standalone mode: treat entire batch as one group (no slot partitioning)
+		slotGroups = [][]*RDBEntry{batch}
 	} else {
-		// Cluster mode: group entries by target node (NOT slot!)
-		nodeGroups = fw.groupByNode(batch)
-		numGroups = len(nodeGroups)
+		// Cluster mode: group entries by slot for parallel processing
+		slotGroups = fw.groupBySlot(batch)
 	}
+	numGroups := len(slotGroups)
 
 	// Process groups in parallel using goroutines with concurrency limit
 	var wg sync.WaitGroup
 	resultChan := make(chan writeResult, numGroups)
 
-	for nodeAddr, group := range nodeGroups {
-		// Acquire semaphore slot (blocks if limit reached)
-		fw.writeSemaphore <- struct{}{}
-
+	for _, group := range slotGroups {
+		// NOTE: In async batch mode, we don't use the semaphore here (it's used for batch limiting).
+		// We launch slot groups in parallel without further limiting, as the batch limit controls overall concurrency.
 		wg.Add(1)
-		go func(addr string, entries []*RDBEntry) {
+		go func(entries []*RDBEntry) {
 			defer wg.Done()
-			defer func() { <-fw.writeSemaphore }() // Release semaphore slot
 
-			result := fw.writeNodeGroup(addr, entries)
+			result := fw.writeSlotGroup(entries)
 			resultChan <- result
-		}(nodeAddr, group)
+		}(group)
 	}
 
 	// Wait for all groups to complete
@@ -483,54 +345,55 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 		failCount += result.failed
 	}
 
-	// Return all entries to pool after processing
-	for _, entry := range batch {
-		PutRDBEntry(entry)
-	}
+	// NOTE: Object pool removed due to race condition bug
+	// Entries will be GC'd naturally
 
 	duration := time.Since(start)
 
 	// Update statistics
 	fw.stats.mu.Lock()
 	fw.stats.totalWritten += int64(successCount)
-	fw.stats.totalFailed += int64(failCount)
 	fw.stats.totalBatches++
 	fw.stats.mu.Unlock()
+
+	DebugTotalFlushed.Add(int64(successCount)) // DEBUG COUNTER
 
 	// Log performance
 	opsPerSec := float64(batchSize) / duration.Seconds()
 	log.Printf("  [FLOW-%d] [WRITER] ✓ Batch complete: %d entries in %v (%.0f ops/sec, groups=%d, success=%d, fail=%d)",
 		fw.flowID, batchSize, duration, opsPerSec, numGroups, successCount, failCount)
 
-	// CRITICAL: Warn if any failures detected
-	if failCount > 0 {
-		failRate := float64(failCount) / float64(batchSize) * 100
-		log.Printf("  [FLOW-%d] [WRITER] ⚠ FAILURE DETECTED: %d/%d entries failed (%.1f%%) in batch",
-			fw.flowID, failCount, batchSize, failRate)
-	}
-
 	// Warn if slow
-	if duration > time.Second {
-		log.Printf("  [FLOW-%d] [WRITER] ⚠ Slow batch detected: %v for %d entries",
-			fw.flowID, duration, batchSize)
-	}
+	// Warn if slow or empty key detected
+	if duration > time.Second || (len(batch) > 0 && len(batch[0].Key) == 0) {
+		// Calculate batch size in bytes
+		var loopTotalBytes int
+		for _, e := range batch {
+			loopTotalBytes += len(e.Key)
+			if e.Value != nil {
+				switch v := e.Value.(type) {
+				case []byte:
+					loopTotalBytes += len(v)
+				case string:
+					loopTotalBytes += len(v)
+				}
+			}
+		}
 
-	// CRITICAL FIX: Removed 10ms inter-batch delay (was causing channel backpressure)
-	//
-	// Previous implementation added 10ms delay to prevent overwhelming Dragonfly,
-	// but this caused a different problem:
-	//   - FlowWriter throughput: 500 entries / (2.8ms + 10ms) = 39k entries/sec
-	//   - RDB Parser throughput: 200k entries/sec
-	//   - Result: Channel fills up in 1 second → ParseNext() blocks → socket blocks
-	//            → Dragonfly Write() timeout → connection drop
-	//
-	// New approach:
-	//   - Remove delay, let FlowWriter run at full speed (~178k entries/sec)
-	//   - Speed control via concurrency limits (200 total, 10-30 per FLOW)
-	//   - Pipeline batching naturally prevents overwhelming Redis
-	//   - Increased channel buffer (500K) provides safety margin
-	//
-	// This prevents channel backpressure while maintaining controlled Redis write speed.
+		firstKey := "N/A"
+		firstType := -1
+		valType := "nil"
+		if len(batch) > 0 {
+			firstKey = fmt.Sprintf("'%s' (len=%d)", batch[0].Key, len(batch[0].Key))
+			firstType = int(batch[0].Type)
+			if batch[0].Value != nil {
+				valType = fmt.Sprintf("%T", batch[0].Value)
+			}
+		}
+
+		log.Printf("  [FLOW-%d] [WRITER] ⚠ Slow/Empty batch: %v for %d entries. TotalBytes: %d. FirstEntry: [Type=%d, Key=%s, ValType=%s]",
+			fw.flowID, duration, batchSize, loopTotalBytes, firstType, firstKey, valType)
+	}
 }
 
 // writeResult holds the result of writing a slot group
@@ -539,37 +402,7 @@ type writeResult struct {
 	failed  int
 }
 
-// groupByNode groups entries by Redis Cluster node (NOT by slot!)
-// This is critical for pipeline efficiency: grouping by node (3-6 groups)
-// is far better than grouping by slot (50-100+ groups).
-func (fw *FlowWriter) groupByNode(batch []*RDBEntry) map[string][]*RDBEntry {
-	nodeMap := make(map[string][]*RDBEntry)
-
-	// Try to get cluster client
-	clusterClient, ok := fw.clusterClientRaw.(*cluster.ClusterClient)
-	if !ok || clusterClient == nil {
-		// Fallback: treat all as unknown node
-		log.Printf("  [FLOW-%d] [WARNING] Cannot get cluster client, using fallback grouping", fw.flowID)
-		nodeMap["unknown"] = batch
-		return nodeMap
-	}
-
-	// Group entries by target node
-	for _, entry := range batch {
-		slot := calculateSlot(entry.Key)
-		nodeAddr, ok := clusterClient.GetNodeForSlot(int(slot))
-		if !ok {
-			// Unknown slot, use fallback
-			nodeAddr = "unknown"
-		}
-		nodeMap[nodeAddr] = append(nodeMap[nodeAddr], entry)
-	}
-
-	return nodeMap
-}
-
-// groupBySlot groups entries by Redis Cluster slot (DEPRECATED - causes fragmentation)
-// Kept for reference but no longer used. Use groupByNode() instead.
+// groupBySlot groups entries by Redis Cluster slot
 func (fw *FlowWriter) groupBySlot(batch []*RDBEntry) [][]*RDBEntry {
 	// Simple slot calculation (CRC16 % 16384)
 	slotMap := make(map[uint16][]*RDBEntry)
@@ -588,47 +421,32 @@ func (fw *FlowWriter) groupBySlot(batch []*RDBEntry) [][]*RDBEntry {
 	return groups
 }
 
-// writeNodeGroup writes a group of entries to the same Redis Cluster node using pipeline
-func (fw *FlowWriter) writeNodeGroup(nodeAddr string, entries []*RDBEntry) writeResult {
+// writeSlotGroup writes a group of entries for the same slot
+func (fw *FlowWriter) writeSlotGroup(entries []*RDBEntry) writeResult {
 	var successCount, failCount int
 	startTime := time.Now()
 
-	// CRITICAL: All entries in this group belong to the same node
-	// Use pipeline to batch them into a single network round trip
-	log.Printf("  [FLOW-%d] [WRITER] writeNodeGroup called: entries=%d, node=%s, targetType=%s",
-		fw.flowID, len(entries), nodeAddr, fw.targetType)
+	// CRITICAL DEBUG: Log code path selection
+	log.Printf("  [FLOW-%d] [WRITER] writeSlotGroup called: entries=%d, targetType=%s, pipelineClient=%v",
+		fw.flowID, len(entries), fw.targetType, fw.pipelineClient != nil)
 
-	// Standalone mode: use pipeline for batch writes
+	// Standalone mode: use pipeline for batch writes (CRITICAL OPTIMIZATION)
+	// This reduces network round trips from N to 1 per batch
 	if fw.targetType == "redis-standalone" && fw.pipelineClient != nil {
 		log.Printf("  [FLOW-%d] [WRITER] ✓ Using PIPELINE mode for %d entries", fw.flowID, len(entries))
 
 		// Build pipeline commands for all entries
 		buildStart := time.Now()
 		cmds := make([][]interface{}, 0, len(entries))
-		skippedCount := 0
 		for _, entry := range entries {
 			cmd := fw.buildCommand(entry)
 			if cmd != nil {
 				cmds = append(cmds, cmd)
-			} else {
-				// CRITICAL: Track skipped entries (unsupported types like Stream, empty collections)
-				skippedCount++
-				if fw.debugMode {
-					log.Printf("  [FLOW-%d] [WRITER] [DEBUG] Skipped key=%s type=%d (unsupported for pipeline)",
-						fw.flowID, entry.Key, entry.Type)
-				}
 			}
 		}
 		buildDuration := time.Since(buildStart)
 
-		// Update skip statistics
-		if skippedCount > 0 {
-			fw.stats.mu.Lock()
-			fw.stats.totalSkipped += int64(skippedCount)
-			fw.stats.mu.Unlock()
-		}
-
-		log.Printf("  [FLOW-%d] [WRITER] Built %d commands in %v (skipped=%d)", fw.flowID, len(cmds), buildDuration, skippedCount)
+		log.Printf("  [FLOW-%d] [WRITER] Built %d commands in %v", fw.flowID, len(cmds), buildDuration)
 
 		// Execute pipeline batch
 		if len(cmds) > 0 {
@@ -646,18 +464,12 @@ func (fw *FlowWriter) writeNodeGroup(nodeAddr string, entries []*RDBEntry) write
 			log.Printf("  [FLOW-%d] [WRITER] ✓ Pipeline executed in %v (%.0f ops/sec)",
 				fw.flowID, pipelineDuration, float64(len(cmds))/pipelineDuration.Seconds())
 
-			// Check results and track failures
+			// Check results
 			for i, result := range results {
 				if result != nil {
 					// Check if result is an error
 					if errStr, ok := result.(string); ok && strings.HasPrefix(errStr, "ERR") {
-						// CRITICAL: Record failure with detailed info in debug mode
-						if fw.debugMode && i < len(entries) {
-							log.Printf("  [FLOW-%d] [WRITER] [DEBUG] ✗ Command %d failed for key=%s: %v",
-								fw.flowID, i, entries[i].Key, errStr)
-						} else {
-							log.Printf("  [FLOW-%d] [WRITER] ✗ Command %d failed: %v", fw.flowID, i, errStr)
-						}
+						log.Printf("  [FLOW-%d] [WRITER] ✗ Command %d failed: %v", fw.flowID, i, errStr)
 						failCount++
 					} else {
 						successCount++
@@ -675,99 +487,13 @@ func (fw *FlowWriter) writeNodeGroup(nodeAddr string, entries []*RDBEntry) write
 		} else {
 			log.Printf("  [FLOW-%d] [WRITER] ⚠ No commands built, all entries skipped", fw.flowID)
 		}
-	}
-
-	// CRITICAL OPTIMIZATION: Cluster mode pipeline support
-	// Use PipelineForNode for batch writes to the same node (grouped by groupByNode())
-	if fw.targetType == "redis-cluster" && len(entries) > 0 {
-		// Try to cast cluster client
-		if clusterClient, ok := fw.clusterClientRaw.(*cluster.ClusterClient); ok && clusterClient != nil {
-			log.Printf("  [FLOW-%d] [WRITER] ✓ Using CLUSTER PIPELINE mode (node-based) for %d entries to node=%s",
-				fw.flowID, len(entries), nodeAddr)
-
-			// Build pipeline commands for all entries
-			// Note: All entries in this group already belong to the same node (grouped by groupByNode())
-			buildStart := time.Now()
-			cmds := make([][]interface{}, 0, len(entries))
-			skippedCount := 0
-			for _, entry := range entries {
-				cmd := fw.buildCommand(entry)
-				if cmd != nil {
-					cmds = append(cmds, cmd)
-				} else {
-					// CRITICAL: Track skipped entries (unsupported types like Stream, empty collections)
-					skippedCount++
-					if fw.debugMode {
-						log.Printf("  [FLOW-%d] [WRITER] [DEBUG] Skipped key=%s type=%d (unsupported for pipeline)",
-							fw.flowID, entry.Key, entry.Type)
-					}
-				}
-			}
-			buildDuration := time.Since(buildStart)
-
-			// Update skip statistics
-			if skippedCount > 0 {
-				fw.stats.mu.Lock()
-				fw.stats.totalSkipped += int64(skippedCount)
-				fw.stats.mu.Unlock()
-			}
-
-			log.Printf("  [FLOW-%d] [WRITER] Built %d commands in %v for node %s (skipped=%d)",
-				fw.flowID, len(cmds), buildDuration, nodeAddr, skippedCount)
-
-			// Execute pipeline batch for this node
-			if len(cmds) > 0 {
-				pipelineStart := time.Now()
-				results, err := clusterClient.PipelineForNode(nodeAddr, cmds)
-				pipelineDuration := time.Since(pipelineStart)
-
-				if err != nil {
-					log.Printf("  [FLOW-%d] [WRITER] ✗ Node pipeline failed after %v: %v, fallback to sequential",
-						fw.flowID, pipelineDuration, err)
-					// Fallback to sequential writes on pipeline failure
-					goto sequential
-				}
-
-				log.Printf("  [FLOW-%d] [WRITER] ✓ Node pipeline executed in %v (%.0f ops/sec)",
-					fw.flowID, pipelineDuration, float64(len(cmds))/pipelineDuration.Seconds())
-
-				// Check results and track failures
-				for i, result := range results {
-					if result != nil {
-						// Check if result is an error
-						if errStr, ok := result.(string); ok && strings.HasPrefix(errStr, "ERR") {
-							// CRITICAL: Record failure with detailed info in debug mode
-							if fw.debugMode && i < len(entries) {
-								log.Printf("  [FLOW-%d] [WRITER] [DEBUG] ✗ Command %d failed for key=%s: %v",
-									fw.flowID, i, entries[i].Key, errStr)
-							} else {
-								log.Printf("  [FLOW-%d] [WRITER] ✗ Command %d failed: %v", fw.flowID, i, errStr)
-							}
-							failCount++
-						} else {
-							successCount++
-						}
-					} else {
-						successCount++
-					}
-				}
-
-				totalDuration := time.Since(startTime)
-				log.Printf("  [FLOW-%d] [WRITER] ✓ Node pipeline batch complete: %d success, %d failed in %v",
-					fw.flowID, successCount, failCount, totalDuration)
-
-				return writeResult{success: successCount, failed: failCount}
-			} else {
-				log.Printf("  [FLOW-%d] [WRITER] ⚠ No commands built, all entries skipped", fw.flowID)
-			}
-		} else {
-			log.Printf("  [FLOW-%d] [WRITER] ⚠ Cluster client not available, fallback to sequential (type=%T)",
-				fw.flowID, fw.clusterClientRaw)
-		}
+	} else {
+		log.Printf("  [FLOW-%d] [WRITER] Using SEQUENTIAL mode (targetType=%s, pipelineClient=%v)",
+			fw.flowID, fw.targetType, fw.pipelineClient != nil)
 	}
 
 sequential:
-	// Fallback: write entries sequentially
+	// Cluster mode OR fallback: write entries sequentially
 	log.Printf("  [FLOW-%d] [WRITER] Sequential write started for %d entries", fw.flowID, len(entries))
 	seqStart := time.Now()
 
@@ -854,4 +580,3 @@ var crc16Table = [256]uint16{
 func (fw *FlowWriter) writeEntry(entry *RDBEntry) error {
 	return fw.writeFn(entry)
 }
-

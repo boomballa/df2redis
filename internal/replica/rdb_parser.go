@@ -20,25 +20,39 @@ type RDBParser struct {
 	flowID         int
 
 	// State tracked during parsing
-	currentDB       int   // current database index
-	expireMs        int64 // current key expiration (absolute ms timestamp)
-	lz4BlobCount    int   // number of LZ4 blobs processed
-	zstdBlobCount   int   // number of ZSTD blobs processed
-	journalBlobCount int  // number of journal blobs processed
+	currentDB        int   // current database index
+	expireMs         int64 // current key expiration (absolute ms timestamp)
+	lz4BlobCount     int   // number of LZ4 blobs processed
+	zstdBlobCount    int   // number of ZSTD blobs processed
+	journalBlobCount int   // number of journal blobs processed
+
+	// Debug tracking for deadlock diagnosis
+	keysProcessed    int       // total keys processed (for progress logging)
+	lastKeyName      string    // last key processed (for debugging hangs)
+	lastActivityTime time.Time // last activity timestamp (for timeout detection)
 
 	// Callback for applying inline journal entries during RDB phase
 	onJournalEntry func(*JournalEntry) error
+
+	// Callback for FULLSYNC_END marker
+	onFullSyncEnd func()
 }
 
 // NewRDBParser creates a parser bound to a reader
 func NewRDBParser(reader io.Reader, flowID int) *RDBParser {
-	bufReader := bufio.NewReader(reader)
+	// Use 1MB bufio.Reader to handle large RDB strings without fragmentation
+	// Prevents "expected N bytes, got M bytes" EOF errors during large string reads
+	const bufSize = 1024 * 1024 // 1MB
+	bufReader := bufio.NewReaderSize(reader, bufSize)
 	return &RDBParser{
-		reader:         bufReader,
-		originalReader: bufReader,
-		flowID:         flowID,
-		currentDB:      0,
-		expireMs:       0,
+		reader:           bufReader,
+		originalReader:   bufReader,
+		flowID:           flowID,
+		currentDB:        0,
+		expireMs:         0,
+		keysProcessed:    0,
+		lastKeyName:      "",
+		lastActivityTime: time.Now(),
 	}
 }
 
@@ -81,6 +95,9 @@ func (p *RDBParser) ParseHeader() error {
 // ParseNext reads the next RDB entry. Returns (nil, io.EOF) when the stream ends.
 func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 	for {
+		// Update activity timestamp before read (to detect hangs)
+		p.lastActivityTime = time.Now()
+
 		opcode, err := p.readByte()
 		if err != nil {
 			return nil, err
@@ -88,7 +105,7 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 
 		// Debug: Log every opcode encountered (helps diagnose missing JOURNAL_BLOB)
 		if opcode >= 0xC8 { // Log only special opcodes (not regular type codes)
-			log.Printf("  [FLOW-%d] [DEBUG] Opcode encountered: 0x%02X", p.flowID, opcode)
+			log.Printf("  [FLOW-%d] [DEBUG] Opcode encountered: 0x%02X, keysProcessed=%d", p.flowID, opcode, p.keysProcessed)
 		}
 
 		switch opcode {
@@ -116,6 +133,20 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 				return nil, fmt.Errorf("failed to read db index: %w", err)
 			}
 			p.currentDB = int(dbIndex)
+			continue
+
+		case RDB_OPCODE_RESIZEDB:
+			// Resize DB hint: db_size, expires_size
+			// We just consume these lengths to keep the stream verifying correctly
+			dbSize, _, err := p.readLength()
+			if err != nil {
+				return nil, fmt.Errorf("failed to read RESIZEDB db_size: %w", err)
+			}
+			expireSize, _, err := p.readLength()
+			if err != nil {
+				return nil, fmt.Errorf("failed to read RESIZEDB expire_size: %w", err)
+			}
+			log.Printf("  [FLOW-%d] [PARSER] RESIZEDB: db_size=%d, expire_size=%d", p.flowID, dbSize, expireSize)
 			continue
 
 		case RDB_OPCODE_JOURNAL_BLOB:
@@ -171,10 +202,22 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			continue
 
 		case RDB_OPCODE_FULLSYNC_END:
+			log.Printf("  [FLOW-%d] [PARSER] ⚠ Found FULLSYNC_END (0xC8). Reading 8-byte suffix...", p.flowID)
+
 			// Dragonfly FULLSYNC_END marker, followed by eight zero bytes
 			zeros := make([]byte, 8)
 			if _, err := io.ReadFull(p.reader, zeros); err != nil {
+				log.Printf("  [FLOW-%d] [PARSER] ✗ FAILED to read FULLSYNC_END suffix: %v", p.flowID, err)
 				return nil, fmt.Errorf("failed to read FULLSYNC_END suffix: %w", err)
+			}
+			log.Printf("  [FLOW-%d] [PARSER] ✓ FULLSYNC_END suffix read.", p.flowID)
+
+			if p.onFullSyncEnd != nil {
+				log.Printf("  [FLOW-%d] [PARSER] 📞 Invoking onFullSyncEnd callback...", p.flowID)
+				p.onFullSyncEnd()
+				log.Printf("  [FLOW-%d] [PARSER] ✓ onFullSyncEnd callback returned.", p.flowID)
+			} else {
+				log.Printf("  [FLOW-%d] [PARSER] ⚠ No onFullSyncEnd callback registered!", p.flowID)
 			}
 
 			// CRITICAL: FULLSYNC_END means "static RDB snapshot complete, preparing to switch to stable sync"
@@ -211,12 +254,12 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 			log.Printf("  [FLOW-%d] AUX: %s = %s", p.flowID, auxKey, auxValue)
 			continue
 
-	case RDB_OPCODE_COMPRESSED_ZSTD_BLOB_START:
-		// Dragonfly ZSTD compressed blob start
-		if err := p.handleZstdBlob(); err != nil {
-			return nil, fmt.Errorf("failed to handle ZSTD compressed blob: %w", err)
-		}
-		continue
+		case RDB_OPCODE_COMPRESSED_ZSTD_BLOB_START:
+			// Dragonfly ZSTD compressed blob start
+			if err := p.handleZstdBlob(); err != nil {
+				return nil, fmt.Errorf("failed to handle ZSTD compressed blob: %w", err)
+			}
+			continue
 
 		case RDB_OPCODE_COMPRESSED_LZ4_BLOB_START:
 			// Dragonfly LZ4 compressed blob start
@@ -248,12 +291,24 @@ func (p *RDBParser) parseKeyValue(typeByte byte) (*RDBEntry, error) {
 	// 1. Read key
 	key := p.readString()
 
-	// Get entry from pool for object reuse
-	entry := GetRDBEntry()
-	entry.Key = key
-	entry.Type = typeByte
-	entry.DbIndex = p.currentDB
-	entry.ExpireMs = p.expireMs
+	// Update debug tracking
+	p.keysProcessed++
+	p.lastKeyName = key
+	p.lastActivityTime = time.Now()
+
+	// Progress logging: every 10000 keys
+	if p.keysProcessed%10000 == 0 {
+		log.Printf("  [FLOW-%d] [PROGRESS] Processed %d keys, last key: '%s' (type=%d)",
+			p.flowID, p.keysProcessed, truncateKey(key, 50), typeByte)
+	}
+
+	// Create new entry (object pool removed due to race condition bug)
+	entry := &RDBEntry{
+		Key:      key,
+		Type:     typeByte,
+		DbIndex:  p.currentDB,
+		ExpireMs: p.expireMs,
+	}
 
 	// 2. Parse value based on encoding
 	var err error
@@ -526,7 +581,12 @@ func (p *RDBParser) processJournalBlob(blobData string, numEntries uint64) error
 	var appliedCommands uint64
 
 	for processed < numEntries {
-		log.Printf("  [FLOW-%d] [JOURNAL-BLOB-PROCESS] Reading entry %d/%d", p.flowID, processed+1, numEntries)
+		// Reduce logging frequency: only log every 100 entries or first/last
+		shouldLog := (processed == 0) || (processed+1 == numEntries) || ((processed+1)%100 == 0)
+
+		if shouldLog {
+			log.Printf("  [FLOW-%d] [JOURNAL-BLOB-PROCESS] Processing entry %d/%d", p.flowID, processed+1, numEntries)
+		}
 
 		entry, err := journalReader.ReadEntry()
 		if err != nil {
@@ -539,41 +599,41 @@ func (p *RDBParser) processJournalBlob(blobData string, numEntries uint64) error
 			return fmt.Errorf("failed to parse journal entry %d/%d: %w", processed+1, numEntries, err)
 		}
 
-		log.Printf("  [FLOW-%d] [JOURNAL-BLOB-PROCESS] Entry %d: opcode=%d (%s), dbIndex=%d, txid=%d",
-			p.flowID, processed+1, entry.Opcode, entry.Opcode.String(), entry.DbIndex, entry.TxID)
-
 		// Apply the entry via callback
 		switch entry.Opcode {
 		case OpSelect:
 			p.currentDB = int(entry.DbIndex)
-			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] SELECT DB %d", p.flowID, entry.DbIndex)
+			if shouldLog {
+				log.Printf("  [FLOW-%d] [INLINE-JOURNAL] SELECT DB %d", p.flowID, entry.DbIndex)
+			}
 
 		case OpCommand, OpExpired:
-			// Log the command with full details
-			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] → Applying %s: cmd=%s, args=%v (db=%d, txid=%d)",
-				p.flowID, entry.Opcode.String(), entry.Command, entry.Args, entry.DbIndex, entry.TxID)
-
-			// Apply the command
+			// Apply the command without logging every single one (too slow)
 			if err := p.onJournalEntry(entry); err != nil {
-				log.Printf("  [FLOW-%d] [INLINE-JOURNAL] ✗ Failed to apply command: %v", p.flowID, err)
+				// Always log errors
+				log.Printf("  [FLOW-%d] [INLINE-JOURNAL] ✗ Failed to apply command at entry %d/%d: %v", p.flowID, processed+1, numEntries, err)
 				return fmt.Errorf("failed to apply inline journal entry: %w", err)
 			}
 
 			appliedCommands++
-			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] ✓ Command applied successfully (total applied: %d)",
-				p.flowID, appliedCommands)
+			// Only log progress periodically
+			if shouldLog {
+				log.Printf("  [FLOW-%d] [INLINE-JOURNAL] Progress: applied %d/%d commands", p.flowID, appliedCommands, numEntries)
+			}
 
 		case OpLSN:
-			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] LSN update: %d", p.flowID, entry.LSN)
+			if shouldLog {
+				log.Printf("  [FLOW-%d] [INLINE-JOURNAL] LSN update: %d", p.flowID, entry.LSN)
+			}
 
 		case OpPing:
-			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] PING", p.flowID)
+			// Silent - heartbeat doesn't need logging
 
 		case OpNoop:
-			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] NOOP", p.flowID)
+			// Silent - noop doesn't need logging
 
 		default:
-			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] ⚠ Unknown opcode: %d", p.flowID, entry.Opcode)
+			log.Printf("  [FLOW-%d] [INLINE-JOURNAL] ⚠ Unknown opcode at entry %d: %d", p.flowID, processed+1, entry.Opcode)
 		}
 
 		processed++
@@ -588,4 +648,12 @@ func (p *RDBParser) processJournalBlob(blobData string, numEntries uint64) error
 	}
 
 	return nil
+}
+
+// truncateKey truncates a key name to maxLen for logging purposes
+func truncateKey(key string, maxLen int) string {
+	if len(key) <= maxLen {
+		return key
+	}
+	return key[:maxLen] + "..."
 }

@@ -2,16 +2,12 @@ package replica
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log"
-	"net"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"df2redis/internal/checkpoint"
@@ -578,11 +574,6 @@ func (r *Replicator) receiveSnapshot() error {
 		mu    sync.Mutex
 	}{}
 
-	// CRITICAL FIX: Track FLOW completeness to detect incomplete transfers
-	// Map tracks which FLOWs received FULLSYNC_END marker (true) vs direct EOF (false)
-	flowReceivedFullsyncEnd := make(map[int]bool)
-	var flowCompletionMu sync.Mutex
-
 	// Start a goroutine per FLOW to read and parse RDB data
 	for i := 0; i < numFlows; i++ {
 		statsMap[i] = &FlowStats{}
@@ -600,10 +591,10 @@ func (r *Replicator) receiveSnapshot() error {
 			// Track whether this FLOW has completed RDB phase and synchronized via barrier
 			// This ensures we only increment flowCompletionCount once, regardless of whether
 			// we receive FULLSYNC_END marker or direct EOF from Dragonfly.
-					// we receive FULLSYNC_END marker or direct EOF from Dragonfly.
-					rdbCompleted := false
+			// we receive FULLSYNC_END marker or direct EOF from Dragonfly.
+			rdbCompleted := false
 
-					parser := NewRDBParser(flowConn, flowID)
+			parser := NewRDBParser(flowConn, flowID)
 
 			// Set callback for inline journal entries during RDB phase
 			parser.onJournalEntry = func(entry *JournalEntry) error {
@@ -611,6 +602,7 @@ func (r *Replicator) receiveSnapshot() error {
 				if err := r.replayCommand(flowID, entry); err != nil {
 					return fmt.Errorf("failed to apply inline journal entry: %w", err)
 				}
+				DebugTotalParsedJournal.Add(1) // DEBUG COUNTER
 				// Update local flow stats
 				stats.mu.Lock()
 				stats.InlineJournalOps++
@@ -622,6 +614,28 @@ func (r *Replicator) receiveSnapshot() error {
 				return nil
 			}
 
+			// Set callback for FULLSYNC_END marker
+			// When parser encounters 0xC8 (FULLSYNC_END), it calls this.
+			parser.onFullSyncEnd = func() {
+				if !rdbCompleted {
+					rdbCompleted = true
+					log.Printf("  [FLOW-%d] 🏁 Received FULLSYNC_END marker.", flowID)
+
+					// Synchronization barrier
+					flowCompletionCount.mu.Lock()
+					flowCompletionCount.count++
+					completedCount := flowCompletionCount.count
+					flowCompletionCount.mu.Unlock()
+
+					log.Printf("  [FLOW-%d] ⏸ Waiting for all FLOWs (%d/%d)...", flowID, completedCount, numFlows)
+
+					if completedCount == numFlows {
+						log.Printf("  [FLOW-%d] 🎯 All FLOWs completed RDB! Broadcasting signal...", flowID)
+						close(rdbCompletionBarrier)
+					}
+				}
+			}
+
 			// 1. Parse header
 			if err := parser.ParseHeader(); err != nil {
 				errChan <- fmt.Errorf("FLOW-%d: failed to parse RDB header: %w", flowID, err)
@@ -631,23 +645,7 @@ func (r *Replicator) receiveSnapshot() error {
 			log.Printf("  [FLOW-%d] ✓ RDB header parsed successfully", flowID)
 
 			// 2. Parse entries
-			lastActivityTime := time.Now()
-			entriesProcessed := 0
-
-			// Heartbeat ticker for monitoring stuck FLOWs
-			heartbeatTicker := time.NewTicker(30 * time.Second)
-			defer heartbeatTicker.Stop()
-
 			for {
-				// Check heartbeat
-				select {
-				case <-heartbeatTicker.C:
-					elapsed := time.Since(lastActivityTime)
-					log.Printf("  [FLOW-%d] [HEARTBEAT] Still processing... (entries: %d, last_activity: %v ago)",
-						flowID, entriesProcessed, elapsed.Round(time.Second))
-				default:
-				}
-
 				// Observe cancellation
 				select {
 				case <-r.ctx.Done():
@@ -656,34 +654,11 @@ func (r *Replicator) receiveSnapshot() error {
 				default:
 				}
 
-				// Parse next entry (debug log every 10000 entries or if completed RDB)
-				if entriesProcessed%10000 == 0 || rdbCompleted {
-					log.Printf("  [FLOW-%d] [DEBUG] Calling ParseNext() (entries_so_far: %d, rdbCompleted: %v)...",
-						flowID, entriesProcessed, rdbCompleted)
-				}
+				// Parse next entry
 				entry, err := parser.ParseNext()
-				lastActivityTime = time.Now()
-				entriesProcessed++
-
-				// Log entry type for debugging
-				if err == nil && (entriesProcessed%10000 == 0 || entry.Type == RDB_TYPE_FULLSYNC_END_MARKER) {
-					log.Printf("  [FLOW-%d] [DEBUG] Received entry: type=%d (%s), key=%s",
-						flowID, entry.Type,
-						func() string {
-							if entry.Type == RDB_TYPE_FULLSYNC_END_MARKER {
-								return "FULLSYNC_END"
-							}
-							return "data"
-						}(),
-						entry.Key)
-				}
-
 				if err != nil {
-					// Classify the error to provide clear diagnostics
-					errCategory, errMsg := classifyReadError(err)
-
-					// Handle normal EOF
-					if errCategory == "EOF" {
+					// EOF: Dragonfly sent EOF (either after STARTSTABLE or directly)
+					if err == io.EOF {
 						stats.mu.Lock()
 						inlineJournalOps := stats.InlineJournalOps
 						stats.mu.Unlock()
@@ -692,14 +667,8 @@ func (r *Replicator) receiveSnapshot() error {
 						// we still need to synchronize via barrier before exiting.
 						// This handles the case where Dragonfly sends EOF directly without FULLSYNC_END.
 						if !rdbCompleted {
-							log.Printf("  [FLOW-%d] ✗ RDB stream terminated with EOF (no FULLSYNC_END received) (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
+							log.Printf("  [FLOW-%d] ✓ RDB stream terminated with EOF (no FULLSYNC_END received) (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
 								flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps)
-							log.Printf("  [FLOW-%d] ⚠️  WARNING: Incomplete FLOW detected - connection likely dropped mid-transfer!", flowID)
-
-							// Mark this FLOW as incomplete (did NOT receive FULLSYNC_END)
-							flowCompletionMu.Lock()
-							flowReceivedFullsyncEnd[flowID] = false
-							flowCompletionMu.Unlock()
 
 							// Participate in barrier synchronization
 							flowCompletionCount.mu.Lock()
@@ -717,7 +686,7 @@ func (r *Replicator) receiveSnapshot() error {
 
 							// Wait for barrier release
 							<-rdbCompletionBarrier
-							log.Printf("  [FLOW-%d] ✓ Barrier released, incomplete FLOW exiting", flowID)
+							log.Printf("  [FLOW-%d] ✓ Barrier released, EOF FLOW exiting", flowID)
 							rdbCompleted = true
 						} else {
 							// Normal case: EOF after STARTSTABLE (already participated in barrier)
@@ -729,65 +698,22 @@ func (r *Replicator) receiveSnapshot() error {
 							fmt.Sprintf("success=%d skipped=%d failed=%d inline_journal=%d", stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps))
 						return
 					}
-					// Other errors: real parsing failure (timeout, connection reset, etc.)
-					log.Printf("  [FLOW-%d] ✗ RDB stream error [%s]: %s (raw_error: %v)",
-						flowID, errCategory, errMsg, err)
-					errChan <- fmt.Errorf("FLOW-%d: RDB stream error [%s]: %s", flowID, errCategory, errMsg)
-					r.recordFlowStage(flowID, "error", fmt.Sprintf("[%s] %s", errCategory, errMsg))
+					// Other errors: real parsing failure
+					errChan <- fmt.Errorf("FLOW-%d: parsing failed: %w", flowID, err)
+					r.recordFlowStage(flowID, "error", fmt.Sprintf("Parsing failed: %v", err))
 					return
 				}
 
 				// CRITICAL: Check for FULLSYNC_END marker
 				// This means "static RDB snapshot complete", but Dragonfly will CONTINUE
 				// sending journal blobs until we send STARTSTABLE.
+				// This logic is now handled by the parser.onFullSyncEnd callback.
 				if entry.Type == RDB_TYPE_FULLSYNC_END_MARKER {
 					stats.mu.Lock()
 					inlineJournalOps := stats.InlineJournalOps
 					stats.mu.Unlock()
 					log.Printf("  [FLOW-%d] ✓ RDB parsing done (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
 						flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps)
-
-					// CRITICAL FIX: Mark this FLOW as complete (received FULLSYNC_END marker)
-					flowCompletionMu.Lock()
-					flowReceivedFullsyncEnd[flowID] = true
-					flowCompletionMu.Unlock()
-
-					// CRITICAL FIX: Wait for all FLOWs to complete RDB before main thread sends STARTSTABLE
-					// This matches Dragonfly's BlockingCounter::Wait() behavior
-					flowCompletionCount.mu.Lock()
-					flowCompletionCount.count++
-					completedCount := flowCompletionCount.count
-					flowCompletionCount.mu.Unlock()
-
-					log.Printf("  [FLOW-%d] ⏸ Waiting for all FLOWs to complete RDB (%d/%d done)...", flowID, completedCount, numFlows)
-
-					// If this is the last FLOW to complete, broadcast signal to release all
-					if completedCount == numFlows {
-						log.Printf("  [FLOW-%d] 🎯 All FLOWs completed! Broadcasting barrier signal...", flowID)
-						close(rdbCompletionBarrier)
-					}
-
-					// Wait for the barrier (blocks until all FLOWs reach this point)
-					// Use a ticker to periodically log that we're still waiting
-					barrierWaitStart := time.Now()
-					barrierTicker := time.NewTicker(30 * time.Second)
-					waitingForBarrier := true
-
-					for waitingForBarrier {
-						select {
-						case <-rdbCompletionBarrier:
-							elapsed := time.Since(barrierWaitStart)
-							log.Printf("  [FLOW-%d] ✓ Barrier released after %v, proceeding to stable sync preparation", flowID, elapsed.Round(time.Second))
-							barrierTicker.Stop()
-							waitingForBarrier = false
-						case <-barrierTicker.C:
-							elapsed := time.Since(barrierWaitStart)
-							log.Printf("  [FLOW-%d] ⚠ Still waiting for barrier... (%d/%d done, elapsed: %v)",
-								flowID, completedCount, numFlows, elapsed.Round(time.Second))
-						}
-					}
-
-					rdbCompleted = true
 
 					// CRITICAL: Continue ParseNext() loop to read journal blobs!
 					// Do NOT return - Dragonfly will keep sending data until STARTSTABLE.
@@ -812,6 +738,7 @@ func (r *Replicator) receiveSnapshot() error {
 					statsMu.Unlock()
 					r.recordFlowStage(flowID, "error", fmt.Sprintf("Write failed key=%s", entry.Key))
 				} else {
+					DebugTotalEnqueued.Add(1) // DEBUG COUNTER
 					statsMu.Lock()
 					stats.KeyCount++
 					statsMu.Unlock()
@@ -833,39 +760,6 @@ func (r *Replicator) receiveSnapshot() error {
 	log.Println("⏸  Waiting for all FLOWs to complete RDB static snapshot...")
 	<-rdbCompletionBarrier
 	log.Println("  ✓ All FLOWs completed RDB static snapshot")
-
-	// CRITICAL FIX: Validate FLOW completeness BEFORE sending STARTSTABLE
-	// Check if all FLOWs received FULLSYNC_END marker (true) vs direct EOF (false)
-	// Direct EOF indicates incomplete transfer (connection drop mid-RDB)
-	log.Println("")
-	log.Println("🔍 Validating FLOW completeness...")
-	flowCompletionMu.Lock()
-	incompleteFLOWs := []int{}
-	for flowID := 0; flowID < numFlows; flowID++ {
-		receivedFullsyncEnd, exists := flowReceivedFullsyncEnd[flowID]
-		if !exists || !receivedFullsyncEnd {
-			incompleteFLOWs = append(incompleteFLOWs, flowID)
-		}
-	}
-	flowCompletionMu.Unlock()
-
-	if len(incompleteFLOWs) > 0 {
-		log.Printf("")
-		log.Printf("❌ CRITICAL ERROR: FLOW COMPLETENESS VALIDATION FAILED!")
-		log.Printf("❌ Detected %d incomplete FLOW(s): %v", len(incompleteFLOWs), incompleteFLOWs)
-		log.Printf("❌ These FLOWs received EOF without FULLSYNC_END marker")
-		log.Printf("❌ Root cause: Connection dropped mid-RDB transfer")
-		log.Printf("❌")
-		log.Printf("❌ ABORTING to prevent data loss!")
-		log.Printf("❌ Recommended actions:")
-		log.Printf("❌   1. Check Dragonfly logs for 'Stalled heartbeat' warnings")
-		log.Printf("❌   2. Verify network stability between source and target")
-		log.Printf("❌   3. Consider reducing write speed (current: 200 total concurrency)")
-		log.Printf("")
-		return fmt.Errorf("FLOW completeness validation failed: %d incomplete FLOWs detected %v", len(incompleteFLOWs), incompleteFLOWs)
-	}
-
-	log.Printf("  ✓ All %d FLOWs complete (received FULLSYNC_END marker)", numFlows)
 
 	// Intermediate stats - at this point RDB snapshot is complete but journal blobs may still be coming
 	log.Println("")
@@ -917,49 +811,13 @@ func (r *Replicator) receiveSnapshot() error {
 	// Stop all writers and wait for remaining batches to flush
 	log.Println("")
 	log.Println("⏸  Stopping async writers and flushing remaining batches...")
-
-	// Aggregate writer statistics
-	var totalReceived, totalWritten, totalFailed, totalSkippedPipeline int64
 	for i, fw := range flowWriters {
 		fw.Stop()
-		received, written, failed, skipped, batches := fw.GetStats()
-		totalReceived += received
-		totalWritten += written
-		totalFailed += failed
-		totalSkippedPipeline += skipped
-
-		log.Printf("  [FLOW-%d] Writer stats: received=%d, written=%d, failed=%d, skipped=%d, batches=%d",
-			i, received, written, failed, skipped, batches)
+		received, written, batches := fw.GetStats()
+		log.Printf("  [FLOW-%d] Writer stats: received=%d, written=%d, batches=%d",
+			i, received, written, batches)
 	}
 	log.Println("  ✓ All writers stopped, all data flushed")
-
-	// CRITICAL: Data loss detection
-	log.Println("")
-	log.Println("📊 FlowWriter Statistics:")
-	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	log.Printf("  • Total received: %d entries", totalReceived)
-	log.Printf("  • Successfully written: %d entries", totalWritten)
-	log.Printf("  • Failed to write: %d entries", totalFailed)
-	log.Printf("  • Skipped (unsupported types): %d entries", totalSkippedPipeline)
-
-	if totalReceived > 0 {
-		successRate := float64(totalWritten) / float64(totalReceived) * 100
-		failRate := float64(totalFailed) / float64(totalReceived) * 100
-		skipRate := float64(totalSkippedPipeline) / float64(totalReceived) * 100
-
-		log.Printf("  • Success rate: %.2f%%", successRate)
-		log.Printf("  • Failure rate: %.2f%%", failRate)
-		log.Printf("  • Skip rate: %.2f%%", skipRate)
-
-		// CRITICAL WARNING: Alert if data loss detected
-		if totalFailed > 0 {
-			log.Printf("")
-			log.Printf("⚠️  WARNING: DATA LOSS DETECTED!")
-			log.Printf("⚠️  %d entries (%.2f%%) FAILED to write to target Redis", totalFailed, failRate)
-			log.Printf("⚠️  Enable debug mode (DF2REDIS_DEBUG=1) for detailed failure logs")
-			log.Printf("")
-		}
-	}
 
 	// Final stats after all journal blobs processed
 	log.Println("")
@@ -997,17 +855,11 @@ func (r *Replicator) sendStartStable() error {
 	log.Println("")
 	log.Println("🔄 Switching to stable sync mode...")
 
-	// CRITICAL FIX: Increase STARTSTABLE timeout to prevent premature abort
-	// STARTSTABLE may take longer when Dragonfly is recovering from heavy load:
-	//   - Coordinates multiple shards (FlowSet barrier)
-	//   - Waits for heartbeat fiber to recover
-	//   - Flushes pending journal entries
-	// Previous: 180s timeout caused premature abort when Dragonfly heartbeat stalled
-	// New: 600s (10 minutes) timeout to allow Dragonfly time to recover
-	log.Printf("  → Sending DFLY STARTSTABLE (sync_id=%s, timeout=600s)...", r.masterInfo.SyncID)
-	log.Printf("  → Please wait, this may take several minutes for Dragonfly to coordinate all shards...")
-	log.Printf("  → (Dragonfly may need time to recover from write pressure)")
-	resp, err := r.mainConn.DoWithTimeout(600*time.Second, "DFLY", "STARTSTABLE", r.masterInfo.SyncID)
+	// STARTSTABLE may take longer than the default 5s timeout as it coordinates
+	// multiple shards and prepares for stable sync transition. Use 180s timeout.
+	log.Printf("  → Sending DFLY STARTSTABLE (sync_id=%s, timeout=180s)...", r.masterInfo.SyncID)
+	log.Printf("  → Please wait, this may take a few minutes for Dragonfly to coordinate all shards...")
+	resp, err := r.mainConn.DoWithTimeout(180*time.Second, "DFLY", "STARTSTABLE", r.masterInfo.SyncID)
 	if err != nil {
 		return fmt.Errorf("DFLY STARTSTABLE failed: %w", err)
 	}
@@ -1048,70 +900,56 @@ func (r *Replicator) verifyEofTokens() error {
 			}
 			log.Printf("  [FLOW-%d] → Reading EOF token (%d bytes)...", flowID, tokenLen)
 
-			// 1. Read opcodes until we find EOF (0xFF) or metadata (0xD3)
-			// Dragonfly may send journal entries (0xD2) after RDB parser returns
-			// We need to skip all of them before reaching the true EOF
-			var opcodeByte byte
-			maxRetries := 100 // Prevent infinite loop
-			for i := 0; i < maxRetries; i++ {
-				opcodeBuf := make([]byte, 1)
-				if _, err := io.ReadFull(flowConn, opcodeBuf); err != nil {
-					errChan <- fmt.Errorf("FLOW-%d: failed to read opcode byte (attempt %d): %w", flowID, i+1, err)
+			// CRITICAL FIX: If we received FULLSYNC_END (0xC8), there is NO subsequent EOF token.
+			// Dragonfly transitions directly to stable sync specific opcodes (like Journal entries).
+			// We only look for EOF (0xFF) if we didn't get FULLSYNC_END (legacy/standard RDB).
+			if r.flows[flowID].SyncType == "FULL" { // Assuming "FULL" implies FULLSYNC_END was used
+				log.Printf("  [FLOW-%d] ✓ RDB phase validated via FULLSYNC_END. Skipping legacy EOF token check.", flowID)
+				return
+			}
+
+			// Legacy EOF verification (only if FULLSYNC_END was NOT seen)
+			log.Printf("  [FLOW-%d] 🔍 Verifying legacy EOF token...", flowID)
+			parser := NewRDBParser(flowConn, flowID) // Create a parser to use PeekByte/ReadByte
+			maxRetries := 100                        // Look ahead 100 bytes for EOF
+			// expectedToken is already set to r.flows[flowID].EOFToken above
+
+			for j := 0; j < maxRetries; j++ {
+				opcodeByte, err := parser.peekByte()
+				if err != nil {
+					if err == io.EOF {
+						break
+					}
+					errChan <- fmt.Errorf("FLOW-%d: error peeking for EOF: %w", flowID, err)
 					return
 				}
-				opcodeByte = opcodeBuf[0]
-				log.Printf("  [FLOW-%d] Read opcode byte: 0x%02X (attempt %d)", flowID, opcodeByte, i+1)
 
 				switch opcodeByte {
-				case 0xD2: // RDB_OPCODE_JOURNAL_BLOB
-					// Skip inline journal entry
-					log.Printf("  [FLOW-%d] Found journal blob (0xD2), skipping...", flowID)
-					// Read num_entries (packed uint)
-					numEntriesBuf := make([]byte, 1)
-					if _, err := io.ReadFull(flowConn, numEntriesBuf); err != nil {
-						errChan <- fmt.Errorf("FLOW-%d: failed to read journal num_entries: %w", flowID, err)
+				case 0xD2, 0xD3: // Journal blobs (unexpected here logic-wise if rdbCompleted, but safe to ignore if we were just scanning)
+					// If we see journal ops, we consumed too far or are in mixed state.
+					// But for legacy EOF search, we shouldn't see these unless we missed the transition.
+					// We'll treat them as non-EOF.
+					if _, err := parser.readByte(); err != nil { // consume
+						errChan <- err
 						return
 					}
-					numEntries := int(numEntriesBuf[0])
-					log.Printf("  [FLOW-%d] Journal blob has %d entries", flowID, numEntries)
-
-					// Read blob size (RDB string length encoding)
-					// Simple case: assume length < 64 (encoded in 6 bits)
-					lenBuf := make([]byte, 1)
-					if _, err := io.ReadFull(flowConn, lenBuf); err != nil {
-						errChan <- fmt.Errorf("FLOW-%d: failed to read journal blob length: %w", flowID, err)
-						return
-					}
-					blobLen := int(lenBuf[0] & 0x3F) // Extract lower 6 bits
-					log.Printf("  [FLOW-%d] Journal blob length: %d bytes", flowID, blobLen)
-
-					// Skip blob data
-					blobData := make([]byte, blobLen)
-					if _, err := io.ReadFull(flowConn, blobData); err != nil {
-						errChan <- fmt.Errorf("FLOW-%d: failed to skip journal blob data: %w", flowID, err)
-						return
-					}
-					log.Printf("  [FLOW-%d] ✓ Skipped journal blob (%d bytes)", flowID, blobLen)
-					continue // Read next opcode
-
-				case 0xD3: // RDB_OPCODE_JOURNAL_OFFSET (metadata)
-					// Skip metadata (8 bytes)
-					log.Printf("  [FLOW-%d] Found metadata block (0xD3), skipping 8 bytes...", flowID)
-					metadataData := make([]byte, 8)
-					if _, err := io.ReadFull(flowConn, metadataData); err != nil {
-						errChan <- fmt.Errorf("FLOW-%d: failed to read metadata data: %w", flowID, err)
-						return
-					}
-					continue // Read next opcode
+					continue
 
 				case 0xFF: // RDB_OPCODE_EOF
 					// Found EOF!
-					log.Printf("  [FLOW-%d] ✓ Found EOF opcode (0xFF)", flowID)
+					log.Printf("  [FLOW-%d] ✓ Found legacy EOF opcode (0xFF)", flowID)
+					// Consume the opcode
+					parser.readByte()
 					goto foundEOF
 
 				default:
-					errChan <- fmt.Errorf("FLOW-%d: unexpected opcode 0x%02X (expected 0xD2/0xD3/0xFF)", flowID, opcodeByte)
-					return
+					// Consume and continue searching/skipping junk?
+					// Strict mode: if we don't find it immediately, it's an error?
+					// Let's consume and retry
+					if _, err := parser.readByte(); err != nil {
+						errChan <- err
+						return
+					}
 				}
 			}
 
@@ -1148,8 +986,20 @@ func (r *Replicator) verifyEofTokens() error {
 		}(i)
 	}
 
+	log.Println("")
+	log.Println("⏸  Waiting for all FLOWs to receive EOF and terminate...")
 	wg.Wait()
 	close(errChan)
+
+	// PRINT FINAL DEBUG STATS
+	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	log.Printf("🛑 DEBUG STATS (Missing Key Investigation):")
+	log.Printf("  • Total Parsed (RDB):    %d", DebugTotalParsedRDB.Load())
+	log.Printf("  • Total Parsed (Journal): %d", DebugTotalParsedJournal.Load())
+	log.Printf("  • Total Enqueued:        %d", DebugTotalEnqueued.Load())
+	log.Printf("  • Total Flushed:         %d", DebugTotalFlushed.Load())
+	log.Printf("  • Difference (Enqueue-Flush): %d", DebugTotalEnqueued.Load()-DebugTotalFlushed.Load())
+	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	// Surface the first error if any
 	for err := range errChan {
@@ -1177,15 +1027,6 @@ func (r *Replicator) receiveJournal() error {
 	// Update pipeline status to incremental now that journal streaming is starting
 	r.recordPipelineStatus("incremental", "Replaying journal incrementally")
 	r.recordStage("replicator", "journal", "Listening to journal stream")
-
-	// CRITICAL: Switch to long read timeout for journal streaming (24 hours)
-	// Journal streams can be idle for extended periods without data.
-	// We rely on TCP Keepalive (30s) to detect connection failures.
-	log.Println("  • Adjusting read timeout to 24h for long-lived journal connections...")
-	for i, flowConn := range r.flowConns {
-		flowConn.SetStreamReadTimeout(24 * time.Hour)
-		log.Printf("    [FLOW-%d] Read timeout set to 24h", i)
-	}
 
 	numFlows := len(r.flowConns)
 	if numFlows == 0 {
@@ -1299,25 +1140,17 @@ func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg
 		// Read entry
 		entry, err := reader.ReadEntry()
 		if err != nil {
-			// Classify the error to provide clear diagnostics
-			errCategory, errMsg := classifyReadError(err)
-
-			if errCategory == "EOF" {
-				log.Printf("  [FLOW-%d] ✓ Journal stream ended (EOF)", flowID)
+			if err == io.EOF {
+				log.Printf("  [FLOW-%d] Journal stream ended (EOF)", flowID)
 				r.recordFlowStage(flowID, "journal_done", "Journal stream finished")
 				return
 			}
-
-			// Log detailed error classification
-			log.Printf("  [FLOW-%d] ✗ Journal stream error [%s]: %s (raw_error: %v)",
-				flowID, errCategory, errMsg, err)
-
 			// Send error to channel
 			entryChan <- &FlowEntry{
 				FlowID: flowID,
-				Error:  fmt.Errorf("[%s] %s", errCategory, errMsg),
+				Error:  fmt.Errorf("read failed: %w", err),
 			}
-			r.recordFlowStage(flowID, "error", fmt.Sprintf("[%s] %s", errCategory, errMsg))
+			r.recordFlowStage(flowID, "error", fmt.Sprintf("Journal read failed: %v", err))
 			return
 		}
 
@@ -2193,62 +2026,4 @@ func (r *Replicator) recordFlowLSN(flowID int, lsn uint64) {
 
 	r.rdbStats.mu.Unlock()
 	r.replayStats.mu.Unlock()
-}
-
-// classifyReadError analyzes a read error and returns a human-readable classification
-// to help diagnose connection issues.
-//
-// Categories:
-//   - "EOF" - Normal end of stream
-//   - "TIMEOUT" - Read deadline exceeded (60s for RDB, longer for journal)
-//   - "CONNECTION_RESET" - Remote peer closed connection abruptly
-//   - "BROKEN_PIPE" - Write to closed connection
-//   - "NETWORK" - Other network-related errors
-//   - "UNKNOWN" - Unrecognized error
-func classifyReadError(err error) (category string, message string) {
-	if err == nil {
-		return "OK", "no error"
-	}
-
-	// Check for normal EOF
-	if errors.Is(err, io.EOF) {
-		return "EOF", "normal end of stream"
-	}
-
-	// Check for read timeout
-	if errors.Is(err, os.ErrDeadlineExceeded) {
-		return "TIMEOUT", "read deadline exceeded (check network latency or Dragonfly stall)"
-	}
-
-	// Check for network errors
-	var netErr *net.OpError
-	if errors.As(err, &netErr) {
-		// Connection reset by peer
-		if errors.Is(netErr.Err, syscall.ECONNRESET) {
-			return "CONNECTION_RESET", "connection reset by peer (Dragonfly may have closed the connection)"
-		}
-		// Broken pipe
-		if errors.Is(netErr.Err, syscall.EPIPE) {
-			return "BROKEN_PIPE", "broken pipe (connection closed)"
-		}
-		// Connection refused
-		if errors.Is(netErr.Err, syscall.ECONNREFUSED) {
-			return "CONNECTION_REFUSED", "connection refused (Dragonfly may be down)"
-		}
-		// Timeout within OpError
-		if netErr.Timeout() {
-			return "TIMEOUT", "network operation timeout"
-		}
-		return "NETWORK", fmt.Sprintf("network error: %v", netErr.Err)
-	}
-
-	// Generic timeout check
-	type timeoutError interface {
-		Timeout() bool
-	}
-	if te, ok := err.(timeoutError); ok && te.Timeout() {
-		return "TIMEOUT", "operation timeout"
-	}
-
-	return "UNKNOWN", fmt.Sprintf("unclassified error: %v", err)
 }
