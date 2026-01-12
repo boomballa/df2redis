@@ -440,9 +440,13 @@ func (fw *FlowWriter) writeSlotGroup(entries []*RDBEntry) writeResult {
 	var buildDuration time.Duration
 	var cmds [][]interface{}
 
-	// CRITICAL OPTIMIZATION: For small batches (< 10 entries), use direct writes
-	// Pipeline overhead is not worth it for tiny batches
-	const pipelineThreshold = 10
+	// CRITICAL OPTIMIZATION: Always use pipeline for cluster mode
+	// For standalone mode, skip pipeline for very small batches (< 3 entries)
+	// Cluster mode benefits from pipeline even for 1-2 entries due to routing overhead
+	pipelineThreshold := 1
+	if fw.targetType == "redis-standalone" {
+		pipelineThreshold = 3 // Standalone can skip tiny batches
+	}
 	if len(entries) < pipelineThreshold {
 		log.Printf("  [FLOW-%d] [WRITER] Small batch (%d entries), using DIRECT WRITE mode", fw.flowID, len(entries))
 		goto sequential
