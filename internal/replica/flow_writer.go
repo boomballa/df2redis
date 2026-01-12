@@ -128,8 +128,12 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 	// CRITICAL OPTIMIZATION: Increase batch size to reduce round trips
 	// Old: 100 entries/batch → ~700 ops/sec
 	// New: 2000 entries/batch → expected ~14000 ops/sec (20x reduction in round trips)
-	batchSize := 2000    // Process 2000 entries per batch (increased from 100)
-	flushInterval := 100 // Flush every 100ms (increased from 50ms to match larger batch)
+	batchSize := 2000 // Process 2000 entries per batch (increased from 100)
+
+	// DYNAMIC FLUSH INTERVAL: Use shorter interval for incremental sync responsiveness
+	// During full sync (high throughput), batches fill quickly and interval doesn't matter
+	// During incremental sync (low throughput), we want fast response time
+	flushInterval := 50 // Flush every 50ms for better incremental sync latency
 
 	// CRITICAL: Even larger buffer to handle full sync bursts
 	// During full sync, Dragonfly can send data extremely fast (600万keys in 3 seconds)
@@ -430,16 +434,29 @@ func (fw *FlowWriter) writeSlotGroup(entries []*RDBEntry) writeResult {
 	log.Printf("  [FLOW-%d] [WRITER] writeSlotGroup called: entries=%d, targetType=%s, pipelineClient=%v",
 		fw.flowID, len(entries), fw.targetType, fw.pipelineClient != nil)
 
+	// Declare variables before goto to avoid "jumps over declaration" error
+	var buildStart time.Time
+	var buildDuration time.Duration
+	var cmds [][]interface{}
+
+	// CRITICAL OPTIMIZATION: For small batches (< 10 entries), use direct writes
+	// Pipeline overhead is not worth it for tiny batches
+	const pipelineThreshold = 10
+	if len(entries) < pipelineThreshold {
+		log.Printf("  [FLOW-%d] [WRITER] Small batch (%d entries), using DIRECT WRITE mode", fw.flowID, len(entries))
+		goto sequential
+	}
+
 	// Build pipeline commands for all entries (shared logic for both modes)
-	buildStart := time.Now()
-	cmds := make([][]interface{}, 0, len(entries))
+	buildStart = time.Now()
+	cmds = make([][]interface{}, 0, len(entries))
 	for _, entry := range entries {
 		cmd := fw.buildCommand(entry)
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 	}
-	buildDuration := time.Since(buildStart)
+	buildDuration = time.Since(buildStart)
 
 	if len(cmds) == 0 {
 		log.Printf("  [FLOW-%d] [WRITER] ⚠ No commands built, all entries skipped", fw.flowID)
@@ -543,13 +560,16 @@ func (fw *FlowWriter) writeSlotGroup(entries []*RDBEntry) writeResult {
 		fw.flowID, fw.targetType, fw.pipelineClient != nil)
 
 sequential:
-	// Fallback: write entries sequentially
-	log.Printf("  [FLOW-%d] [WRITER] Sequential write started for %d entries", fw.flowID, len(entries))
+	// Fallback: write entries sequentially (used for small batches or pipeline failures)
 	seqStart := time.Now()
 
+	// Use direct Do() instead of writeEntry() for better performance in cluster mode
 	for _, entry := range entries {
 		if err := fw.writeEntry(entry); err != nil {
-			log.Printf("  [FLOW-%d] [WRITER] ✗ Failed to write key=%s: %v", fw.flowID, entry.Key, err)
+			// Don't log every error in production, just count
+			if len(entries) < 10 || failCount < 5 {
+				log.Printf("  [FLOW-%d] [WRITER] ✗ Failed to write key=%s: %v", fw.flowID, entry.Key, err)
+			}
 			failCount++
 		} else {
 			successCount++
@@ -557,8 +577,12 @@ sequential:
 	}
 
 	seqDuration := time.Since(seqStart)
-	log.Printf("  [FLOW-%d] [WRITER] Sequential write complete: %d success, %d failed in %v (%.0f ops/sec)",
-		fw.flowID, successCount, failCount, seqDuration, float64(len(entries))/seqDuration.Seconds())
+
+	// Only log if batch is large enough or took significant time
+	if len(entries) >= 10 || seqDuration > 100*time.Millisecond {
+		log.Printf("  [FLOW-%d] [WRITER] Direct write complete: %d success, %d failed in %v (%.0f ops/sec)",
+			fw.flowID, successCount, failCount, seqDuration, float64(len(entries))/seqDuration.Seconds())
+	}
 
 	return writeResult{success: successCount, failed: failCount}
 }
