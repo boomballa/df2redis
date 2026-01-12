@@ -900,11 +900,22 @@ func (r *Replicator) verifyEofTokens() error {
 			}
 			log.Printf("  [FLOW-%d] → Reading EOF token (%d bytes)...", flowID, tokenLen)
 
-			// CRITICAL FIX: If we received FULLSYNC_END (0xC8), there is NO subsequent EOF token.
-			// Dragonfly transitions directly to stable sync specific opcodes (like Journal entries).
-			// We only look for EOF (0xFF) if we didn't get FULLSYNC_END (legacy/standard RDB).
-			if r.flows[flowID].SyncType == "FULL" { // Assuming "FULL" implies FULLSYNC_END was used
-				log.Printf("  [FLOW-%d] ✓ RDB phase validated via FULLSYNC_END. Skipping legacy EOF token check.", flowID)
+			// CRITICAL FIX: Even with FULLSYNC_END (0xC8), Dragonfly sends the 40-byte SHA1 EOF token (Checksum).
+			// We MUST consume these 40 bytes so they are not misinterpreted as opcodes (e.g. 'd' = 100) by the journal parser next.
+			if r.flows[flowID].SyncType == "FULL" {
+				log.Printf("  [FLOW-%d] 🗑 Reading and discarding 40-byte EOF checksum (preventing 'unknown opcode' errors)...", flowID)
+
+				// Create a temporary buffer to discard the data
+				discardBuf := make([]byte, 40)
+				// ReadFull ensures we get exactly 40 bytes or fail
+				if _, err := io.ReadFull(flowConn, discardBuf); err != nil {
+					log.Printf("  [FLOW-%d] ⚠ Failed to discard EOF checksum: %v (Journal parsing may fail next)", flowID, err)
+					// We warn but don't error out, hoping for the best
+				} else {
+					log.Printf("  [FLOW-%d] ✓ EOF checksum discarded successfully.", flowID)
+				}
+
+				// We still return here, as we don't need to do legacy verification
 				return
 			}
 
