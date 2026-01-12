@@ -31,11 +31,11 @@ type FlowWriter struct {
 	targetType string // "redis-standalone" or "redis-cluster"
 
 	// Pipeline client for standalone Redis batch writes
-	// This is set only when targetType == "redis-standalone"
-	pipelineClient PipelineClient
-	isCluster      bool
-	clusterClient  interface{} // Store original cluster client for debugging
+	pipelineClient *redisx.Client
 
+	// Cluster client for cluster mode
+	clusterClient *redisx.ClusterClient
+	isCluster     bool
 
 	// Concurrency control
 	maxConcurrentWrites int           // Maximum concurrent write goroutines
@@ -60,57 +60,29 @@ type FlowWriter struct {
 }
 
 // NewFlowWriter creates a new async batch writer for a flow
-// numFlows parameter enables adaptive concurrency tuning based on total FLOW count
-// targetType determines the write strategy: "redis-standalone" uses pipeline, "redis-cluster" uses slot-based parallelism
-// clusterClient provides access to standalone client for pipeline operations
-func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targetType string, clusterClient interface{}) *FlowWriter {
+func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targetType string, pipelineClient *redisx.Client, clusterClient *redisx.ClusterClient) *FlowWriter {
 	ctx, cancel := context.WithCancel(context.Background())
-
-	// Extract pipeline client if in standalone mode
-	// CRITICAL FIX: Use concrete type assertion for *cluster.ClusterClient
-	var pipelineClient PipelineClient
-	var isCluster bool
 
 	log.Printf("  [FLOW-%d] [INIT] Starting FlowWriter initialization, targetType=%s", flowID, targetType)
 
-	// Try to extract cluster client using concrete type import
-	// We use interface with method signatures to avoid circular dependency
-	type ClusterClientInterface interface {
-		IsCluster() bool
-		GetStandaloneClient() *redisx.Client
-	}
-
-	if cc, ok := clusterClient.(ClusterClientInterface); ok {
-		isCluster = cc.IsCluster()
-		log.Printf("  [FLOW-%d] [INIT] ClusterClient interface extracted, isCluster=%v", flowID, isCluster)
-
-		if !isCluster {
-			// Get standalone client (*redisx.Client)
-			standaloneClient := cc.GetStandaloneClient()
-			log.Printf("  [FLOW-%d] [INIT] StandaloneClient extracted, type=%T", flowID, standaloneClient)
-
-			// *redisx.Client should implement PipelineClient interface
-			if standaloneClient != nil {
-				// Direct assignment since *redisx.Client implements Pipeline()
-				pipelineClient = standaloneClient
-				log.Printf("  [FLOW-%d] [INIT] ✓ Pipeline client successfully extracted!", flowID)
-			} else {
-				log.Printf("  [FLOW-%d] [INIT] ✗ WARNING: StandaloneClient is nil!", flowID)
-			}
+	var isCluster bool
+	if targetType == "redis-cluster" {
+		isCluster = true
+		if clusterClient == nil {
+			log.Printf("  [FLOW-%d] [INIT] ✗ WARNING: ClusterClient is nil but targetType is redis-cluster!", flowID)
 		}
 	} else {
-		log.Printf("  [FLOW-%d] [INIT] ✗ WARNING: Failed to extract ClusterClient interface from %T", flowID, clusterClient)
+		// Standalone
+		if pipelineClient == nil {
+			log.Printf("  [FLOW-%d] [INIT] ✗ WARNING: PipelineClient (standalone) is nil!", flowID)
+		} else {
+			log.Printf("  [FLOW-%d] [INIT] ✓ Pipeline client provided", flowID)
+		}
 	}
 
 	// Adaptive concurrency control based on target type and number of FLOWs:
 	// - Standalone mode: pipeline batching = lower concurrency needed
 	// - Cluster mode: slot-based parallel writes = higher concurrency needed
-	// - Physical machine (56 cores, 200G RAM) can handle high concurrency
-	//
-	// Strategy:
-	//   - Async Batching Mode: Limit number of concurrent in-flight batches
-	//   - maxConcurrent now means "Max In-Flight Batches"
-	//   - 20-50 concurrent batches is plenty for high throughput
 	var maxConcurrent int
 	if targetType == "redis-standalone" {
 		maxConcurrent = 50 // High concurrency for pipeline batches
@@ -127,49 +99,37 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 	}
 
 	// CRITICAL OPTIMIZATION FOR CLUSTER: Increase batch size dramatically for slot grouping
-	// Problem: Redis Cluster has 16384 slots, small batches result in 1 entry per slot
 	// Solution: Use 20000 entries/batch so each slot accumulates ~1.2 entries on average
-	// Trade-off: Higher memory usage but much better pipeline efficiency
 	batchSize := 20000
 	if targetType == "redis-standalone" {
 		batchSize = 2000 // Standalone doesn't need large batches
 	}
 
 	// DYNAMIC FLUSH INTERVAL: Different strategies for standalone vs cluster
-	// Standalone: 50ms interval (small batches fill quickly)
-	// Cluster: 5000ms interval (need time to accumulate 20000 entries)
 	flushInterval := 50 // Default for standalone
 	if targetType == "redis-cluster" {
 		flushInterval = 5000 // 5 seconds for cluster to accumulate large batches
 	}
 
-	// CRITICAL: Even larger buffer to handle full sync bursts
-	// During full sync, Dragonfly can send data extremely fast (600万keys in 3 seconds)
-	// We need a huge buffer to absorb the burst while slowly writing to Redis
-	//
-	// Buffer sizing:
-	//   - Increased buffer to prevent blocking parser while writing to Redis
-	//   - 2M entries × ~1KB per entry = ~2GB memory per FLOW
-	//   - With 8 FLOWs: 8 × 2GB = 16GB total (acceptable on 200GB machine)
 	channelBuffer := 2000000 // Huge buffer to absorb full sync bursts
 
 	fw := &FlowWriter{
 		flowID:              flowID,
-		entryChan:           make(chan *RDBEntry, channelBuffer),             // Huge buffer for full sync bursts
-		batchSize:           batchSize,                                       // Large batch for pipeline efficiency
-		flushInterval:       time.Duration(flushInterval) * time.Millisecond, // Fallback timer for tiny batches
+		entryChan:           make(chan *RDBEntry, channelBuffer),
+		batchSize:           batchSize,
+		flushInterval:       time.Duration(flushInterval) * time.Millisecond,
 		writeFn:             writeFn,
 		targetType:          targetType,
 		pipelineClient:      pipelineClient,
-		isCluster:           isCluster,
 		clusterClient:       clusterClient,
+		isCluster:           isCluster,
 		ctx:                 ctx,
 		cancel:              cancel,
 		channelCapacity:     channelBuffer,
 		maxConcurrentWrites: maxConcurrent,
-		writeSemaphore:      make(chan struct{}, maxConcurrent), // Semaphore for concurrency control
+		writeSemaphore:      make(chan struct{}, maxConcurrent),
 		lastMonitorTime:     time.Now(),
-		monitorInterval:     5 * time.Second, // Log channel usage every 5 seconds (more frequent)
+		monitorInterval:     5 * time.Second,
 	}
 
 	// Log adaptive concurrency settings and mode for visibility
@@ -189,10 +149,8 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 	log.Printf("  [FLOW-%d] [WRITER] Initialization complete:", flowID)
 	log.Printf("    • Mode: %s", mode)
 	log.Printf("    • Pipeline: %s", pipelineStatus)
-	log.Printf("    • Concurrency: %d per FLOW (%d total)", maxConcurrent, maxConcurrent*numFlows)
+	log.Printf("    • Concurrency: %d per FLOW", maxConcurrent)
 	log.Printf("    • Batch size: %d entries", batchSize)
-	log.Printf("    • Buffer size: %d entries (~%dMB)", channelBuffer, channelBuffer/1000)
-	log.Printf("    • Flush interval: %v", time.Duration(flushInterval)*time.Millisecond)
 
 	return fw
 }
@@ -304,8 +262,8 @@ func (fw *FlowWriter) batchWriteLoop() {
 }
 
 // flushBatch writes a batch of entries to Redis using smart batching:
-// - Group entries by slot for parallel writes
-// - Use pipelining within each slot group
+// - Standalone: one big pipeline
+// - Cluster: group by Master Node for parallel writes (1 pipeline per node)
 func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 	if len(batch) == 0 {
 		return
@@ -317,33 +275,29 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 	// Log batch start
 	log.Printf("  [FLOW-%d] [WRITER] ⏩ Flushing batch: %d entries", fw.flowID, batchSize)
 
-	// CRITICAL: Strategy selection based on target type
-	// - Standalone: treat batch as single group (enables pipeline batching)
-	// - Cluster: group by slot for parallel writes
-	var slotGroups [][]*RDBEntry
-	if fw.targetType == "redis-standalone" {
-		// Standalone mode: treat entire batch as one group (no slot partitioning)
-		slotGroups = [][]*RDBEntry{batch}
-	} else {
-		// Cluster mode: group entries by slot for parallel processing
-		slotGroups = fw.groupBySlot(batch)
-	}
-	numGroups := len(slotGroups)
+	// Grouping Strategy
+	var groups map[string][]*RDBEntry // Addr -> Entries
 
-	// Process groups in parallel using goroutines with concurrency limit
+	if fw.targetType == "redis-standalone" {
+		// Single group with empty address (uses pipelineClient)
+		groups = map[string][]*RDBEntry{"": batch}
+	} else {
+		// Cluster mode: group by Master Node
+		groups = fw.groupByNode(batch)
+	}
+	numGroups := len(groups)
+
+	// Process groups in parallel using goroutines
 	var wg sync.WaitGroup
 	resultChan := make(chan writeResult, numGroups)
 
-	for _, group := range slotGroups {
-		// NOTE: In async batch mode, we don't use the semaphore here (it's used for batch limiting).
-		// We launch slot groups in parallel without further limiting, as the batch limit controls overall concurrency.
+	for addr, group := range groups {
 		wg.Add(1)
-		go func(entries []*RDBEntry) {
+		go func(nodeAddr string, entries []*RDBEntry) {
 			defer wg.Done()
-
-			result := fw.writeSlotGroup(entries)
+			result := fw.writeNodeBatch(nodeAddr, entries)
 			resultChan <- result
-		}(group)
+		}(addr, group)
 	}
 
 	// Wait for all groups to complete
@@ -357,9 +311,6 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 		failCount += result.failed
 	}
 
-	// NOTE: Object pool removed due to race condition bug
-	// Entries will be GC'd naturally
-
 	duration := time.Since(start)
 
 	// Update statistics
@@ -368,163 +319,131 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 	fw.stats.totalBatches++
 	fw.stats.mu.Unlock()
 
-	DebugTotalFlushed.Add(int64(successCount)) // DEBUG COUNTER
+	DebugTotalFlushed.Add(int64(successCount))
 
 	// Log performance
 	opsPerSec := float64(batchSize) / duration.Seconds()
-	log.Printf("  [FLOW-%d] [WRITER] ✓ Batch complete: %d entries in %v (%.0f ops/sec, groups=%d, success=%d, fail=%d)",
+	log.Printf("  [FLOW-%d] [WRITER] ✓ Batch complete: %d entries in %v (%.0f ops/sec, nodes=%d, success=%d, fail=%d)",
 		fw.flowID, batchSize, duration, opsPerSec, numGroups, successCount, failCount)
 
 	// Warn if slow
-	// Warn if slow or empty key detected
-	if duration > time.Second || (len(batch) > 0 && len(batch[0].Key) == 0) {
-		// Calculate batch size in bytes
-		var loopTotalBytes int
-		for _, e := range batch {
-			loopTotalBytes += len(e.Key)
-			if e.Value != nil {
-				switch v := e.Value.(type) {
-				case []byte:
-					loopTotalBytes += len(v)
-				case string:
-					loopTotalBytes += len(v)
-				}
-			}
-		}
-
-		firstKey := "N/A"
-		firstType := -1
-		valType := "nil"
-		if len(batch) > 0 {
-			firstKey = fmt.Sprintf("'%s' (len=%d)", batch[0].Key, len(batch[0].Key))
-			firstType = int(batch[0].Type)
-			if batch[0].Value != nil {
-				valType = fmt.Sprintf("%T", batch[0].Value)
-			}
-		}
-
-		log.Printf("  [FLOW-%d] [WRITER] ⚠ Slow/Empty batch: %v for %d entries. TotalBytes: %d. FirstEntry: [Type=%d, Key=%s, ValType=%s]",
-			fw.flowID, duration, batchSize, loopTotalBytes, firstType, firstKey, valType)
+	if duration > time.Second {
+		log.Printf("  [FLOW-%d] [WRITER] ⚠ Slow batch: %v for %d entries.", fw.flowID, duration, batchSize)
 	}
 }
 
-// writeResult holds the result of writing a slot group
+// writeResult holds the result of writing a batch
 type writeResult struct {
 	success int
 	failed  int
 }
 
-// groupBySlot groups entries by Redis Cluster slot
-func (fw *FlowWriter) groupBySlot(batch []*RDBEntry) [][]*RDBEntry {
-	// Simple slot calculation (CRC16 % 16384)
-	slotMap := make(map[uint16][]*RDBEntry)
+// groupByNode groups entries by target Master Node address
+func (fw *FlowWriter) groupByNode(batch []*RDBEntry) map[string][]*RDBEntry {
+	groups := make(map[string][]*RDBEntry)
 
 	for _, entry := range batch {
-		slot := calculateSlot(entry.Key)
-		slotMap[slot] = append(slotMap[slot], entry)
+		slot := redisx.Slot(entry.Key)
+		addr := fw.clusterClient.MasterAddr(slot)
+		if addr == "" {
+			// Fallback or log error? Use empty addr which might fail later or use random?
+			// Should strictly not happen if topology is known.
+			// Log once per batch?
+			continue
+		}
+		groups[addr] = append(groups[addr], entry)
 	}
-
-	// Convert map to slice of groups
-	groups := make([][]*RDBEntry, 0, len(slotMap))
-	for _, group := range slotMap {
-		groups = append(groups, group)
-	}
-
 	return groups
 }
 
-// writeSlotGroup writes a group of entries for the same slot
-func (fw *FlowWriter) writeSlotGroup(entries []*RDBEntry) writeResult {
+// writeNodeBatch writes a batch of entries to a specific node (or standalone)
+func (fw *FlowWriter) writeNodeBatch(addr string, entries []*RDBEntry) writeResult {
 	var successCount, failCount int
-	startTime := time.Now()
 
-	// Declare variables at function start to avoid "goto jumps over declaration" error
-	var buildStart time.Time
-	var buildDuration time.Duration
-	var cmds [][]interface{}
+	// Get Client
+	var client *redisx.Client
+	var err error
 
-	// CRITICAL DEBUG: Log code path selection
-	log.Printf("  [FLOW-%d] [WRITER] writeSlotGroup called: entries=%d, targetType=%s, pipelineClient=%v",
-		fw.flowID, len(entries), fw.targetType, fw.pipelineClient != nil)
-
-	// CRITICAL OPTIMIZATION: Always use pipeline for cluster mode
-	// For standalone mode, skip pipeline for very small batches (< 3 entries)
-	// Cluster mode benefits from pipeline even for 1-2 entries due to routing overhead
-	pipelineThreshold := 1
 	if fw.targetType == "redis-standalone" {
-		pipelineThreshold = 3 // Standalone can skip tiny batches
-	}
-	if len(entries) < pipelineThreshold {
-		log.Printf("  [FLOW-%d] [WRITER] Small batch (%d entries), using DIRECT WRITE mode", fw.flowID, len(entries))
-		goto sequential
+		client = fw.pipelineClient
+	} else {
+		// Cluster mode: get client for node
+		client, err = fw.clusterClient.GetNodeClient(addr)
+		if err != nil {
+			log.Printf("  [FLOW-%d] [WRITER] ✗ Failed to get client for node %s: %v", fw.flowID, addr, err)
+			return writeResult{failed: len(entries)}
+		}
 	}
 
-	// CRITICAL FIX: Split large slot groups into smaller pipelines to avoid Redis timeout
-	// Redis can handle large pipelines, but 1000+ commands can cause 10+ second delays
-	// Split into chunks of 500 commands for better performance and responsiveness
+	if client == nil {
+		log.Printf("  [FLOW-%d] [WRITER] ✗ Client is nil (addr=%s)", fw.flowID, addr)
+		return writeResult{failed: len(entries)}
+	}
+
+	// ----------------------------------------------------------------------
+	// Recursively split large batches (same logic as before)
+	// ----------------------------------------------------------------------
 	const maxPipelineSize = 500
 	if len(entries) > maxPipelineSize {
-		log.Printf("  [FLOW-%d] [WRITER] Large slot group (%d entries), splitting into chunks of %d",
-			fw.flowID, len(entries), maxPipelineSize)
-
 		for i := 0; i < len(entries); i += maxPipelineSize {
 			end := i + maxPipelineSize
 			if end > len(entries) {
 				end = len(entries)
 			}
 			chunk := entries[i:end]
-			result := fw.writeSlotGroup(chunk) // Recursive call with smaller chunk
+			result := fw.writeNodeBatch(addr, chunk) // Recursive
 			successCount += result.success
 			failCount += result.failed
 		}
-
-		duration := time.Since(startTime)
-		log.Printf("  [FLOW-%d] [WRITER] ✓ Large slot group complete: %d success, %d failed in %v (%.0f ops/sec)",
-			fw.flowID, successCount, failCount, duration, float64(len(entries))/duration.Seconds())
-
 		return writeResult{success: successCount, failed: failCount}
 	}
 
-	// Build pipeline commands for all entries (shared logic for both modes)
-	buildStart = time.Now()
-	cmds = make([][]interface{}, 0, len(entries))
+	// ----------------------------------------------------------------------
+	// Build Pipeline
+	// ----------------------------------------------------------------------
+	cmds := make([][]interface{}, 0, len(entries))
 	for _, entry := range entries {
-		cmd := fw.buildCommand(entry)
-		if cmd != nil {
-			cmds = append(cmds, cmd)
+		entryCmds := fw.buildCommands(entry)
+		if len(entryCmds) > 0 {
+			cmds = append(cmds, entryCmds...)
 		}
 	}
-	buildDuration = time.Since(buildStart)
 
 	if len(cmds) == 0 {
-		log.Printf("  [FLOW-%d] [WRITER] ⚠ No commands built, all entries skipped", fw.flowID)
 		return writeResult{success: 0, failed: 0}
 	}
 
-	log.Printf("  [FLOW-%d] [WRITER] Built %d commands in %v", fw.flowID, len(cmds), buildDuration)
+	// Execute Pipeline
+	// client.Pipeline handles serialization. In Cluster mode, 'client' is unique per Node,
+	// so parallelism is achieved across nodes.
+	results, err := client.Pipeline(cmds)
+	if err != nil {
+		log.Printf("  [FLOW-%d] [WRITER] ✗ Pipeline failed to %s: %v", fw.flowID, addr, err)
+		// Fallback to sequential?
+		// Given we want speed, maybe just fail?
+		// Or try individual?
+		// Use sequential fallback just in case.
+		return fw.writeSequential(client, entries)
+	}
 
-	// Standalone mode: use standalone pipeline
-	if fw.targetType == "redis-standalone" && fw.pipelineClient != nil {
-		log.Printf("  [FLOW-%d] [WRITER] ✓ Using STANDALONE PIPELINE mode for %d entries", fw.flowID, len(entries))
-
-		pipelineStart := time.Now()
-		results, err := fw.pipelineClient.Pipeline(cmds)
-		pipelineDuration := time.Since(pipelineStart)
-
-		if err != nil {
-			log.Printf("  [FLOW-%d] [WRITER] ✗ Standalone pipeline failed after %v: %v, fallback to sequential",
-				fw.flowID, pipelineDuration, err)
-			goto sequential
-		}
-
-		log.Printf("  [FLOW-%d] [WRITER] ✓ Standalone pipeline executed in %v (%.0f ops/sec)",
-			fw.flowID, pipelineDuration, float64(len(cmds))/pipelineDuration.Seconds())
-
-		// Check results
-		for i, result := range results {
-			if result != nil {
-				if errStr, ok := result.(string); ok && strings.HasPrefix(errStr, "ERR") {
-					log.Printf("  [FLOW-%d] [WRITER] ✗ Command %d failed: %v", fw.flowID, i, errStr)
+	// Check results
+	for _, result := range results {
+		if result != nil {
+			if errStr, ok := result.(string); ok && strings.HasPrefix(errStr, "ERR") {
+				// log.Printf("  [FLOW-%d] [WRITER] ✗ Command failed: %v", fw.flowID, errStr)
+				failCount++
+			} else if errRes, ok := result.(error); ok {
+				// Pipeline might return error in slice? No, usually values or error.
+				// redisx uses specific return type.
+				// Our redisx.Pipeline returns []interface{}.
+				// If error, it returns err.
+				// The result element itself is the RESP reply.
+				// Error replies start with - (e.g. -MOVED).
+				// We should check for MOVED?
+				// If MOVED, we routed wrong. Recovery?
+				// For now, count as fail.
+				if strings.HasPrefix(fmt.Sprintf("%v", errRes), "MOVED") {
+					log.Printf("  [FLOW-%d] [WRITER] ✗ MOVED error on %s", fw.flowID, addr)
 					failCount++
 				} else {
 					successCount++
@@ -532,97 +451,46 @@ func (fw *FlowWriter) writeSlotGroup(entries []*RDBEntry) writeResult {
 			} else {
 				successCount++
 			}
-		}
-
-		totalDuration := time.Since(startTime)
-		log.Printf("  [FLOW-%d] [WRITER] ✓ Standalone pipeline batch complete: %d success, %d failed in %v",
-			fw.flowID, successCount, failCount, totalDuration)
-
-		return writeResult{success: successCount, failed: failCount}
-	}
-
-	// Cluster mode: use cluster pipeline (CRITICAL OPTIMIZATION)
-	if fw.targetType == "redis-cluster" && fw.clusterClient != nil {
-		log.Printf("  [FLOW-%d] [WRITER] ✓ Using CLUSTER PIPELINE mode for %d entries", fw.flowID, len(entries))
-
-		// Extract ClusterClient interface for pipeline operations
-		type ClusterPipelineInterface interface {
-			PipelineForSlot(slot int, cmds [][]interface{}) ([]interface{}, error)
-		}
-
-		if clusterClient, ok := fw.clusterClient.(ClusterPipelineInterface); ok {
-			// Calculate slot from first entry's key
-			if len(entries) > 0 {
-				slot := int(calculateSlot(entries[0].Key))
-				log.Printf("  [FLOW-%d] [WRITER] Routing to slot %d for %d commands", fw.flowID, slot, len(cmds))
-
-				pipelineStart := time.Now()
-				results, err := clusterClient.PipelineForSlot(slot, cmds)
-				pipelineDuration := time.Since(pipelineStart)
-
-				if err != nil {
-					log.Printf("  [FLOW-%d] [WRITER] ✗ Cluster pipeline failed after %v: %v, fallback to sequential",
-						fw.flowID, pipelineDuration, err)
-					goto sequential
-				}
-
-				log.Printf("  [FLOW-%d] [WRITER] ✓ Cluster pipeline executed in %v (%.0f ops/sec)",
-					fw.flowID, pipelineDuration, float64(len(cmds))/pipelineDuration.Seconds())
-
-				// Check results
-				for i, result := range results {
-					if result != nil {
-						if errStr, ok := result.(string); ok && strings.HasPrefix(errStr, "ERR") {
-							log.Printf("  [FLOW-%d] [WRITER] ✗ Command %d failed: %v", fw.flowID, i, errStr)
-							failCount++
-						} else {
-							successCount++
-						}
-					} else {
-						successCount++
-					}
-				}
-
-				totalDuration := time.Since(startTime)
-				log.Printf("  [FLOW-%d] [WRITER] ✓ Cluster pipeline batch complete: %d success, %d failed in %v",
-					fw.flowID, successCount, failCount, totalDuration)
-
-				return writeResult{success: successCount, failed: failCount}
-			}
-		} else {
-			log.Printf("  [FLOW-%d] [WRITER] ✗ WARNING: ClusterClient does not support PipelineForSlot, fallback to sequential", fw.flowID)
-		}
-	}
-
-	log.Printf("  [FLOW-%d] [WRITER] Using SEQUENTIAL mode (targetType=%s, pipelineClient=%v)",
-		fw.flowID, fw.targetType, fw.pipelineClient != nil)
-
-sequential:
-	// Fallback: write entries sequentially (used for small batches or pipeline failures)
-	seqStart := time.Now()
-
-	// Use direct Do() instead of writeEntry() for better performance in cluster mode
-	for _, entry := range entries {
-		if err := fw.writeEntry(entry); err != nil {
-			// Don't log every error in production, just count
-			if len(entries) < 10 || failCount < 5 {
-				log.Printf("  [FLOW-%d] [WRITER] ✗ Failed to write key=%s: %v", fw.flowID, entry.Key, err)
-			}
-			failCount++
 		} else {
 			successCount++
 		}
 	}
 
-	seqDuration := time.Since(seqStart)
+	return writeResult{success: successCount, failed: failCount}
+}
 
-	// Only log if batch is large enough or took significant time
-	if len(entries) >= 10 || seqDuration > 100*time.Millisecond {
-		log.Printf("  [FLOW-%d] [WRITER] Direct write complete: %d success, %d failed in %v (%.0f ops/sec)",
-			fw.flowID, successCount, failCount, seqDuration, float64(len(entries))/seqDuration.Seconds())
+// writeSequential falls back to writing entries one by one
+func (fw *FlowWriter) writeSequential(client *redisx.Client, entries []*RDBEntry) writeResult {
+	var success, failed int
+	for _, entry := range entries {
+		if err := fw.writeEntryWithClient(client, entry); err != nil {
+			failed++
+		} else {
+			success++
+		}
+	}
+	return writeResult{success: success, failed: failed}
+}
+
+// writeEntryWithClient writes a single entry using specific client
+func (fw *FlowWriter) writeEntryWithClient(client *redisx.Client, entry *RDBEntry) error {
+	cmds := fw.buildCommands(entry)
+	if len(cmds) == 0 {
+		return nil
 	}
 
-	return writeResult{success: successCount, failed: failCount}
+	// Execute all commands for this entry (e.g. SET + PEXPIREAT)
+	for _, cmd := range cmds {
+		if len(cmd) == 0 {
+			continue
+		}
+		cmdName := fmt.Sprint(cmd[0])
+		args := cmd[1:]
+		if _, err := client.Do(cmdName, args...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // calculateSlot calculates the Redis Cluster slot for a key

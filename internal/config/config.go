@@ -34,10 +34,15 @@ type SourceConfig struct {
 }
 
 type TargetConfig struct {
-	Type     string `json:"type"`
-	Addr     string `json:"addr"`
-	Password string `json:"password"`
-	TLS      bool   `json:"tls"`
+	Type     string        `json:"type"`
+	Addr     string        `json:"addr"` // Used for standalone, or as a single seed for cluster if Seeds is empty
+	Password string        `json:"password"`
+	TLS      bool          `json:"tls"`
+	Cluster  ClusterConfig `json:"cluster"` // Cluster specific config
+}
+
+type ClusterConfig struct {
+	Seeds []string `json:"seeds"` // Initial nodes for discovery
 }
 
 // Boolish accepts true/false or quoted "true"/"false" in JSON decoding.
@@ -218,8 +223,8 @@ func (c *Config) Validate() error {
 	if c.Source.Addr == "" {
 		errs = append(errs, "source.addr is required")
 	}
-	if c.Target.Addr == "" {
-		errs = append(errs, "target.addr is required")
+	if c.Target.Addr == "" && len(c.Target.Cluster.Seeds) == 0 {
+		errs = append(errs, "target.addr or target.cluster.seeds is required")
 	}
 	if c.Migrate.SnapshotPath == "" {
 		errs = append(errs, "migrate.snapshotPath is required (RDB file path)")
@@ -295,7 +300,11 @@ func (c *Config) Summary() string {
 func (c *Config) PrettySummary() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "  🗄️ source    : %s @ %s\n", c.Source.Type, c.Source.Addr)
-	fmt.Fprintf(&b, "  🎯 target    : %s @ %s\n", c.Target.Type, c.Target.Addr)
+	targetParams := c.Target.Addr
+	if len(c.Target.Cluster.Seeds) > 0 {
+		targetParams = fmt.Sprintf("%v", c.Target.Cluster.Seeds)
+	}
+	fmt.Fprintf(&b, "  🎯 target    : %s @ %s\n", c.Target.Type, targetParams)
 	fmt.Fprintf(&b, "  🚚 migrate   : snapshot=%s\n", c.Migrate.SnapshotPath)
 	fmt.Fprintf(&b, "  📂 stateDir  : %s\n", c.ResolveStateDir())
 	fmt.Fprintf(&b, "  📝 statusFile: %s", c.StatusFilePath())

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"df2redis/internal/checkpoint"
-	"df2redis/internal/cluster"
 	"df2redis/internal/config"
 	"df2redis/internal/redisx"
 	"df2redis/internal/state"
@@ -30,7 +29,7 @@ type Replicator struct {
 	flowConns []*redisx.Client
 
 	// Redis Cluster client (replay commands)
-	clusterClient *cluster.ClusterClient
+	clusterClient *redisx.ClusterClient
 
 	// Checkpoint manager
 	checkpointMgr *checkpoint.Manager
@@ -130,23 +129,26 @@ func (r *Replicator) Start() error {
 	// Initialize Redis client (auto-detects cluster/standalone)
 	log.Println("")
 	log.Println("🔗 Connecting to target Redis...")
-	r.clusterClient = cluster.NewClusterClient(
-		r.cfg.Target.Addr,
-		r.cfg.Target.Password,
-		r.cfg.Target.TLS,
-	)
-	if err := r.clusterClient.Connect(); err != nil {
+
+	seeds := r.cfg.Target.Cluster.Seeds
+	if len(seeds) == 0 {
+		seeds = []string{r.cfg.Target.Addr}
+	}
+
+	var err error
+	r.clusterClient, err = redisx.DialCluster(r.ctx, seeds, r.cfg.Target.Password)
+	if err != nil {
 		r.recordPipelineStatus("error", fmt.Sprintf("Failed to connect to target Redis: %v", err))
 		return fmt.Errorf("failed to connect to target Redis: %w", err)
 	}
 	r.estimateTargetKeys()
 
 	// Detect topology
-	topology := r.clusterClient.GetTopology()
-	if len(topology) > 0 {
-		log.Printf("  ✓ Connected to Redis Cluster (%d masters)", len(topology))
+	masterCount := r.clusterClient.MasterCount()
+	if masterCount > 1 {
+		log.Printf("  ✓ Connected to Redis Cluster (%d masters)", masterCount)
 	} else {
-		log.Println("  ✓ Connected to Redis Standalone")
+		log.Println("  ✓ Connected to Redis (Single/Standalone)")
 	}
 
 	// Send DFLY SYNC to trigger the RDB transfer
@@ -557,9 +559,18 @@ func (r *Replicator) receiveSnapshot() error {
 	var statsMu sync.Mutex
 
 	// Create async writers for each flow with adaptive concurrency
+	// Create async writers for each flow with adaptive concurrency
 	flowWriters := make([]*FlowWriter, numFlows)
 	for i := 0; i < numFlows; i++ {
-		flowWriters[i] = NewFlowWriter(i, r.writeRDBEntry, numFlows, r.cfg.Target.Type, r.clusterClient)
+		var pipelineClient *redisx.Client
+		if r.cfg.Target.Type == "redis-standalone" || r.cfg.Target.Type == "redis" {
+			// Extract the single connection for pipeline usage
+			// We use GetNodeClient with the configured address
+			// Ignore error as connection was already established in connectTarget
+			pipelineClient, _ = r.clusterClient.GetNodeClient(r.cfg.Target.Addr)
+		}
+
+		flowWriters[i] = NewFlowWriter(i, r.writeRDBEntry, numFlows, r.cfg.Target.Type, pipelineClient, r.clusterClient)
 		flowWriters[i].Start()
 	}
 
@@ -1385,7 +1396,7 @@ func (r *Replicator) handleExpiredKey(entry *JournalEntry) error {
 	// Assume TTL is 1ms (key already expired). Can be refined if Dragonfly publishes TTL.
 	ttlMs := int64(1)
 
-	_, err := r.clusterClient.Do("PEXPIRE", key, fmt.Sprintf("%d", ttlMs))
+	_, err := r.clusterClient.Do("PEXPIRE", key, ttlMs)
 	if err != nil {
 		return err
 	}
@@ -1396,8 +1407,11 @@ func (r *Replicator) handleExpiredKey(entry *JournalEntry) error {
 // executeCommand executes a journal command verbatim
 func (r *Replicator) executeCommand(entry *JournalEntry) error {
 	// Copy args
-	args := make([]string, len(entry.Args))
-	copy(args, entry.Args)
+	// Copy args to interface slice
+	args := make([]interface{}, len(entry.Args))
+	for i, v := range entry.Args {
+		args[i] = v
+	}
 
 	// Execute
 	_, err := r.clusterClient.Do(entry.Command, args...)
@@ -1587,7 +1601,8 @@ func (r *Replicator) writeHash(entry *RDBEntry) error {
 	// Write all fields using HSET key field1 value1 ...
 	log.Printf("  [DEBUG] writeHash: key=%s, fields=%d", entry.Key, len(hashVal.Fields))
 	if len(hashVal.Fields) > 0 {
-		args := []string{entry.Key}
+		args := make([]interface{}, 0, 1+len(hashVal.Fields)*2)
+		args = append(args, entry.Key)
 		for field, value := range hashVal.Fields {
 			args = append(args, field, value)
 			log.Printf("  [DEBUG]   field=%s, value=%s", field, value)
@@ -1645,7 +1660,8 @@ func (r *Replicator) writeList(entry *RDBEntry) error {
 
 	// Insert elements with RPUSH
 	if len(listVal.Elements) > 0 {
-		args := []string{entry.Key}
+		args := make([]interface{}, 0, 1+len(listVal.Elements))
+		args = append(args, entry.Key)
 		for _, elem := range listVal.Elements {
 			args = append(args, elem)
 		}
@@ -1698,7 +1714,8 @@ func (r *Replicator) writeSet(entry *RDBEntry) error {
 
 	// Insert members via SADD
 	if len(setVal.Members) > 0 {
-		args := []string{entry.Key}
+		args := make([]interface{}, 0, 1+len(setVal.Members))
+		args = append(args, entry.Key)
 		for _, member := range setVal.Members {
 			args = append(args, member)
 		}
@@ -1751,7 +1768,8 @@ func (r *Replicator) writeZSet(entry *RDBEntry) error {
 
 	// Insert members via ZADD key score member ...
 	if len(zsetVal.Members) > 0 {
-		args := []string{entry.Key}
+		args := make([]interface{}, 0, 1+len(zsetVal.Members)*2)
+		args = append(args, entry.Key)
 		for _, zm := range zsetVal.Members {
 			args = append(args, fmt.Sprintf("%f", zm.Score), zm.Member)
 		}
@@ -1804,7 +1822,8 @@ func (r *Replicator) writeStream(entry *RDBEntry) error {
 
 	// Insert each message using XADD key ID field value ...
 	for _, msg := range streamVal.Messages {
-		args := []string{entry.Key, msg.ID}
+		args := make([]interface{}, 0, 2+len(msg.Fields)*2)
+		args = append(args, entry.Key, msg.ID)
 
 		// Add field-value pairs
 		for field, value := range msg.Fields {
@@ -1950,7 +1969,7 @@ func (r *Replicator) estimateTargetKeys() {
 		return
 	}
 	var total float64
-	err := r.clusterClient.ForEachMaster(func(_ string, client *redisx.Client) error {
+	err := r.clusterClient.ForEachMaster(func(client *redisx.Client) error {
 		reply, err := client.Do("DBSIZE")
 		if err != nil {
 			return err
