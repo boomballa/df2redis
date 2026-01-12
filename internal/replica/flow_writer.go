@@ -431,14 +431,14 @@ func (fw *FlowWriter) writeSlotGroup(entries []*RDBEntry) writeResult {
 	var successCount, failCount int
 	startTime := time.Now()
 
-	// CRITICAL DEBUG: Log code path selection
-	log.Printf("  [FLOW-%d] [WRITER] writeSlotGroup called: entries=%d, targetType=%s, pipelineClient=%v",
-		fw.flowID, len(entries), fw.targetType, fw.pipelineClient != nil)
-
-	// Declare variables before goto to avoid "jumps over declaration" error
+	// Declare variables at function start to avoid "goto jumps over declaration" error
 	var buildStart time.Time
 	var buildDuration time.Duration
 	var cmds [][]interface{}
+
+	// CRITICAL DEBUG: Log code path selection
+	log.Printf("  [FLOW-%d] [WRITER] writeSlotGroup called: entries=%d, targetType=%s, pipelineClient=%v",
+		fw.flowID, len(entries), fw.targetType, fw.pipelineClient != nil)
 
 	// CRITICAL OPTIMIZATION: Always use pipeline for cluster mode
 	// For standalone mode, skip pipeline for very small batches (< 3 entries)
@@ -450,6 +450,32 @@ func (fw *FlowWriter) writeSlotGroup(entries []*RDBEntry) writeResult {
 	if len(entries) < pipelineThreshold {
 		log.Printf("  [FLOW-%d] [WRITER] Small batch (%d entries), using DIRECT WRITE mode", fw.flowID, len(entries))
 		goto sequential
+	}
+
+	// CRITICAL FIX: Split large slot groups into smaller pipelines to avoid Redis timeout
+	// Redis can handle large pipelines, but 1000+ commands can cause 10+ second delays
+	// Split into chunks of 500 commands for better performance and responsiveness
+	const maxPipelineSize = 500
+	if len(entries) > maxPipelineSize {
+		log.Printf("  [FLOW-%d] [WRITER] Large slot group (%d entries), splitting into chunks of %d",
+			fw.flowID, len(entries), maxPipelineSize)
+
+		for i := 0; i < len(entries); i += maxPipelineSize {
+			end := i + maxPipelineSize
+			if end > len(entries) {
+				end = len(entries)
+			}
+			chunk := entries[i:end]
+			result := fw.writeSlotGroup(chunk) // Recursive call with smaller chunk
+			successCount += result.success
+			failCount += result.failed
+		}
+
+		duration := time.Since(startTime)
+		log.Printf("  [FLOW-%d] [WRITER] ✓ Large slot group complete: %d success, %d failed in %v (%.0f ops/sec)",
+			fw.flowID, successCount, failCount, duration, float64(len(entries))/duration.Seconds())
+
+		return writeResult{success: successCount, failed: failCount}
 	}
 
 	// Build pipeline commands for all entries (shared logic for both modes)
