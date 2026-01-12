@@ -126,10 +126,14 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 		}
 	}
 
-	// CRITICAL OPTIMIZATION: Increase batch size to reduce round trips
-	// Old: 100 entries/batch → ~700 ops/sec
-	// New: 2000 entries/batch → expected ~14000 ops/sec (20x reduction in round trips)
-	batchSize := 2000 // Process 2000 entries per batch (increased from 100)
+	// CRITICAL OPTIMIZATION FOR CLUSTER: Increase batch size dramatically for slot grouping
+	// Problem: Redis Cluster has 16384 slots, small batches result in 1 entry per slot
+	// Solution: Use 20000 entries/batch so each slot accumulates ~1.2 entries on average
+	// Trade-off: Higher memory usage but much better pipeline efficiency
+	batchSize := 20000
+	if targetType == "redis-standalone" {
+		batchSize = 2000 // Standalone doesn't need large batches
+	}
 
 	// DYNAMIC FLUSH INTERVAL: Use shorter interval for incremental sync responsiveness
 	// During full sync (high throughput), batches fill quickly and interval doesn't matter
