@@ -167,13 +167,11 @@ func (cc *ClusterClient) fetchSlots(ctx context.Context, addr string) ([]cluster
 	}
 	cc.mu.RUnlock()
 
-	created := false
 	if client == nil {
 		client, err = Dial(ctx, Config{Addr: addr, Password: cc.password})
 		if err != nil {
 			return nil, err
 		}
-		created = true
 		defer client.Close() // Close temp client
 	}
 

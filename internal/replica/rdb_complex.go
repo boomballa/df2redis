@@ -351,7 +351,7 @@ func readZiplistEntry(data []byte) (string, int, error) {
 		return value, offset + length, nil
 	} else if (encoding & 0xC0) == 0x40 {
 		// |01pppppp|qqqqqqqq| - 14-bit length string
-		length := int((encoding&0x3F)<<8 | data[offset])
+		length := int((int(encoding&0x3F) << 8) | int(data[offset]))
 		offset++
 		value := string(data[offset : offset+length])
 		return value, offset + length, nil
@@ -480,7 +480,7 @@ func readListpackEntry(data []byte) (string, int, error) {
 		if len(data) < 2 {
 			return "", 0, fmt.Errorf("13-bit integer lacks enough data")
 		}
-		uval := uint64((encoding&0x1F)<<8) | uint64(data[1])
+		uval := uint64(uint16(encoding&0x1F)<<8) | uint64(data[1])
 		// Convert to signed integer (two's complement)
 		if uval >= (1 << 12) {
 			uval = (1 << 13) - 1 - uval
@@ -494,7 +494,7 @@ func readListpackEntry(data []byte) (string, int, error) {
 		if len(data) < 2 {
 			return "", 0, fmt.Errorf("12-bit string length field lacks enough data")
 		}
-		length := int((encoding&0x0F)<<8) | int(data[1])
+		length := int(int(encoding&0x0F)<<8) | int(data[1])
 		if 2+length > len(data) {
 			return "", 0, fmt.Errorf("12-bit string lacks enough data: need %d bytes", 2+length)
 		}
@@ -612,6 +612,7 @@ func parseIntset(data []byte) ([]string, error) {
 
 	return members, nil
 }
+
 // ============ Stream parsing ============
 
 // parseStream handles stream types (RDB_TYPE_STREAM_LISTPACKS = 15, 19, 21)
@@ -690,7 +691,7 @@ func (p *RDBParser) parseStream(typeByte byte) (*StreamValue, error) {
 		// Parse messages
 		currentMs := masterMs
 		currentSeq := masterSeq
-		
+
 		for idx < len(entries) {
 			// Read flags (indicates how ID is stored)
 			if idx >= len(entries) {
@@ -709,7 +710,7 @@ func (p *RDBParser) parseStream(typeByte byte) (*StreamValue, error) {
 				currentMs += msDelta
 				idx++
 			}
-			
+
 			if (flags & 0x02) == 0 {
 				// seq is delta from previous
 				if idx >= len(entries) {
