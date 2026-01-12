@@ -135,10 +135,13 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 		batchSize = 2000 // Standalone doesn't need large batches
 	}
 
-	// DYNAMIC FLUSH INTERVAL: Use shorter interval for incremental sync responsiveness
-	// During full sync (high throughput), batches fill quickly and interval doesn't matter
-	// During incremental sync (low throughput), we want fast response time
-	flushInterval := 50 // Flush every 50ms for better incremental sync latency
+	// DYNAMIC FLUSH INTERVAL: Different strategies for standalone vs cluster
+	// Standalone: 50ms interval (small batches fill quickly)
+	// Cluster: 5000ms interval (need time to accumulate 20000 entries)
+	flushInterval := 50 // Default for standalone
+	if targetType == "redis-cluster" {
+		flushInterval = 5000 // 5 seconds for cluster to accumulate large batches
+	}
 
 	// CRITICAL: Even larger buffer to handle full sync bursts
 	// During full sync, Dragonfly can send data extremely fast (600万keys in 3 seconds)

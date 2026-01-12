@@ -296,6 +296,18 @@ func (c *Client) Pipeline(cmds [][]interface{}) ([]interface{}, error) {
 		return []interface{}{}, nil
 	}
 
+	// CRITICAL FIX: Set generous timeout for pipeline operations
+	// Large pipelines (500+ commands) need more time than individual commands
+	// Use 60 seconds to prevent timeout on slow Redis Cluster nodes
+	pipelineTimeout := 60 * time.Second
+	writeDeadline := time.Now().Add(pipelineTimeout)
+	readDeadline := time.Now().Add(pipelineTimeout)
+
+	// Set write deadline once for all commands
+	if err := c.conn.SetWriteDeadline(writeDeadline); err != nil {
+		return nil, err
+	}
+
 	// Step 1: Send all commands without waiting for replies
 	for _, cmdArgs := range cmds {
 		if len(cmdArgs) == 0 {
@@ -311,9 +323,22 @@ func (c *Client) Pipeline(cmds [][]interface{}) ([]interface{}, error) {
 		// Remaining elements are arguments
 		args := cmdArgs[1:]
 
-		if err := c.writeCommand(cmd, args...); err != nil {
+		// Write command without resetting deadline (already set above)
+		var buf bytes.Buffer
+		count := 1 + len(args)
+		fmt.Fprintf(&buf, "*%d\r\n", count)
+		writeBulk(&buf, strings.ToUpper(cmd))
+		for _, arg := range args {
+			writeBulk(&buf, formatArg(arg))
+		}
+		if _, err := c.conn.Write(buf.Bytes()); err != nil {
 			return nil, fmt.Errorf("redisx: failed to write command %s: %w", cmd, err)
 		}
+	}
+
+	// Set read deadline once for all replies
+	if err := c.conn.SetReadDeadline(readDeadline); err != nil {
+		return nil, err
 	}
 
 	// Step 2: Read all replies
