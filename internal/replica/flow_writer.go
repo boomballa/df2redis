@@ -430,70 +430,120 @@ func (fw *FlowWriter) writeSlotGroup(entries []*RDBEntry) writeResult {
 	log.Printf("  [FLOW-%d] [WRITER] writeSlotGroup called: entries=%d, targetType=%s, pipelineClient=%v",
 		fw.flowID, len(entries), fw.targetType, fw.pipelineClient != nil)
 
-	// Standalone mode: use pipeline for batch writes (CRITICAL OPTIMIZATION)
-	// This reduces network round trips from N to 1 per batch
-	if fw.targetType == "redis-standalone" && fw.pipelineClient != nil {
-		log.Printf("  [FLOW-%d] [WRITER] ✓ Using PIPELINE mode for %d entries", fw.flowID, len(entries))
-
-		// Build pipeline commands for all entries
-		buildStart := time.Now()
-		cmds := make([][]interface{}, 0, len(entries))
-		for _, entry := range entries {
-			cmd := fw.buildCommand(entry)
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
+	// Build pipeline commands for all entries (shared logic for both modes)
+	buildStart := time.Now()
+	cmds := make([][]interface{}, 0, len(entries))
+	for _, entry := range entries {
+		cmd := fw.buildCommand(entry)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
 		}
-		buildDuration := time.Since(buildStart)
+	}
+	buildDuration := time.Since(buildStart)
 
-		log.Printf("  [FLOW-%d] [WRITER] Built %d commands in %v", fw.flowID, len(cmds), buildDuration)
+	if len(cmds) == 0 {
+		log.Printf("  [FLOW-%d] [WRITER] ⚠ No commands built, all entries skipped", fw.flowID)
+		return writeResult{success: 0, failed: 0}
+	}
 
-		// Execute pipeline batch
-		if len(cmds) > 0 {
-			pipelineStart := time.Now()
-			results, err := fw.pipelineClient.Pipeline(cmds)
-			pipelineDuration := time.Since(pipelineStart)
+	log.Printf("  [FLOW-%d] [WRITER] Built %d commands in %v", fw.flowID, len(cmds), buildDuration)
 
-			if err != nil {
-				log.Printf("  [FLOW-%d] [WRITER] ✗ Pipeline failed after %v: %v, fallback to sequential",
-					fw.flowID, pipelineDuration, err)
-				// Fallback to sequential writes on pipeline failure
-				goto sequential
-			}
+	// Standalone mode: use standalone pipeline
+	if fw.targetType == "redis-standalone" && fw.pipelineClient != nil {
+		log.Printf("  [FLOW-%d] [WRITER] ✓ Using STANDALONE PIPELINE mode for %d entries", fw.flowID, len(entries))
 
-			log.Printf("  [FLOW-%d] [WRITER] ✓ Pipeline executed in %v (%.0f ops/sec)",
-				fw.flowID, pipelineDuration, float64(len(cmds))/pipelineDuration.Seconds())
+		pipelineStart := time.Now()
+		results, err := fw.pipelineClient.Pipeline(cmds)
+		pipelineDuration := time.Since(pipelineStart)
 
-			// Check results
-			for i, result := range results {
-				if result != nil {
-					// Check if result is an error
-					if errStr, ok := result.(string); ok && strings.HasPrefix(errStr, "ERR") {
-						log.Printf("  [FLOW-%d] [WRITER] ✗ Command %d failed: %v", fw.flowID, i, errStr)
-						failCount++
-					} else {
-						successCount++
-					}
+		if err != nil {
+			log.Printf("  [FLOW-%d] [WRITER] ✗ Standalone pipeline failed after %v: %v, fallback to sequential",
+				fw.flowID, pipelineDuration, err)
+			goto sequential
+		}
+
+		log.Printf("  [FLOW-%d] [WRITER] ✓ Standalone pipeline executed in %v (%.0f ops/sec)",
+			fw.flowID, pipelineDuration, float64(len(cmds))/pipelineDuration.Seconds())
+
+		// Check results
+		for i, result := range results {
+			if result != nil {
+				if errStr, ok := result.(string); ok && strings.HasPrefix(errStr, "ERR") {
+					log.Printf("  [FLOW-%d] [WRITER] ✗ Command %d failed: %v", fw.flowID, i, errStr)
+					failCount++
 				} else {
 					successCount++
 				}
+			} else {
+				successCount++
 			}
-
-			totalDuration := time.Since(startTime)
-			log.Printf("  [FLOW-%d] [WRITER] ✓ Pipeline batch complete: %d success, %d failed in %v",
-				fw.flowID, successCount, failCount, totalDuration)
-
-			return writeResult{success: successCount, failed: failCount}
-		} else {
-			log.Printf("  [FLOW-%d] [WRITER] ⚠ No commands built, all entries skipped", fw.flowID)
 		}
-	} else {
-		log.Printf("  [FLOW-%d] [WRITER] Using SEQUENTIAL mode (targetType=%s, pipelineClient=%v)",
-			fw.flowID, fw.targetType, fw.pipelineClient != nil)
+
+		totalDuration := time.Since(startTime)
+		log.Printf("  [FLOW-%d] [WRITER] ✓ Standalone pipeline batch complete: %d success, %d failed in %v",
+			fw.flowID, successCount, failCount, totalDuration)
+
+		return writeResult{success: successCount, failed: failCount}
 	}
 
+	// Cluster mode: use cluster pipeline (CRITICAL OPTIMIZATION)
+	if fw.targetType == "redis-cluster" && fw.clusterClient != nil {
+		log.Printf("  [FLOW-%d] [WRITER] ✓ Using CLUSTER PIPELINE mode for %d entries", fw.flowID, len(entries))
+
+		// Extract ClusterClient interface for pipeline operations
+		type ClusterPipelineInterface interface {
+			PipelineForSlot(slot int, cmds [][]interface{}) ([]interface{}, error)
+		}
+
+		if clusterClient, ok := fw.clusterClient.(ClusterPipelineInterface); ok {
+			// Calculate slot from first entry's key
+			if len(entries) > 0 {
+				slot := int(calculateSlot(entries[0].Key))
+				log.Printf("  [FLOW-%d] [WRITER] Routing to slot %d for %d commands", fw.flowID, slot, len(cmds))
+
+				pipelineStart := time.Now()
+				results, err := clusterClient.PipelineForSlot(slot, cmds)
+				pipelineDuration := time.Since(pipelineStart)
+
+				if err != nil {
+					log.Printf("  [FLOW-%d] [WRITER] ✗ Cluster pipeline failed after %v: %v, fallback to sequential",
+						fw.flowID, pipelineDuration, err)
+					goto sequential
+				}
+
+				log.Printf("  [FLOW-%d] [WRITER] ✓ Cluster pipeline executed in %v (%.0f ops/sec)",
+					fw.flowID, pipelineDuration, float64(len(cmds))/pipelineDuration.Seconds())
+
+				// Check results
+				for i, result := range results {
+					if result != nil {
+						if errStr, ok := result.(string); ok && strings.HasPrefix(errStr, "ERR") {
+							log.Printf("  [FLOW-%d] [WRITER] ✗ Command %d failed: %v", fw.flowID, i, errStr)
+							failCount++
+						} else {
+							successCount++
+						}
+					} else {
+						successCount++
+					}
+				}
+
+				totalDuration := time.Since(startTime)
+				log.Printf("  [FLOW-%d] [WRITER] ✓ Cluster pipeline batch complete: %d success, %d failed in %v",
+					fw.flowID, successCount, failCount, totalDuration)
+
+				return writeResult{success: successCount, failed: failCount}
+			}
+		} else {
+			log.Printf("  [FLOW-%d] [WRITER] ✗ WARNING: ClusterClient does not support PipelineForSlot, fallback to sequential", fw.flowID)
+		}
+	}
+
+	log.Printf("  [FLOW-%d] [WRITER] Using SEQUENTIAL mode (targetType=%s, pipelineClient=%v)",
+		fw.flowID, fw.targetType, fw.pipelineClient != nil)
+
 sequential:
-	// Cluster mode OR fallback: write entries sequentially
+	// Fallback: write entries sequentially
 	log.Printf("  [FLOW-%d] [WRITER] Sequential write started for %d entries", fw.flowID, len(entries))
 	seqStart := time.Now()
 
