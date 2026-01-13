@@ -10,7 +10,7 @@ df2redis is a high-performance replication toolkit that implements Dragonfly's n
 - **Seamless Transition**: Global synchronization barrier ensures no data loss during phase switch
 
 ### 2. High Performance
-- **Multi-FLOW Parallelism**: Parallel data streams matching Dragonfly's shard count (typically 8)
+- **Multi-FLOW Parallelism**: Parallel data streams matching Dragonfly's shard count (N equals the source Dragonfly shard count)
 - **Smart Batching**: Adaptive batch sizes (20K for cluster, 2K for standalone)
 - **Cluster Routing Optimization**: Master node-based grouping instead of slot-based (100x performance gain)
 
@@ -28,7 +28,7 @@ df2redis is a high-performance replication toolkit that implements Dragonfly's n
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Dragonfly Master (Source)                     │
-│                      8 Shards (FLOW 0-7)                         │
+│                      N Shards (FLOW 0-N)                         │
 └────────┬────────────────────────────────────────────────────────┘
          │
          │ RDB Stream + Journal Stream
@@ -37,11 +37,11 @@ df2redis is a high-performance replication toolkit that implements Dragonfly's n
 ┌─────────────────────────────────────────────────────────────────┐
 │                         df2redis                                 │
 │  ┌──────────────────────────────────────────────────────────┐  │
-│  │  FLOW Layer (8 Goroutines)                               │  │
+│  │  FLOW Layer (N Goroutines)                               │  │
 │  │    Reader 0-7: TCP connection per FLOW                   │  │
 │  └──────────────────────────────────────────────────────────┘  │
 │  ┌──────────────────────────────────────────────────────────┐  │
-│  │  Parser Layer (8 Goroutines)                             │  │
+│  │  Parser Layer (N Goroutines)                             │  │
 │  │    RDB Parser: Opcode → Entry                            │  │
 │  │    Journal Parser: LSN, TxID, Command                    │  │
 │  └──────────────────────────────────────────────────────────┘  │
@@ -50,7 +50,7 @@ df2redis is a high-performance replication toolkit that implements Dragonfly's n
 │  │    Wait for all FLOWs to complete RDB phase              │  │
 │  └──────────────────────────────────────────────────────────┘  │
 │  ┌──────────────────────────────────────────────────────────┐  │
-│  │  Writer Layer (8 Goroutines)                             │  │
+│  │  Writer Layer (N Goroutines)                             │  │
 │  │    Batch: 20K entries, Buffer: 2M entries                │  │
 │  │    Cluster Router: Node-based grouping                   │  │
 │  └──────────────────────────────────────────────────────────┘  │
@@ -71,7 +71,7 @@ df2redis is a high-performance replication toolkit that implements Dragonfly's n
 
 | Component | Responsibility | Key Files |
 |-----------|---------------|-----------|
-| **FLOW Manager** | Establish and manage 8 FLOW connections | `internal/replica/replicator.go` |
+| **FLOW Manager** | Establish and manage N FLOW connections | `internal/replica/replicator.go` |
 | **RDB Parser** | Decode Dragonfly RDB stream | `internal/replica/rdb_parser.go` |
 | **Journal Parser** | Parse journal entries | `internal/replica/journal_parser.go` |
 | **Cluster Router** | Master node-based routing | `internal/replica/flow_writer.go` |
@@ -141,8 +141,8 @@ sendSTARTSTABLE()       // Enter stable sync
 |--------|-------|-------|
 | **Full Sync Throughput** | 100,000+ ops/sec | With proper batch sizing |
 | **Incremental Sync Latency** | <50ms | Journal entry to Redis |
-| **Memory Usage** | ~16GB | 8 FLOWs × 2M buffer × 1KB/entry |
-| **CPU Usage** | ~400% | 8 parser + 8 writer goroutines |
+| **Memory Usage** | ~16GB | N FLOWs × 2M buffer × 1KB/entry |
+| **CPU Usage** | ~400% | N parser + N writer goroutines |
 
 ## Further Reading
 

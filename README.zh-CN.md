@@ -25,7 +25,7 @@
 ### 🎯 为什么选择 df2redis？
 
 - **🔌 原生协议支持**：实现了 Dragonfly 复制协议（DFLY REPLICAOF、FLOW、Journal 流）
-- **⚡ 高性能**：8 分片并行数据传输，高效的 RDB 解析
+- **⚡ 高性能**：N 分片并行数据传输（N 为源端 Dragonfly 的 shard 数量），高效的 RDB 解析
 - **🔄 实时同步**：通过 Journal 流处理实现持续增量复制
 - **🛡️ 零数据丢失**：基于 LSN 的检查点机制，支持断点续传
 - **🎨 零依赖**：纯 Go 实现，无外部运行时依赖
@@ -40,7 +40,7 @@
 - ✅ **全量快照同步**
   - 完整的 RDB 解析，支持所有 Redis 数据类型（String、Hash、List、Set、ZSet）
   - 支持 Dragonfly 特有编码（Type 18 Listpack 格式）
-  - 8 分片并行数据传输，实现最优吞吐量
+  - N 分片并行数据传输（N 为源端 Dragonfly 的 shard 数量），实现最优吞吐量
 
 - ✅ **增量同步**
   - 实时 Journal 流解析和命令重放
@@ -190,7 +190,7 @@ tail -f logs/df2redis.log
   [2/6] 声明监听端口: 6380...
   ✓ 端口已注册
   ...
-  ✓ 所有 8 个 FLOW 连接已建立
+  ✓ 所有 N 个 FLOW 连接已建立
 ✓ 握手完成
 
 📦 开始并行接收和解析 RDB 快照...
@@ -236,7 +236,7 @@ df2redis 实现了完全并行的多 FLOW 架构，与 Dragonfly 的分片设计
 │  Dragonfly  │◄──────────────────│  df2redis    │
 │   (Master)  │                    │  (Replica)   │
 │             │                    │              │
-│             │   8x FLOW Streams  │              │
+│             │   Nx FLOW Streams  │              │
 │             ├───────────────────►│              │
 │             │   RDB + Journal    │              │
 └─────────────┘                    └──────┬───────┘
@@ -253,7 +253,7 @@ df2redis 实现了完全并行的多 FLOW 架构，与 Dragonfly 的分片设计
 
 1. **零停机迁移** – 全量同步（RDB 快照）+ 增量同步（Journal 流）通过全局同步屏障实现无缝切换。
 
-2. **高性能** – 并行 FLOW（通常 8 个）、智能批处理（集群模式 20K，单机模式 2K）、基于节点的集群路由（相比简单的 Slot 分组性能提升 100 倍）。
+2. **高性能** – 并行 FLOW（数量与源端 shard 数相同）、智能批处理（集群模式 20K，单机模式 2K）、基于节点的集群路由（相比简单的 Slot 分组性能提升 100 倍）。
 
 3. **生产就绪** – 基于 LSN 的 Checkpoint 机制支持断点续传、可配置的冲突策略、内置监控 Dashboard。
 
@@ -273,10 +273,10 @@ df2redis 实现了完全并行的多 FLOW 架构，与 Dragonfly 的分片设计
    - PING/PONG 交互
    - REPLCONF 协商（listening-port、capa、ip-address）
    - DFLY REPLICAOF 注册
-   - 建立 8 个 FLOW 连接
+   - 建立 N 个 FLOW 连接（N 由源端决定）
 
 2. **快照阶段**
-   - 通过 8 个并行 FLOW 接收 RDB 数据
+   - 通过多个并行 FLOW 接收 RDB 数据
    - 解析 RDB 条目（所有数据类型）
    - 根据正确的路由写入目标 Redis
 
@@ -521,9 +521,9 @@ go test -tags=integration ./tests/integration
 |----------|-----------|------------|---------|
 | 全量同步 | 10GB | ~800 MB/s | N/A |
 | 增量同步 | 10k ops/s | ~9.8k ops/s | <5ms |
-| 8 分片并行 | 50GB | ~1.2 GB/s | N/A |
+| 并行分片 | 50GB | ~1.2 GB/s | N/A |
 
-*测试环境：Dragonfly 1.x、Redis 7.x、网络：10Gbps、硬件：16 vCPU、32GB RAM*
+*测试环境：Dragonfly 1.x (8 分片配置)、Redis 7.x、网络：10Gbps、硬件：16 vCPU、32GB RAM*
 
 ### 优化建议
 

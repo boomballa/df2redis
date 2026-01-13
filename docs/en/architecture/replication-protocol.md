@@ -100,7 +100,7 @@ Client                   Dragonfly Master
 DFLY FLOW <flow-id> <protocol-version>
 ```
 
-- `flow-id`: 0-based index (0, 1, 2, ..., 7 for 8 shards)
+- `flow-id`: 0-based index (0 to N-1 for N shards)
 - `protocol-version`: Currently "1.0"
 
 ### Response
@@ -116,7 +116,7 @@ The session ID is used later in `DFLY SYNC` to establish the full sync context.
 ```go
 // Create FLOW connections
 func (r *Replicator) setupFLOWs() error {
-    numFlows := r.detectShardCount()  // Usually 8
+    numFlows := r.detectShardCount()  // Usually matches source shard count
 
     for i := 0; i < numFlows; i++ {
         conn, err := net.Dial("tcp", r.masterAddr)
@@ -385,8 +385,8 @@ tcpConn.SetKeepAlivePeriod(15 * time.Second)
 ## Performance Considerations
 
 ### Parallel RDB Parsing
-- 8 FLOWs × 8 parser goroutines = 64 concurrent operations
-- Memory: ~16GB (8 × 2M entries × 1KB/entry)
+- N FLOWs × N parser goroutines = N*N concurrent operations
+- Memory: ~16GB (N × 2M entries × 1KB/entry)
 
 ### TCP Buffering
 - Default: 4KB (too small for high-throughput streams)

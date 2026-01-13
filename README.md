@@ -103,7 +103,7 @@ Redis / Redis Cluster (target)
 
 1. **Zero-Downtime Migration** – Full sync (RDB snapshot) + incremental sync (journal streaming) with seamless transition via global synchronization barrier.
 
-2. **High Performance** – Parallel FLOWs (typically 8), intelligent batching (20K for cluster, 2K for standalone), and node-based cluster routing (100x performance improvement over naive slot-based grouping).
+2. **High Performance** – Parallel FLOWs (count matches source shard count), intelligent batching (20K for cluster, 2K for standalone), and node-based cluster routing (100x performance improvement over naive slot-based grouping).
 
 3. **Production-Ready** – LSN-based checkpointing for resume capability, configurable conflict policies, and built-in monitoring dashboard.
 

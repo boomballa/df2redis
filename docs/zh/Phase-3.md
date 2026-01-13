@@ -508,7 +508,7 @@ func (r *Replicator) printStats(flowStats map[int]int) {
 
 ```
 Phase 1: 握手流程
- └─ REPLCONF → DFLY FLOW × 8
+ └─ REPLCONF → DFLY FLOW × N
 
 Phase 2: RDB 快照接收
  ├─ DFLY SYNC → 触发 RDB 传输
@@ -539,7 +539,7 @@ Phase 3: Journal 流接收和命令重放 ← 当前实现
 ### 测试环境
 - **源库**: Dragonfly v1.30.0 @ 192.168.1.100:6380
 - **目标库**: Redis Cluster @ 192.168.2.200:6379
-- **Shard 数量**: 8
+- **Shard 数量**: N
 - **协议版本**: VER4
 
 ### 成功输出示例
@@ -547,7 +547,7 @@ Phase 3: Journal 流接收和命令重放 ← 当前实现
 ```
 📡 开始接收 Journal 流...
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  • 并行监听所有 8 个 FLOW
+  • 并行监听所有 N 个 FLOW
   [FLOW-0] 开始接收 Journal 流
   [FLOW-1] 开始接收 Journal 流
   ... (FLOW-2 到 FLOW-7)
@@ -601,7 +601,7 @@ Redis Cluster 使用 CRC16 算法计算 slot，需要正确实现。
 ### 难点 4: 多 FLOW 并发处理
 
 **问题：**
-8 个 FLOW 并发接收 Journal Entry，需要正确汇总和处理。
+N 个 FLOW 并发接收 Journal Entry，需要正确汇总和处理。
 
 **解决：**
 - 使用 channel 汇总所有 FLOW 的 Entry
@@ -611,7 +611,7 @@ Redis Cluster 使用 CRC16 算法计算 slot，需要正确实现。
 ## 性能数据
 
 ### Journal 接收性能
-- **并行度**: 8 个 FLOW 同时接收
+- **并行度**: N 个 FLOW 同时接收
 - **吞吐量**: ~1000 条/秒（取决于命令复杂度）
 - **延迟**: < 10ms（Entry 接收到重放完成）
 
@@ -645,7 +645,7 @@ Redis Cluster 使用 CRC16 算法计算 slot，需要正确实现。
 
 ## 测试清单
 
-- [x] 并行接收所有 8 个 FLOW 的 Journal Entry
+- [x] 并行接收所有 N 个 FLOW 的 Journal Entry
 - [x] 正确解析 Inline 格式 Payload
 - [x] 正确解析 RESP Array 格式 Payload
 - [x] 提取命令名称和参数
@@ -691,7 +691,7 @@ feat(replica): implement Journal stream reception and command replay
 - Display parsed commands with FLOW ID and DB index
 
 Phase 3 完成：成功接收 Journal 流并重放到 Redis Cluster。
-测试环境：8 个 FLOW 并发接收，命令成功率 > 95%。
+测试环境：N 个 FLOW 并发接收，命令成功率 > 95%。
 ```
 
 ## 参考资料

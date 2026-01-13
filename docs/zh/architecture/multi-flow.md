@@ -9,7 +9,7 @@ df2redis 实现了完全并行的多 FLOW 架构，与 Dragonfly 的分片设计
 ![多 FLOW 架构](../../images/architecture/multi-flow.png)
 
 ```
-Dragonfly Master (8 个 Shard)
+Dragonfly Master (N 个 Shard)
     │
     ├─ Shard 0 ────► FLOW-0 ────► Parser-0 ────► Writer-0 ─┐
     ├─ Shard 1 ────► FLOW-1 ────► Parser-1 ────► Writer-1 ─┤
@@ -34,9 +34,9 @@ Dragonfly Master (8 个 Shard)
 
 2. **顺序性**：每个分片维护自己的顺序保证。在一个流中混合多个分片的数据会使 LSN 跟踪复杂化。
 
-3. **性能**：8 个并行流可以充分利用网络带宽和多核 CPU。
+3. **性能**：多个并行流可以充分利用网络带宽和多核 CPU。
 
-4. **可扩展性**：FLOW 数量随 Dragonfly 的分片数量扩展（可配置，通常 8-64）。
+4. **可扩展性**：FLOW 数量随 Dragonfly 的分片数量扩展（可配置，通常为 N）。
 
 ## 架构层次
 
@@ -245,7 +245,7 @@ entryChan := make(chan *RDBEntry, 2000000)
 **容量推理**：
 - 平均条目大小：~1KB
 - 缓冲区容量：2M 条目 × 1KB = 每个 FLOW 2GB
-- 总内存：8 FLOWs × 2GB = 16GB
+- 总内存：N FLOWs × 2GB = 16GB
 
 ### 基于信号量的批次限制
 
@@ -281,11 +281,11 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 
 **全量同步（RDB 阶段）**：
 - 单个 FLOW：~12,000 ops/sec
-- 总计（8 FLOWs）：~96,000 ops/sec
+- 总计（N FLOWs）：~96,000 ops/sec
 
 **稳定同步（Journal 阶段）**：
 - 单个 FLOW：~5,000 ops/sec（受源写入速率限制）
-- 总计（8 FLOWs）：~40,000 ops/sec
+- 总计（N FLOWs）：~40,000 ops/sec
 
 ### 延迟
 
@@ -296,7 +296,7 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 
 ### 资源使用
 
-| 资源 | 单个 FLOW | 总计（8 FLOWs）|
+| 资源 | 单个 FLOW | 总计（N FLOWs）|
 |----------|----------|--------------------|
 | 内存 | 2GB | 16GB |
 | CPU | ~50% | ~400% |

@@ -31,7 +31,7 @@ Dragonfly (Source)     df2redis (Pipeline)     Redis Cluster (Target)
                                 ▼
                     ┌───────────────────────┐
                     │   RDB/Journal Parser  │
-                    │    (8 goroutines)     │
+                    │    (N goroutines)     │
                     └───────────┬───────────┘
                                 │
                                 │ Parsed Entries
@@ -42,7 +42,7 @@ Dragonfly (Source)     df2redis (Pipeline)     Redis Cluster (Target)
 │  entryChan := make(chan *RDBEntry, 2000000)                     │
 │                                                                   │
 │  Capacity: 2M entries × 1KB/entry = 2GB per FLOW                │
-│  Total: 8 FLOWs × 2GB = 16GB memory                             │
+│  Total: N FLOWs × 2GB = 16GB memory                             │
 │                                                                   │
 │  When buffer is full → Parser blocks → Dragonfly slows down     │
 └───────────────────────────────┬─────────────────────────────────┘
@@ -141,7 +141,7 @@ TCP buffer fills → Dragonfly detects full buffer → Dragonfly slows down
 Average entry size: 1KB
 Buffer capacity: 2M entries
 Memory per FLOW: 2M × 1KB = 2GB
-Total (8 FLOWs): 16GB
+Total (N FLOWs): 16GB
 
 Why 2M?
 - Large enough: Absorb 10-20 seconds of burst traffic
@@ -230,7 +230,7 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 ```
 Standalone Mode:
 - maxConcurrent = 50 (high parallelism)
-- Total goroutines: 50 × 8 FLOWs = 400
+- Total goroutines: 50 × N FLOWs = 50*N
 
 Cluster Mode:
 - maxConcurrent = 400 / numFlows = 50
@@ -322,7 +322,7 @@ if tcpConn, ok := conn.(*net.TCPConn); ok {
 
 **Full Sync**:
 ```
-Parser throughput: ~150K ops/sec (8 FLOWs × 18K each)
+Parser throughput: ~150K ops/sec (N FLOWs × 18K each)
 Writer throughput: ~100K ops/sec (limited by Redis)
 Buffer absorbs the difference
 ```
@@ -347,8 +347,8 @@ Semaphore (10ms) → Pipeline (20ms) → Redis (5ms) = ~5035ms
 ### Memory Usage
 
 ```
-Channel buffers: 8 FLOWs × 2GB = 16GB
-Batch staging: 8 × 20K × 1KB = 160MB
+Channel buffers: N FLOWs × 2GB = 16GB
+Batch staging: N × 20K × 1KB = 20*N MB
 Total: ~16GB (under normal load)
 ```
 

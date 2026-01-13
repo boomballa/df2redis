@@ -10,7 +10,7 @@ df2redis 是一个高性能的复制工具，实现了 Dragonfly 的原生复制
 - **无缝切换**：全局同步屏障确保阶段切换时不丢失数据
 
 ### 2. 高性能
-- **多 FLOW 并行**：并行数据流匹配 Dragonfly 的分片数量（通常 8 个）
+- **多 FLOW 并行**：并行数据流匹配 Dragonfly 的分片数量（N 为源端 Dragonfly 的 shard 数量）
 - **智能批处理**：自适应批次大小（集群模式 20K，单机模式 2K）
 - **集群路由优化**：基于主节点分组而非 slot 分组（100 倍性能提升）
 
@@ -28,7 +28,7 @@ df2redis 是一个高性能的复制工具，实现了 Dragonfly 的原生复制
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Dragonfly Master (源端)                       │
-│                      8 个 Shard (FLOW 0-7)                       │
+│                      N 个 Shard (FLOW 0-N)                       │
 └────────┬────────────────────────────────────────────────────────┘
          │
          │ RDB Stream + Journal Stream
@@ -37,11 +37,11 @@ df2redis 是一个高性能的复制工具，实现了 Dragonfly 的原生复制
 ┌─────────────────────────────────────────────────────────────────┐
 │                         df2redis                                 │
 │  ┌──────────────────────────────────────────────────────────┐  │
-│  │  FLOW 层 (8 个 Goroutine)                                │  │
+│  │  FLOW 层 (N 个 Goroutine)                                │  │
 │  │    Reader 0-7：每个 FLOW 一个 TCP 连接                  │  │
 │  └──────────────────────────────────────────────────────────┘  │
 │  ┌──────────────────────────────────────────────────────────┐  │
-│  │  Parser 层 (8 个 Goroutine)                              │  │
+│  │  Parser 层 (N 个 Goroutine)                              │  │
 │  │    RDB Parser：Opcode → Entry                            │  │
 │  │    Journal Parser：LSN, TxID, Command                    │  │
 │  └──────────────────────────────────────────────────────────┘  │
@@ -50,7 +50,7 @@ df2redis 是一个高性能的复制工具，实现了 Dragonfly 的原生复制
 │  │    等待所有 FLOW 完成 RDB 阶段                           │  │
 │  └──────────────────────────────────────────────────────────┘  │
 │  ┌──────────────────────────────────────────────────────────┐  │
-│  │  Writer 层 (8 个 Goroutine)                              │  │
+│  │  Writer 层 (N 个 Goroutine)                              │  │
 │  │    批次：20K 条目，缓冲区：2M 条目                       │  │
 │  │    集群路由：基于节点分组                                │  │
 │  └──────────────────────────────────────────────────────────┘  │
@@ -71,7 +71,7 @@ df2redis 是一个高性能的复制工具，实现了 Dragonfly 的原生复制
 
 | 组件 | 职责 | 关键文件 |
 |------|-----|---------|
-| **FLOW 管理器** | 建立和管理 8 个 FLOW 连接 | `internal/replica/replicator.go` |
+| **FLOW 管理器** | 建立和管理 N 个 FLOW 连接 | `internal/replica/replicator.go` |
 | **RDB Parser** | 解码 Dragonfly RDB 流 | `internal/replica/rdb_parser.go` |
 | **Journal Parser** | 解析 Journal 条目 | `internal/replica/journal_parser.go` |
 | **集群路由** | 基于主节点的路由 | `internal/replica/flow_writer.go` |
@@ -141,8 +141,8 @@ sendSTARTSTABLE()       // 进入稳定同步
 |------|-----|------|
 | **全量同步吞吐量** | 100,000+ ops/sec | 适当的批次大小 |
 | **增量同步延迟** | <50ms | Journal 条目到 Redis |
-| **内存使用** | ~16GB | 8 FLOWs × 2M buffer × 1KB/entry |
-| **CPU 使用** | ~400% | 8 parser + 8 writer goroutines |
+| **内存使用** | ~16GB | N FLOWs × 2M buffer × 1KB/entry |
+| **CPU 使用** | ~400% | N parser + N writer goroutines |
 
 ## 延伸阅读
 

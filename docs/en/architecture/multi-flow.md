@@ -9,7 +9,7 @@ df2redis implements a fully parallel, multi-FLOW architecture that matches Drago
 ![Multi-FLOW Architecture](../../images/architecture/multi-flow.png)
 
 ```
-Dragonfly Master (8 Shards)
+Dragonfly Master (N Shards)
     │
     ├─ Shard 0 ────► FLOW-0 ────► Parser-0 ────► Writer-0 ─┐
     ├─ Shard 1 ────► FLOW-1 ────► Parser-1 ────► Writer-1 ─┤
@@ -34,9 +34,9 @@ Dragonfly Master (8 Shards)
 
 2. **Ordering**: Each shard maintains its own ordering guarantees. Mixing data from multiple shards in one stream would complicate LSN tracking.
 
-3. **Performance**: 8 parallel streams can saturate network bandwidth and leverage multi-core CPUs.
+3. **Performance**: Multiple parallel streams can saturate network bandwidth and leverage multi-core CPUs.
 
-4. **Scalability**: FLOW count scales with Dragonfly's shard count (configurable, typically 8-64).
+4. **Scalability**: FLOW count scales with Dragonfly's shard count (configurable, typically matching N).
 
 ## Architecture Layers
 
@@ -245,7 +245,7 @@ entryChan := make(chan *RDBEntry, 2000000)
 **Sizing rationale**:
 - Average entry size: ~1KB
 - Buffer capacity: 2M entries × 1KB = 2GB per FLOW
-- Total memory: 8 FLOWs × 2GB = 16GB
+- Total memory: N FLOWs × 2GB = 16GB
 
 ### Semaphore-Based Batch Limiting
 
@@ -281,11 +281,11 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 
 **Full Sync (RDB Phase)**:
 - Per-FLOW: ~12,000 ops/sec
-- Total (8 FLOWs): ~96,000 ops/sec
+- Total (N FLOWs): ~96,000 ops/sec
 
 **Stable Sync (Journal Phase)**:
 - Per-FLOW: ~5,000 ops/sec (limited by source write rate)
-- Total (8 FLOWs): ~40,000 ops/sec
+- Total (N FLOWs): ~40,000 ops/sec
 
 ### Latency
 
@@ -296,7 +296,7 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 
 ### Resource Usage
 
-| Resource | Per-FLOW | Total (8 FLOWs) |
+| Resource | Per-FLOW | Total (N FLOWs) |
 |----------|----------|-----------------|
 | Memory | 2GB | 16GB |
 | CPU | ~50% | ~400% |
