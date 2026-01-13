@@ -2,7 +2,7 @@
 
 # 🚀 df2redis
 
-**High-Performance Dragonfly to Redis Data Replication Tool**
+**高性能 Dragonfly 到 Redis 数据复制工具**
 
 [English](README.md) | [中文](README.zh-CN.md)
 
@@ -10,161 +10,161 @@
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/yourusername/df2redis/pulls)
 
-[Features](#-features) • [Quick Start](#-quick-start) • [Architecture](#-architecture) • [Documentation](#-documentation) • [Contributing](#-contributing)
+[功能特性](#-功能特性) • [快速开始](#-快速开始) • [架构设计](#-架构设计) • [文档](#-文档) • [贡献](#-贡献)
 
 </div>
 
 ---
 
-## 📖 Overview
+## 📖 概述
 
-**df2redis** is a production-ready data replication tool that implements the Dragonfly replication protocol to enable seamless, high-performance data migration from **Dragonfly** to **Redis/Redis Cluster**.
+**df2redis** 是一个生产就绪的数据复制工具，实现了 Dragonfly 复制协议，能够实现从 **Dragonfly** 到 **Redis/Redis Cluster** 的无缝、高性能数据迁移。
 
-Unlike traditional approaches that rely on proxy-based dual-write mechanisms, df2redis directly connects to Dragonfly as a replica and performs both **full snapshot sync** and **real-time incremental sync**, ensuring zero data loss and minimal downtime.
+与传统的基于代理的双写机制不同，df2redis 直接作为副本连接到 Dragonfly，同时执行**全量快照同步**和**实时增量同步**，确保零数据丢失和最小停机时间。
 
-### 🎯 Why df2redis?
+### 🎯 为什么选择 df2redis？
 
-- **🔌 Native Protocol Support**: Implements Dragonfly's replication protocol (DFLY REPLICAOF, FLOW, Journal streaming)
-- **⚡ High Performance**: 8-shard parallel data transfer with efficient RDB parsing
-- **🔄 Real-time Sync**: Continuous incremental replication via Journal stream processing
-- **🛡️ Zero Data Loss**: LSN-based checkpointing with resume capability
-- **🎨 Zero Dependencies**: Pure Go implementation with no external runtime requirements
-- **📊 Observable**: Built-in monitoring with detailed metrics and progress tracking
-
----
-
-## ✨ Features
-
-### Core Capabilities
-
-- ✅ **Full Snapshot Sync**
-  - Complete RDB parsing for all Redis data types (String, Hash, List, Set, ZSet)
-  - Support for Dragonfly-specific encodings (Type 18 Listpack format)
-  - Parallel 8-shard data transfer for optimal throughput
-
-- ✅ **Incremental Sync**
-  - Real-time Journal stream parsing and command replay
-  - Packed uint decoding for efficient data transfer
-  - LSN (Log Sequence Number) tracking and persistence
-
-- ✅ **Replication Protocol**
-  - Full Dragonfly handshake implementation (REPLCONF, DFLY REPLICAOF)
-  - Multi-shard FLOW management
-  - EOF token validation
-
-- ✅ **Reliability**
-  - LSN checkpoint persistence for crash recovery
-  - Automatic reconnection with resume capability
-  - Graceful shutdown with state preservation
-
-- ✅ **Target Support**
-  - Redis Standalone
-  - Redis Cluster with automatic slot routing
-  - MOVED/ASK error handling
-
-- ✅ **Data Validation**
-  - Integrated with [redis-full-check](https://github.com/alibaba/RedisFullCheck)
-  - Three validation modes: full/outline/length comparison
-  - Detailed inconsistency reports with JSON output
-  - Performance controls (QPS limiting, parallel tuning)
+- **🔌 原生协议支持**：实现了 Dragonfly 复制协议（DFLY REPLICAOF、FLOW、Journal 流）
+- **⚡ 高性能**：8 分片并行数据传输，高效的 RDB 解析
+- **🔄 实时同步**：通过 Journal 流处理实现持续增量复制
+- **🛡️ 零数据丢失**：基于 LSN 的检查点机制，支持断点续传
+- **🎨 零依赖**：纯 Go 实现，无外部运行时依赖
+- **📊 可观测**：内置监控，提供详细的指标和进度跟踪
 
 ---
 
-## 🚀 Quick Start
+## ✨ 功能特性
 
-### Prerequisites
+### 核心能力
 
-- **Go 1.21+** (for building from source)
-- **Dragonfly** instance (source)
-- **Redis/Redis Cluster** instance (target)
+- ✅ **全量快照同步**
+  - 完整的 RDB 解析，支持所有 Redis 数据类型（String、Hash、List、Set、ZSet）
+  - 支持 Dragonfly 特有编码（Type 18 Listpack 格式）
+  - 8 分片并行数据传输，实现最优吞吐量
 
-### Installation
+- ✅ **增量同步**
+  - 实时 Journal 流解析和命令重放
+  - Packed uint 解码，实现高效数据传输
+  - LSN（日志序列号）跟踪和持久化
 
-#### Option 1: Build from Source
+- ✅ **复制协议**
+  - 完整的 Dragonfly 握手实现（REPLCONF、DFLY REPLICAOF）
+  - 多分片 FLOW 管理
+  - EOF 令牌验证
 
-**On Linux (CentOS 7 / Debian 11 / Ubuntu):**
+- ✅ **可靠性**
+  - LSN 检查点持久化，支持崩溃恢复
+  - 自动重连，支持断点续传
+  - 优雅关闭，保留状态
+
+- ✅ **目标支持**
+  - Redis 单机版
+  - Redis Cluster，自动 Slot 路由
+  - MOVED/ASK 错误处理
+
+- ✅ **数据校验**
+  - 集成 [redis-full-check](https://github.com/alibaba/RedisFullCheck)
+  - 三种校验模式：完整/大纲/长度对比
+  - 详细的不一致性报告，JSON 输出
+  - 性能控制（QPS 限制、并行调优）
+
+---
+
+## 🚀 快速开始
+
+### 前置要求
+
+- **Go 1.21+**（从源码构建）
+- **Dragonfly** 实例（源端）
+- **Redis/Redis Cluster** 实例（目标端）
+
+### 安装
+
+#### 方式一：从源码构建
+
+**在 Linux 上（CentOS 7 / Debian 11 / Ubuntu）：**
 
 ```bash
-# Clone the repository
+# 克隆仓库
 git clone https://github.com/yourusername/df2redis.git
 cd df2redis
 
-# Build for Linux (amd64) - native compilation
+# Linux (amd64) 构建 - 原生编译
 go build -o bin/df2redis ./cmd/df2redis
 
-# Or specify explicitly
+# 或明确指定
 GOOS=linux GOARCH=amd64 go build -o bin/df2redis ./cmd/df2redis
 
-# Verify the binary
+# 验证二进制文件
 ./bin/df2redis version
 ```
 
-**On macOS (for Linux deployment):**
+**在 macOS 上（用于 Linux 部署）：**
 
 ```bash
-# Cross-compile for Linux from macOS
+# 从 macOS 交叉编译到 Linux
 GOOS=linux GOARCH=amd64 go build -o bin/df2redis ./cmd/df2redis
 
-# Build for macOS (ARM64 - M1/M2/M3)
+# macOS (ARM64 - M1/M2/M3) 构建
 GOOS=darwin GOARCH=arm64 go build -o bin/df2redis-mac ./cmd/df2redis
 
-# Build for macOS (Intel)
+# macOS (Intel) 构建
 GOOS=darwin GOARCH=amd64 go build -o bin/df2redis-mac ./cmd/df2redis
 ```
 
-**Platform-Specific Notes:**
+**平台说明：**
 
-| Platform | Command | Output Binary | Notes |
+| 平台 | 命令 | 输出二进制 | 说明 |
 |----------|---------|---------------|-------|
-| **CentOS 7** | `go build -o bin/df2redis ./cmd/df2redis` | `bin/df2redis` | Statically linked, no external dependencies |
-| **Debian 11** | `go build -o bin/df2redis ./cmd/df2redis` | `bin/df2redis` | Same binary works on Ubuntu/Debian |
-| **Ubuntu 20.04+** | `go build -o bin/df2redis ./cmd/df2redis` | `bin/df2redis` | Compatible with CentOS/Debian builds |
-| **macOS (M1+)** | `GOOS=darwin GOARCH=arm64 go build` | `bin/df2redis-mac` | For local testing |
-| **macOS (Intel)** | `GOOS=darwin GOARCH=amd64 go build` | `bin/df2redis-mac` | For local testing |
+| **CentOS 7** | `go build -o bin/df2redis ./cmd/df2redis` | `bin/df2redis` | 静态链接，无外部依赖 |
+| **Debian 11** | `go build -o bin/df2redis ./cmd/df2redis` | `bin/df2redis` | 与 Ubuntu/Debian 二进制相同 |
+| **Ubuntu 20.04+** | `go build -o bin/df2redis ./cmd/df2redis` | `bin/df2redis` | 与 CentOS/Debian 构建兼容 |
+| **macOS (M1+)** | `GOOS=darwin GOARCH=arm64 go build` | `bin/df2redis-mac` | 用于本地测试 |
+| **macOS (Intel)** | `GOOS=darwin GOARCH=amd64 go build` | `bin/df2redis-mac` | 用于本地测试 |
 
-#### Option 2: Download Pre-built Binary
+#### 方式二：下载预编译二进制
 
 ```bash
-# Coming soon - check releases page
+# 即将推出 - 请查看 releases 页面
 ```
 
-### Basic Usage
+### 基本使用
 
-#### 1. Create Configuration File
+#### 1. 创建配置文件
 
 ```bash
 cp examples/replicate.sample.yaml config.yaml
 ```
 
-Edit `config.yaml`:
+编辑 `config.yaml`：
 
 ```yaml
 source:
-  addr: "192.168.1.100:6380"     # Dragonfly address
-  password: ""                    # Optional password
+  addr: "192.168.1.100:6380"     # Dragonfly 地址
+  password: ""                    # 可选密码
   tls: false
 
 target:
-  type: "redis-cluster"           # or "redis-standalone"
-  addr: "192.168.2.200:6379"      # Redis address
+  type: "redis-cluster"           # 或 "redis-standalone"
+  addr: "192.168.2.200:6379"      # Redis 地址
   password: "your-password"
   tls: false
 
 checkpoint:
-  dir: "./checkpoint"             # LSN checkpoint directory
-  interval: 5                     # Checkpoint interval (seconds)
+  dir: "./checkpoint"             # LSN 检查点目录
+  interval: 5                     # 检查点间隔（秒）
 ```
 
-#### 2. Start Replication
+#### 2. 启动复制
 
 ```bash
-# Dry run to validate configuration
+# 试运行以验证配置
 ./bin/df2redis replicate --config config.yaml --dry-run
 
-# Start replication
+# 启动复制
 ./bin/df2redis replicate --config config.yaml
 
-# View real-time logs
+# 查看实时日志
 tail -f logs/df2redis.log
 
 # 冷态一次性导入 RDB（使用 redis-shake）
@@ -173,9 +173,9 @@ tail -f logs/df2redis.log
 
 > `cold-import` 会直接调用 redis-shake，复用配置中的 `migrate.*` 字段（或 `--rdb` 覆盖）把 RDB 文件灌入目标 Redis，不会启动增量同步。
 
-#### 3. Monitor Progress
+#### 3. 监控进度
 
-The tool outputs detailed progress information:
+工具会输出详细的进度信息：
 
 ```
 🚀 启动 Dragonfly 复制器
@@ -205,22 +205,22 @@ The tool outputs detailed progress information:
   → 延迟: 2.3ms
 ```
 
-#### 4. Validate Data Consistency
+#### 4. 验证数据一致性
 
-After replication, validate data consistency using the integrated check command:
+复制完成后，使用集成的检查命令验证数据一致性：
 
 ```bash
-# Quick validation (key outline mode - recommended)
+# 快速验证（键大纲模式 - 推荐）
 ./bin/df2redis check --config config.yaml --mode outline
 
-# Full validation (complete value comparison)
+# 完整验证（完整值对比）
 ./bin/df2redis check --config config.yaml --mode full --qps 200
 
-# View detailed results
+# 查看详细结果
 cat ./check-results/check_*.json | jq '.'
 ```
 
-See [Data Validation Guide](docs/data-validation.md) for detailed usage.
+详细用法请参阅[数据校验指南](docs/data-validation.md)。
 
 ---
 
@@ -269,18 +269,18 @@ df2redis 实现了完全并行的多 FLOW 架构，与 Dragonfly 的分片设计
 
 ### 复制流程
 
-1. **握手阶段（Handshake Phase）**
+1. **握手阶段**
    - PING/PONG 交互
    - REPLCONF 协商（listening-port、capa、ip-address）
    - DFLY REPLICAOF 注册
    - 建立 8 个 FLOW 连接
 
-2. **快照阶段（Snapshot Phase）**
+2. **快照阶段**
    - 通过 8 个并行 FLOW 接收 RDB 数据
    - 解析 RDB 条目（所有数据类型）
    - 根据正确的路由写入目标 Redis
 
-3. **增量阶段（Incremental Phase）**
+3. **增量阶段**
    - 通过 FLOW 流接收 Journal 条目
    - 解码 Packed Uint 格式
    - 解析 Op/LSN/DbId/TxId/Command
@@ -310,7 +310,7 @@ df2redis/
 
 ---
 
-## 📚 Documentation
+## 📚 文档
 
 ### 架构文档
 
@@ -333,87 +333,94 @@ df2redis/
 
 ### 详细指南
 
-- [Phase 1: Dragonfly Replication Handshake](docs/Phase-1.md)
-- [Phase 2: Journal Receipt and Parsing](docs/Phase-2.md)
-- [Phase 3: Incremental Sync Implementation](docs/Phase-3.md)
-- [Phase 4: LSN Persistence and Checkpointing](docs/Phase-4.md)
-- [Phase 5: RDB Complex Type Parsing](docs/phase5-rdb-complex-types.md)
-- [Phase 6: RDB Timeout Fix](docs/phase6-rdb-timeout-fix.md)
-- [Data Validation Guide](docs/data-validation.md)
-- [Architecture Overview](docs/architecture.md)
+- [阶段 1：Dragonfly 复制握手](docs/Phase-1.md)
+- [阶段 2：Journal 接收和解析](docs/Phase-2.md)
+- [阶段 3：增量同步实现](docs/Phase-3.md)
+- [阶段 4：LSN 持久化和检查点](docs/Phase-4.md)
+- [阶段 5：RDB 复杂类型解析](docs/phase5-rdb-complex-types.md)
+- [阶段 6：RDB 超时修复](docs/phase6-rdb-timeout-fix.md)
+- [数据校验指南](docs/data-validation.md)
+- [架构总览](docs/architecture.md)
 
-### Configuration Reference
+### 其他文档
+
+- [中文技术文档](docs/zh/) – 各复制阶段的深度解析、环境设置指南等
+- [测试脚本指南](scripts/README.md) – 全面的测试文档
+- [Dashboard API 参考](docs/api/dashboard-api.md) – 即将推出的 React UI 使用的 JSON 端点
+- [前端设计草案](docs/zh/dashboard.md) – Material UI + Chart.js 布局方案和实现路线图
+
+### 配置参考
 
 <details>
-<summary><strong>Source Configuration</strong></summary>
+<summary><strong>源端配置</strong></summary>
 
 ```yaml
 source:
-  addr: "192.168.1.100:6380" # Dragonfly address (required)
-  password: ""                # Authentication password (optional)
-  tls: false                  # Enable TLS (optional)
+  addr: "192.168.1.100:6380" # Dragonfly 地址（必填）
+  password: ""                # 认证密码（可选）
+  tls: false                  # 启用 TLS（可选）
 ```
 </details>
 
 <details>
-<summary><strong>Target Configuration</strong></summary>
+<summary><strong>目标端配置</strong></summary>
 
 ```yaml
 target:
-  type: "redis-cluster"       # "redis-standalone" or "redis-cluster" (required)
-  addr: "192.168.2.200:6379"  # Redis address (required)
-  password: "your_redis_password"  # Authentication password (optional)
-  tls: false                  # Enable TLS (optional)
+  type: "redis-cluster"       # "redis-standalone" 或 "redis-cluster"（必填）
+  addr: "192.168.2.200:6379"  # Redis 地址（必填）
+  password: "your_redis_password"  # 认证密码（可选）
+  tls: false                  # 启用 TLS（可选）
 ```
 </details>
 
 <details>
-<summary><strong>Checkpoint Configuration</strong></summary>
+<summary><strong>检查点配置</strong></summary>
 
 ```yaml
 checkpoint:
-  dir: "./checkpoint"         # Checkpoint directory (default: ./checkpoint)
-  interval: 5                 # Checkpoint interval in seconds (default: 5)
+  dir: "./checkpoint"         # 检查点目录（默认：./checkpoint）
+  interval: 5                 # 检查点间隔（秒）（默认：5）
 ```
 </details>
 
 <details>
-<summary><strong>Conflict Handling (RDB Snapshot Phase)</strong></summary>
+<summary><strong>冲突处理（RDB 快照阶段）</strong></summary>
 
 ```yaml
 conflict:
-  policy: "overwrite"         # Conflict handling strategy (default: overwrite)
-                              # - overwrite: Directly overwrite duplicate keys (highest performance)
-                              # - panic: Stop immediately when duplicate key detected
-                              # - skip: Skip duplicate keys and continue processing
+  policy: "overwrite"         # 冲突处理策略（默认：overwrite）
+                              # - overwrite: 直接覆盖重复键（性能最高）
+                              # - panic: 检测到重复键时立即停止
+                              # - skip: 跳过重复键并继续处理
 ```
 
-**Mode Comparison:**
+**模式对比：**
 
-| Mode | Performance | Use Case | Duplicate Key Behavior |
+| 模式 | 性能 | 使用场景 | 重复键行为 |
 |------|-------------|----------|------------------------|
-| **overwrite** | Highest (no EXISTS check) | Production migration, replacing target data | Overwrites silently |
-| **panic** | Medium (EXISTS check) | Fresh database migration, validation | Stops immediately, logs key |
-| **skip** | Lower (EXISTS check) | Incremental data append, partial sync | Skips and continues, logs key |
+| **overwrite** | 最高（无 EXISTS 检查） | 生产迁移，替换目标数据 | 静默覆盖 |
+| **panic** | 中等（EXISTS 检查） | 全新数据库迁移，验证 | 立即停止，记录键 |
+| **skip** | 较低（EXISTS 检查） | 增量数据追加，部分同步 | 跳过并继续，记录键 |
 
-**Important Notes:**
-- Conflict checking only applies to **RDB snapshot phase**, not Journal stream
-- `panic` and `skip` modes log duplicate keys for visibility
-- `overwrite` is recommended for most use cases (zero overhead)
+**重要说明：**
+- 冲突检查仅适用于 **RDB 快照阶段**，不适用于 Journal 流
+- `panic` 和 `skip` 模式会记录重复键以便查看
+- 大多数场景推荐使用 `overwrite`（零开销）
 
 </details>
 
 <details>
-<summary><strong>Advanced Options</strong></summary>
+<summary><strong>高级选项</strong></summary>
 
 ```yaml
 replica:
-  listening_port: 6380        # Listening port reported to master (default: 6380)
-  flow_timeout: 60            # FLOW connection timeout in seconds (default: 60)
+  listening_port: 6380        # 向主节点报告的监听端口（默认：6380）
+  flow_timeout: 60            # FLOW 连接超时（秒）（默认：60）
 
 logging:
-  level: "info"               # Log level: debug/info/warn/error (default: info)
-  file: "logs/df2redis.log"   # Log file path (optional)
+  level: "info"               # 日志级别：debug/info/warn/error（默认：info）
+  file: "logs/df2redis.log"   # 日志文件路径（可选）
 ```
 
 > 日志说明：`log.dir` 相对配置文件所在目录解析，最终文件名为 `<任务名>_<命令>.log`。同名任务每次运行都会覆盖旧日志，详细步骤仅写入日志文件，终端只展示少量提示；如需完全静默，可将 `log.consoleEnabled` 设为 `false`。
@@ -421,21 +428,21 @@ logging:
 
 ---
 
-## 🔧 Advanced Usage
+## 🔧 高级使用
 
-### Monitoring and Metrics
+### 监控和指标
 
-df2redis provides detailed metrics for monitoring:
+df2redis 提供详细的监控指标：
 
 ```bash
-# Check replication status
+# 查看复制状态
 ./bin/df2redis status --config config.yaml
 
-# View LSN checkpoint
+# 查看 LSN 检查点
 cat checkpoint/lsn.json
 ```
 
-Example checkpoint output:
+检查点输出示例：
 
 ```json
 {
@@ -449,153 +456,153 @@ Example checkpoint output:
 }
 ```
 
-### Graceful Shutdown
+### 优雅关闭
 
-df2redis handles SIGINT/SIGTERM gracefully:
+df2redis 会优雅处理 SIGINT/SIGTERM 信号：
 
 ```bash
-# Send interrupt signal
+# 发送中断信号
 kill -SIGTERM <pid>
 
-# Or use Ctrl+C
+# 或使用 Ctrl+C
 ^C
 ```
 
-The tool will:
-1. Stop accepting new Journal entries
-2. Flush pending commands to Redis
-3. Save final LSN checkpoint
-4. Close all connections cleanly
+工具会：
+1. 停止接收新的 Journal 条目
+2. 将待处理命令刷新到 Redis
+3. 保存最终的 LSN 检查点
+4. 干净地关闭所有连接
 
-### Resume from Checkpoint
+### 从检查点恢复
 
-After restart, df2redis automatically resumes from the last checkpoint:
+重启后，df2redis 会自动从最后的检查点恢复：
 
 ```bash
-# Restart replication - will resume from last LSN
+# 重启复制 - 将从最后的 LSN 恢复
 ./bin/df2redis replicate --config config.yaml
 ```
 
 ---
 
-## 🧪 Testing
+## 🧪 测试
 
-### Unit Tests
+### 单元测试
 
 ```bash
-# Run all tests
+# 运行所有测试
 go test ./...
 
-# Run with coverage
+# 运行覆盖率测试
 go test -cover ./...
 
-# Run specific package
+# 运行特定包
 go test ./internal/replica
 ```
 
-### Integration Tests
+### 集成测试
 
 ```bash
-# Prerequisites: Running Dragonfly and Redis instances
-# Edit test configuration
+# 前提条件：运行中的 Dragonfly 和 Redis 实例
+# 编辑测试配置
 cp tests/integration.sample.yaml tests/integration.yaml
 
-# Run integration tests
+# 运行集成测试
 go test -tags=integration ./tests/integration
 ```
 
 ---
 
-## 📊 Performance
+## 📊 性能
 
-### Benchmark Results
+### 基准测试结果
 
-| Scenario | Data Size | Throughput | Latency |
+| 场景 | 数据大小 | 吞吐量 | 延迟 |
 |----------|-----------|------------|---------|
-| Full Sync | 10GB | ~800 MB/s | N/A |
-| Incremental | 10k ops/s | ~9.8k ops/s | <5ms |
-| 8-Shard Parallel | 50GB | ~1.2 GB/s | N/A |
+| 全量同步 | 10GB | ~800 MB/s | N/A |
+| 增量同步 | 10k ops/s | ~9.8k ops/s | <5ms |
+| 8 分片并行 | 50GB | ~1.2 GB/s | N/A |
 
-*Tested on: Dragonfly 1.x, Redis 7.x, Network: 10Gbps, Hardware: 16 vCPU, 32GB RAM*
+*测试环境：Dragonfly 1.x、Redis 7.x、网络：10Gbps、硬件：16 vCPU、32GB RAM*
 
-### Optimization Tips
+### 优化建议
 
-1. **Increase FLOW parallelism**: Dragonfly's shard count determines FLOW count
-2. **Tune checkpoint interval**: Balance between recovery time and performance overhead
-3. **Use Redis pipelining**: Batch commands for higher throughput
-4. **Network optimization**: Use dedicated network for replication traffic
-
----
-
-## 🛣️ Roadmap
-
-- [x] Phase 1: Dragonfly Replication Handshake
-- [x] Phase 2: Journal Stream Processing
-- [x] Phase 3: Incremental Sync
-- [x] Phase 4: LSN Checkpointing
-- [x] Phase 5: Full RDB Type Support
-- [ ] Phase 6: Enhanced Monitoring & Metrics
-- [ ] Phase 7: Data Consistency Validation
-- [ ] Phase 8: Performance Optimization
-- [ ] Phase 9: Production Hardening
-
-See [ROADMAP.md](ROADMAP.md) for detailed plans.
+1. **增加 FLOW 并行度**：Dragonfly 的分片数决定 FLOW 数量
+2. **调整检查点间隔**：在恢复时间和性能开销之间取得平衡
+3. **使用 Redis 管道**：批量命令以实现更高吞吐量
+4. **网络优化**：为复制流量使用专用网络
 
 ---
 
-## 🤝 Contributing
+## 🛣️ 路线图
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+- [x] 阶段 1：Dragonfly 复制握手
+- [x] 阶段 2：Journal 流处理
+- [x] 阶段 3：增量同步
+- [x] 阶段 4：LSN 检查点
+- [x] 阶段 5：完整 RDB 类型支持
+- [ ] 阶段 6：增强监控和指标
+- [ ] 阶段 7：数据一致性验证
+- [ ] 阶段 8：性能优化
+- [ ] 阶段 9：生产加固
 
-### Development Setup
+详细计划请参阅 [ROADMAP.md](ROADMAP.md)。
+
+---
+
+## 🤝 贡献
+
+我们欢迎贡献！请参阅 [CONTRIBUTING.md](CONTRIBUTING.md) 了解指南。
+
+### 开发环境设置
 
 ```bash
-# Fork and clone the repository
+# Fork 并克隆仓库
 git clone https://github.com/yourusername/df2redis.git
 cd df2redis
 
-# Install dependencies
+# 安装依赖
 go mod download
 
-# Run tests
+# 运行测试
 go test ./...
 
-# Build
+# 构建
 go build -o bin/df2redis ./cmd/df2redis
 ```
 
-### Reporting Issues
+### 问题反馈
 
-Found a bug or have a feature request? Please [open an issue](https://github.com/yourusername/df2redis/issues).
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+发现 bug 或有功能请求？请[提交 issue](https://github.com/yourusername/df2redis/issues)。
 
 ---
 
-## 🙏 Acknowledgments
+## 📄 许可证
 
-- [Dragonfly](https://github.com/dragonflydb/dragonfly) - Modern Redis alternative
-- [Redis](https://redis.io/) - In-memory data structure store
-- [Go Community](https://go.dev/) - Excellent tooling and ecosystem
+本项目采用 MIT 许可证 - 详情请参阅 [LICENSE](LICENSE) 文件。
 
 ---
 
-## 📧 Contact
+## 🙏 致谢
 
-- **Author**: Your Name
-- **Email**: your.email@example.com
-- **Issues**: [GitHub Issues](https://github.com/yourusername/df2redis/issues)
+- [Dragonfly](https://github.com/dragonflydb/dragonfly) - 现代化的 Redis 替代方案
+- [Redis](https://redis.io/) - 内存数据结构存储
+- [Go 社区](https://go.dev/) - 优秀的工具和生态系统
+
+---
+
+## 📧 联系方式
+
+- **作者**：Your Name
+- **邮箱**：your.email@example.com
+- **问题反馈**：[GitHub Issues](https://github.com/yourusername/df2redis/issues)
 
 ---
 
 <div align="center">
 
-**⭐ If you find df2redis useful, please consider giving it a star! ⭐**
+**⭐ 如果你觉得 df2redis 有用，请给它一个星标！⭐**
 
-Made with ❤️ by the df2redis team
+用 ❤️ 由 df2redis 团队制作
 
 </div>

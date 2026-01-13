@@ -193,10 +193,10 @@ Technical research notes documenting Dragonfly protocol analysis and implementat
 
 ### Other Documentation
 
-- [Chinese technical docs](docs/) – deep dives for each replication phase, environment setup guides, etc.
+- [Chinese technical docs](docs/zh/) – deep dives for each replication phase, environment setup guides, etc.
 - [Test scripts guide](scripts/README.md) – comprehensive testing documentation.
 - [Dashboard API reference](docs/api/dashboard-api.md) – JSON endpoints consumed by the upcoming React UI.
-- [前端设计草案（ZH）](docs/zh/dashboard.md) – Material UI + Chart.js layout plan (English version WIP).
+- [Dashboard Design](docs/en/dashboard.md) – Material UI + Chart.js layout plan and implementation roadmap.
 
 ---
 
