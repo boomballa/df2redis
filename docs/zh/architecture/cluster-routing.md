@@ -8,7 +8,7 @@
 
 <!-- 🖼️ 集群路由对比图占位符 -->
 <!-- 替换为：docs/images/architecture/cluster-routing.png -->
-![集群路由策略](../../images/architecture/cluster-routing.svg)
+![集群路由策略](../../images/architecture/cluster-routing.png)
 
 ```go
 // ❌ 错误：按 Slot 分组

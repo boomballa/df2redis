@@ -17,7 +17,7 @@ Dragonfly (Source)     df2redis (Pipeline)     Redis Cluster (Target)
 
 ## Pipeline Architecture
 
-![Data Pipeline Architecture](../../images/architecture/data-pipeline.svg)
+![Data Pipeline Architecture](../../images/architecture/data-pipeline.png)
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
