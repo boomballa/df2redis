@@ -22,77 +22,77 @@ Dragonfly (Source)     df2redis (Pipeline)     Redis Cluster (Target)
 ![Data Pipeline Architecture](../../images/architecture/data-pipeline.png)
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
+┌──────────────────────────────────────────────────────────────────┐
 │                   Dragonfly (Fast Producer)                      │
 │                      ~100,000 ops/sec                            │
-└───────────────────────────────┬─────────────────────────────────┘
-                                │
-                                │ RDB/Journal Stream
-                                ▼
-                    ┌───────────────────────┐
-                    │   RDB/Journal Parser  │
-                    │    (N goroutines)     │
-                    └───────────┬───────────┘
-                                │
-                                │ Parsed Entries
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Channel Buffer (Backpressure)                 │
-│                                                                   │
-│  entryChan := make(chan *RDBEntry, 2000000)                     │
-│                                                                   │
-│  Capacity: 2M entries × 1KB/entry = 2GB per FLOW                │
-│  Total: N FLOWs × 2GB = 16GB memory                             │
-│                                                                   │
-│  When buffer is full → Parser blocks → Dragonfly slows down     │
-└───────────────────────────────┬─────────────────────────────────┘
-                                │
-                                │ Buffered Entries
-                                ▼
-                    ┌───────────────────────┐
-                    │  Batch Accumulator    │
-                    │                       │
-                    │  Collects entries     │
-                    │  until batchSize      │
-                    │  (20K for cluster)    │
-                    │                       │
-                    │  ⏰ Ticker: 5000ms     │
-                    │  (fallback flush)     │
-                    └───────────┬───────────┘
-                                │
-                                │ Full Batch
-                                ▼
-                    ┌───────────────────────┐
-                    │  Concurrency Limiter  │
-                    │                       │
-                    │  Semaphore:           │
-                    │  max 50 batches      │
-                    └───────────┬───────────┘
-                                │
-                                │ Acquire Slot
-                                ▼
-                    ┌───────────────────────┐
-                    │  Batch Processor      │
-                    │                       │
-                    │  groupByNode()        │
-                    │  → 3 node groups      │
-                    └───────────┬───────────┘
-                                │
-                                │ Grouped Commands
-                                ▼
-                    ┌───────────────────────┐
-                    │  Pipeline Executor    │
-                    │                       │
-                    │  3 pipelines          │
-                    │  (~666 cmds each)     │
-                    └───────────┬───────────┘
-                                │
-                                │ Redis Commands
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                Redis Cluster (Slow Consumer)                     │
-│                      ~10,000 ops/sec                             │
-└─────────────────────────────────────────────────────────────────┘
+└─────────────────────────────────┬────────────────────────────────┘
+                                  │
+                                  │ RDB/Journal Stream
+                                  ▼
+                      ┌───────────────────────┐
+                      │   RDB/Journal Parser  │
+                      │    (N goroutines)     │
+                      └───────────┬───────────┘
+                                  │
+                                  │ Parsed Entries
+                                  ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                   Channel Buffer (Backpressure)                  │
+│                                                                  │
+│  entryChan := make(chan *RDBEntry, 2000000)                      │
+│                                                                  │
+│  Capacity: 2M entries × 1KB/entry = 2GB per FLOW                 │
+│  Total: N FLOWs × 2GB = 16GB memory                              │
+│                                                                  │
+│  When buffer is full → Parser blocks → Dragonfly slows down      │
+└─────────────────────────────────┬────────────────────────────────┘
+                                  │
+                                  │ Buffered Entries
+                                  ▼
+                      ┌───────────────────────┐
+                      │  Batch Accumulator    │
+                      │                       │
+                      │  Collects entries     │
+                      │  until batchSize      │
+                      │  (20K for cluster)    │
+                      │                       │
+                      │  ⏰ Ticker: 5000ms     │
+                      │  (fallback flush)     │
+                      └───────────┬───────────┘
+                                  │
+                                  │ Full Batch
+                                  ▼
+                      ┌───────────────────────┐
+                      │  Concurrency Limiter  │
+                      │                       │
+                      │  Semaphore:           │
+                      │  max 50 batches       │
+                      └───────────┬───────────┘
+                                  │
+                                  │ Acquire Slot
+                                  ▼
+                      ┌───────────────────────┐
+                      │  Batch Processor      │
+                      │                       │
+                      │  groupByNode()        │
+                      │  → 3 node groups      │
+                      └───────────┬───────────┘
+                                  │
+                                  │ Grouped Commands
+                                  ▼
+                      ┌───────────────────────┐
+                      │  Pipeline Executor    │
+                      │                       │
+                      │  3 pipelines          │
+                      │  (~666 cmds each)     │
+                      └───────────┬───────────┘
+                                  │
+                                  │ Redis Commands
+                                  ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                 Redis Cluster (Slow Consumer)                    │
+│                       ~10,000 ops/sec                            │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ## Component Breakdown

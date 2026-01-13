@@ -558,7 +558,7 @@ go test -tags=integration ./tests/integration
 
 ```bash
 # Fork 并克隆仓库
-git clone https://github.com/yourusername/df2redis.git
+git clone https://github.com/boomballa/df2redis.git
 cd df2redis
 
 # 安装依赖
@@ -573,7 +573,7 @@ go build -o bin/df2redis ./cmd/df2redis
 
 ### 问题反馈
 
-发现 bug 或有功能请求？请[提交 issue](https://github.com/yourusername/df2redis/issues)。
+发现 bug 或有功能请求？请[提交 issue](https://github.com/boomballa/df2redis/issues)。
 
 ---
 
@@ -593,9 +593,8 @@ go build -o bin/df2redis ./cmd/df2redis
 
 ## 📧 联系方式
 
-- **作者**：Your Name
-- **邮箱**：your.email@example.com
-- **问题反馈**：[GitHub Issues](https://github.com/yourusername/df2redis/issues)
+- **邮箱**：boomballa0418@gmail.com
+- **问题反馈**：[GitHub Issues](https://github.com/boomballa/df2redis/issues)
 
 ---
 
