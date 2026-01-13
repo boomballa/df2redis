@@ -224,9 +224,11 @@ See [Data Validation Guide](docs/data-validation.md) for detailed usage.
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ 架构设计
 
-### High-Level Design
+df2redis 实现了完全并行的多 FLOW 架构，与 Dragonfly 的分片设计相匹配，以实现最大吞吐量。
+
+### 高层设计
 
 ```
 ┌─────────────┐                    ┌──────────────┐
@@ -247,52 +249,89 @@ See [Data Validation Guide](docs/data-validation.md) for detailed usage.
                                    └──────────────┘
 ```
 
-### Replication Flow
+### 核心设计原则
 
-1. **Handshake Phase**
-   - PING/PONG exchange
-   - REPLCONF negotiation (listening-port, capa, ip-address)
-   - DFLY REPLICAOF registration
-   - 8 FLOW connections establishment
+1. **零停机迁移** – 全量同步（RDB 快照）+ 增量同步（Journal 流）通过全局同步屏障实现无缝切换。
 
-2. **Snapshot Phase**
-   - Receive RDB data via 8 parallel FLOWs
-   - Parse RDB entries (all data types)
-   - Write to target Redis with proper routing
+2. **高性能** – 并行 FLOW（通常 8 个）、智能批处理（集群模式 20K，单机模式 2K）、基于节点的集群路由（相比简单的 Slot 分组性能提升 100 倍）。
 
-3. **Incremental Phase**
-   - Receive Journal entries via FLOW streams
-   - Decode packed uint format
-   - Parse Op/LSN/DbId/TxId/Command
-   - Replay commands to target Redis
-   - Persist LSN checkpoints
+3. **生产就绪** – 基于 LSN 的 Checkpoint 机制支持断点续传、可配置的冲突策略、内置监控 Dashboard。
 
-### Key Components
+### 架构文档
+
+详细的技术深度解析，请参阅架构文档：
+
+- **[架构总览](docs/zh/architecture/overview.md)** – 高层架构、设计原则和核心创新
+- **[复制协议深度解析](docs/zh/architecture/replication-protocol.md)** – 5 阶段协议详解（握手、FLOW 注册、全量同步、屏障、稳定同步）
+- **[多 FLOW 并行架构](docs/zh/architecture/multi-flow.md)** – 并行 FLOW 设计、全局同步屏障、并发控制
+- **[集群路由优化](docs/zh/architecture/cluster-routing.md)** – 基于节点 vs 基于 Slot 的分组（666 倍性能提升）
+- **[数据流水线与背压控制](docs/zh/architecture/data-pipeline.md)** – 缓冲机制、批次累积、流量控制
+
+### 复制流程
+
+1. **握手阶段（Handshake Phase）**
+   - PING/PONG 交互
+   - REPLCONF 协商（listening-port、capa、ip-address）
+   - DFLY REPLICAOF 注册
+   - 建立 8 个 FLOW 连接
+
+2. **快照阶段（Snapshot Phase）**
+   - 通过 8 个并行 FLOW 接收 RDB 数据
+   - 解析 RDB 条目（所有数据类型）
+   - 根据正确的路由写入目标 Redis
+
+3. **增量阶段（Incremental Phase）**
+   - 通过 FLOW 流接收 Journal 条目
+   - 解码 Packed Uint 格式
+   - 解析 Op/LSN/DbId/TxId/Command
+   - 重放命令到目标 Redis
+   - 持久化 LSN Checkpoint
+
+### 关键组件
 
 ```
 df2redis/
-├── cmd/df2redis/           # CLI entry point
+├── cmd/df2redis/           # CLI 入口点
 ├── internal/
-│   ├── replica/            # Core replication logic
-│   │   ├── replicator.go   # Main replicator orchestrator
-│   │   ├── handshake.go    # Dragonfly handshake protocol
-│   │   ├── rdb_parser.go   # RDB stream parser
-│   │   ├── rdb_complex.go  # Complex type parsers (Hash/List/Set/ZSet)
-│   │   ├── journal.go      # Journal stream processor
-│   │   └── checkpoint.go   # LSN persistence
-│   ├── checker/            # Data validation (redis-full-check wrapper)
-│   ├── config/             # Configuration management
-│   ├── redisx/             # Redis client (RESP protocol)
-│   └── util/               # Utilities
-├── docs/                   # Detailed documentation
-└── examples/               # Configuration examples
+│   ├── replica/            # 核心复制逻辑
+│   │   ├── replicator.go   # 主复制器编排
+│   │   ├── handshake.go    # Dragonfly 握手协议
+│   │   ├── rdb_parser.go   # RDB 流解析器
+│   │   ├── rdb_complex.go  # 复杂类型解析器（Hash/List/Set/ZSet）
+│   │   ├── journal.go      # Journal 流处理器
+│   │   └── checkpoint.go   # LSN 持久化
+│   ├── checker/            # 数据校验（redis-full-check 包装）
+│   ├── config/             # 配置管理
+│   ├── redisx/             # Redis 客户端（RESP 协议）
+│   └── util/               # 工具函数
+├── docs/                   # 详细文档
+└── examples/               # 配置示例
 ```
 
 ---
 
 ## 📚 Documentation
 
-### Detailed Guides
+### 架构文档
+
+深入的技术架构设计文档：
+
+- **[系统概览](docs/zh/architecture/overview.md)** – 高层架构、设计原则和核心创新
+- **[复制协议](docs/zh/architecture/replication-protocol.md)** – 5阶段协议分解（握手、FLOW注册、全量同步、屏障、稳定同步）
+- **[多 FLOW 架构](docs/zh/architecture/multi-flow.md)** – 并行 FLOW 设计、全局同步屏障和并发控制
+- **[集群路由优化](docs/zh/architecture/cluster-routing.md)** – 基于节点 vs 基于 Slot 的分组（666倍性能提升）
+- **[数据流水线与背压控制](docs/zh/architecture/data-pipeline.md)** – 缓冲、批量累积和流量控制机制
+
+### 技术研究笔记
+
+记录 Dragonfly 协议分析和实现挑战的技术研究笔记：
+
+- **[Dragonfly 复制协议](docs/zh/research/dragonfly-replica-protocol.md)** – Dragonfly Replica 复制协议、状态机和多 FLOW 握手机制的完整分析
+- **[Stream RDB 格式分析](docs/zh/research/dragonfly-stream-rdb-format.md)** – Stream RDB 序列化格式在 V1/V2/V3 版本中的详细分解和 PEL 编码
+- **[Stream 同步机制](docs/zh/research/dragonfly-stream-sync.md)** – Dragonfly 如何通过日志重写和精确 ID 跟踪确保 Stream 复制一致性
+- **[全量同步性能](docs/zh/research/dragonfly-fullsync-performance.md)** – Dragonfly 高性能全量同步架构分析和 Redis 写入优化建议
+
+### 详细指南
 
 - [Phase 1: Dragonfly Replication Handshake](docs/Phase-1.md)
 - [Phase 2: Journal Receipt and Parsing](docs/Phase-2.md)

@@ -86,6 +86,8 @@ Helpful tips:
 
 ## 🧱 Architecture
 
+df2redis implements a fully parallel, multi-FLOW architecture that matches Dragonfly's shard-based design for maximum throughput.
+
 ```
 Dragonfly (source)
    ├─ Main connection (handshake, STARTSTABLE)
@@ -97,7 +99,25 @@ Redis / Redis Cluster (target)
    └─ Conflict policy + TTL restoration
 ```
 
-Key modules:
+### Core Design Principles
+
+1. **Zero-Downtime Migration** – Full sync (RDB snapshot) + incremental sync (journal streaming) with seamless transition via global synchronization barrier.
+
+2. **High Performance** – Parallel FLOWs (typically 8), intelligent batching (20K for cluster, 2K for standalone), and node-based cluster routing (100x performance improvement over naive slot-based grouping).
+
+3. **Production-Ready** – LSN-based checkpointing for resume capability, configurable conflict policies, and built-in monitoring dashboard.
+
+### Architecture Documentation
+
+For detailed technical deep-dives, see the architecture documentation:
+
+- **[System Overview](docs/en/architecture/overview.md)** – High-level architecture, design principles, and core innovations
+- **[Replication Protocol](docs/en/architecture/replication-protocol.md)** – 5-phase protocol breakdown (handshake, FLOW registration, full sync, barrier, stable sync)
+- **[Multi-FLOW Architecture](docs/en/architecture/multi-flow.md)** – Parallel FLOW design, global synchronization barrier, and concurrency control
+- **[Cluster Routing Optimization](docs/en/architecture/cluster-routing.md)** – Node-based vs slot-based grouping (666x performance improvement)
+- **[Data Pipeline & Backpressure](docs/en/architecture/data-pipeline.md)** – Buffering, batch accumulation, and flow control mechanisms
+
+### Key Modules
 
 | Package | Purpose |
 | --- | --- |
@@ -152,8 +172,28 @@ See [scripts/README.md](scripts/README.md) for detailed documentation on each te
 
 ## 📚 Documentation
 
+### Architecture Documentation
+
+For detailed technical deep-dives, see:
+
+- **[System Overview](docs/en/architecture/overview.md)** – High-level architecture, design principles, and core innovations
+- **[Replication Protocol](docs/en/architecture/replication-protocol.md)** – 5-phase protocol breakdown (handshake, FLOW registration, full sync, barrier, stable sync)
+- **[Multi-FLOW Architecture](docs/en/architecture/multi-flow.md)** – Parallel FLOW design, global synchronization barrier, and concurrency control
+- **[Cluster Routing Optimization](docs/en/architecture/cluster-routing.md)** – Node-based vs slot-based grouping (666x performance improvement)
+- **[Data Pipeline & Backpressure](docs/en/architecture/data-pipeline.md)** – Buffering, batch accumulation, and flow control mechanisms
+
+### Research Notes
+
+Technical research notes documenting Dragonfly protocol analysis and implementation challenges:
+
+- **[Dragonfly Replication Protocol](docs/en/research/dragonfly-replica-protocol.md)** – Complete analysis of Dragonfly's replica replication protocol, state machine, and multi-FLOW handshake mechanism
+- **[Stream RDB Format Analysis](docs/en/research/dragonfly-stream-rdb-format.md)** – Detailed breakdown of Stream RDB serialization format across V1/V2/V3 versions and PEL encoding
+- **[Stream Sync Mechanism](docs/en/research/dragonfly-stream-sync.md)** – How Dragonfly ensures Stream replication consistency through journal rewriting and precise ID tracking
+- **[Full Sync Performance](docs/en/research/dragonfly-fullsync-performance.md)** – Analysis of Dragonfly's high-performance full sync architecture and optimization recommendations for Redis writes
+
+### Other Documentation
+
 - [Chinese technical docs](docs/) – deep dives for each replication phase, environment setup guides, etc.
-- [English README (this file)](README.md) – concise overview.
 - [Test scripts guide](scripts/README.md) – comprehensive testing documentation.
 - [Dashboard API reference](docs/api/dashboard-api.md) – JSON endpoints consumed by the upcoming React UI.
 - [前端设计草案（ZH）](docs/zh/dashboard.md) – Material UI + Chart.js layout plan (English version WIP).
