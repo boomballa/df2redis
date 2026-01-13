@@ -1,7 +1,6 @@
-<div align="center">
-
-
-<img src="docs/images/logo/df2redis.png" width="200" alt="df2redis logo" />
+<p align="center">
+  <img src="docs/images/logo/df2redis.png" width="100%" border="0" alt="df2redis logo">
+</p>
 
 # 🚀 df2redis
 
