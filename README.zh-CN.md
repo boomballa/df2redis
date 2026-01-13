@@ -1,5 +1,8 @@
 <div align="center">
 
+
+<img src="docs/images/logo/df2redis.png" width="200" alt="df2redis logo" />
+
 # 🚀 df2redis
 
 **高性能 Dragonfly 到 Redis 数据复制工具**

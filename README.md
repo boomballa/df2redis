@@ -1,5 +1,8 @@
 <div align="center">
 
+
+<img src="docs/images/logo/df2redis.png" width="200" alt="df2redis logo" />
+
 # 🚀 df2redis
 
 **High-Performance Dragonfly → Redis Replication Toolkit**
