@@ -4,9 +4,7 @@ df2redis implements a fully parallel, multi-FLOW architecture that matches Drago
 
 ## Overview
 
-<!-- 🖼️ Multi-FLOW Architecture Diagram Placeholder -->
-<!-- Replace with: docs/images/architecture/multi-flow.png -->
-![Multi-FLOW Architecture](../../images/architecture/multi-flow.png)
+![Multi-FLOW Architecture](../../images/architecture/multi-flow.svg)
 
 ```
 Dragonfly Master (N Shards)

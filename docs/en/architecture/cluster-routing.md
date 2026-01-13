@@ -6,9 +6,8 @@ This document explains the critical optimization that enables df2redis to achiev
 
 ### Initial Naive Implementation ❌
 
-<!-- 🖼️ Cluster Routing Comparison Diagram Placeholder -->
-<!-- Replace with: docs/images/architecture/cluster-routing.png -->
-![Cluster Routing Optimization](../../images/architecture/cluster-routing.png)
+![Cluster Routing Strategy](../../images/architecture/cluster-routing.svg)
+
 
 ```go
 // ❌ WRONG: Group by slot

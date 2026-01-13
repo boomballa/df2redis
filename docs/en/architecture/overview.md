@@ -21,9 +21,8 @@ df2redis is a high-performance replication toolkit that implements Dragonfly's n
 
 ## System Architecture
 
-<!-- 🖼️ Architecture Diagram Placeholder -->
-<!-- Replace with: docs/images/architecture/system-overview.png -->
-![System Architecture](../../images/architecture/system-overview.png)
+![System Architecture Overview](../../images/architecture/RDB%2BJournal-data-flow.svg)
+
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
