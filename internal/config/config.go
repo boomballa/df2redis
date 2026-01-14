@@ -171,9 +171,10 @@ func Load(path string) (*Config, error) {
 
 	cfg.path = absPath
 	cfg.ApplyDefaults()
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
+	cfg.path = absPath
+	cfg.ApplyDefaults()
+	// Validation is now the responsibility of the caller (CLI command),
+	// allowing partial configs for specific modes (e.g. cold-import).
 	cfg.resolveStateDir()
 	return &cfg, nil
 }

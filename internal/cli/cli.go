@@ -68,6 +68,9 @@ func runPrepare(args []string) int {
 	if err != nil {
 		return errorToExitCode(err)
 	}
+	if err := cfg.Validate(); err != nil {
+		return errorToExitCode(err)
+	}
 	if err := cfg.EnsureStateDir(); err != nil {
 		log.Printf("Failed to create state directory: %v", err)
 		return 1
@@ -106,6 +109,10 @@ func runMigrate(args []string) int {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		log.Printf("Failed to load config: %v", err)
+		return 2
+	}
+	if err := cfg.Validate(); err != nil {
+		log.Printf("Config validation failed: %v", err)
 		return 2
 	}
 	log.Printf("✅ Config loaded:\n%s", cfg.PrettySummary())
@@ -216,6 +223,23 @@ func runColdImport(args []string) int {
 	if err != nil {
 		return errorToExitCode(err)
 	}
+
+	// Partial validation for cold-import (Source is not required)
+	var errs []string
+	if cfg.Target.Addr == "" && len(cfg.Target.Cluster.Seeds) == 0 {
+		errs = append(errs, "target.addr or target.cluster.seeds is required")
+	}
+	if cfg.Migrate.SnapshotPath == "" && cfg.Migrate.ShakeConfigFile == "" && rdbPath == "" && shakeConfig == "" {
+		errs = append(errs, "migrate.snapshotPath or shake-conf is required")
+	}
+	if cfg.Migrate.ShakeBinary == "" && shakeBinary == "" {
+		errs = append(errs, "migrate.shakeBinary is required")
+	}
+	if len(errs) > 0 {
+		log.Printf("Config validation failed for cold-import:\n - %s", strings.Join(errs, "\n - "))
+		return 2
+	}
+
 	if rdbPath != "" {
 		cfg.Migrate.SnapshotPath = rdbPath
 	}
@@ -237,8 +261,9 @@ func runColdImport(args []string) int {
 	migrateCfg := cfg.ResolvedMigrateConfig()
 	cfg.Migrate = migrateCfg
 
-	if cfg.Migrate.SnapshotPath == "" {
-		log.Println("migrate.snapshotPath is not configured")
+	// Validation: RDB path is required UNLESS a shake config file is provided (which might contain it)
+	if cfg.Migrate.SnapshotPath == "" && cfg.Migrate.ShakeConfigFile == "" {
+		log.Println("migrate.snapshotPath is not configured (and no shake-conf provided)")
 		return 2
 	}
 	if cfg.Migrate.ShakeBinary == "" {
@@ -252,9 +277,11 @@ func runColdImport(args []string) int {
 	}
 	defer logger.Close()
 
-	if _, err := os.Stat(cfg.Migrate.SnapshotPath); err != nil {
-		logger.Error("RDB file unavailable: %v", err)
-		return 1
+	if cfg.Migrate.SnapshotPath != "" {
+		if _, err := os.Stat(cfg.Migrate.SnapshotPath); err != nil {
+			logger.Error("RDB file unavailable: %v", err)
+			return 1
+		}
 	}
 	if _, err := os.Stat(cfg.Migrate.ShakeBinary); err != nil {
 		logger.Error("redis-shake binary unavailable: %v", err)
@@ -277,7 +304,11 @@ func runColdImport(args []string) int {
 	}
 
 	logger.Console("❄️ Cold import started")
-	logger.Console("📦 RDB file: %s", cfg.Migrate.SnapshotPath)
+	if cfg.Migrate.SnapshotPath != "" {
+		logger.Console("📦 RDB file: %s", cfg.Migrate.SnapshotPath)
+	} else {
+		logger.Console("📦 RDB file: (configured in shake-conf)")
+	}
 	logger.Console("🎯 Target: %s @ %s", cfg.Target.Type, cfg.Target.Addr)
 	logger.Console("⚙️ redis-shake: %s", cfg.Migrate.ShakeBinary)
 	logger.Console("⚠️ Existing data on the target may be overwritten")
@@ -475,6 +506,9 @@ func runReplicate(args []string) int {
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
+		return errorToExitCode(err)
+	}
+	if err := cfg.Validate(); err != nil {
 		return errorToExitCode(err)
 	}
 	if taskNameFlag != "" {

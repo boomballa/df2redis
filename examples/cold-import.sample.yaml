@@ -1,0 +1,30 @@
+# ❄️ Configuration for 'cold-import' mode (offline RDB restore)
+# Usage: ./bin/df2redis cold-import --config examples/cold-import.sample.yaml
+
+target:
+  # type: redis-standalone or redis-cluster
+  type: redis-cluster
+  addr: localhost:6379          # Redis address (or one of the cluster nodes)
+  password: ""                  # Optional password
+  tls: false
+  # cluster:
+  #  seeds: []                  # Optional: explicit seed nodes
+
+stateDir: ../out
+statusFile: ../out/status-cold.json
+
+migrate:
+  snapshotPath: "/path/to/your/dump.rdb"       # 📦 REQUIRED: Path to local RDB file
+  shakeBinary: "../redis-shake-v4/redis-shake" # ⚙️ REQUIRED: Path to redis-shake binary
+  
+  # Advanced shake options (usually not needed thanks to auto-generation)
+  # shakeArgs: ""          
+  # shakeConfigFile: ""    
+
+advanced:
+  qps: 0                       # Rate limit (0 = unlimited)
+  batchSize: 500               # Pipeline batch size (mapped to pipeline_count_limit)
+
+log:
+  dir: "logs"
+  level: "info"
