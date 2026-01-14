@@ -41,7 +41,15 @@ func GenerateShakeConfigFile(cfg *config.Config, stateDir string) (string, error
 	if cfg.TaskName != "" {
 		shakeLogName = fmt.Sprintf("%s_shake.log", cfg.TaskName)
 	}
-	logPath := filepath.Join(absLogDir, shakeLogName)
+	// Calculate relative path from stateDir (shake's work dir) to logDir
+	// redis-shake v4 joins 'dir' + 'log_file', so we must provide a relative path if we want it elsewhere.
+	absStateDir, _ := filepath.Abs(stateDir)
+	relLogPath, err := filepath.Rel(absStateDir, filepath.Join(absLogDir, shakeLogName))
+	if err != nil {
+		// Fallback to simple filename if rel path fails, it will go to stateDir
+		relLogPath = shakeLogName
+	}
+	logPath := relLogPath
 	targetCluster := strings.Contains(strings.ToLower(cfg.Target.Type), "cluster")
 
 	// Map QPS: 0 in df2redis means unlimited.

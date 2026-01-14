@@ -812,6 +812,9 @@ func buildLogFilePrefix(cfg *config.Config, mode string) string {
 	addr = strings.ReplaceAll(addr, ":", "_")
 	addr = strings.ReplaceAll(addr, ".", "_")
 
+	if addr == "" {
+		return fmt.Sprintf("%s_%s", sourceType, mode)
+	}
 	return fmt.Sprintf("%s_%s_%s", sourceType, addr, mode)
 }
 
