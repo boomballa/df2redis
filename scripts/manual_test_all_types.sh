@@ -14,7 +14,7 @@ NC='\033[0m' # No Color
 
 # Configuration (modify these values as needed)
 SOURCE_HOST="localhost"
-SOURCE_PORT="6380"
+SOURCE_PORT="16379"
 TARGET_HOST="localhost"
 TARGET_PORT="6379"
 TARGET_PASS=""

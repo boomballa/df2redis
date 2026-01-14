@@ -317,7 +317,7 @@ func readListpackEntry(data []byte) (string, int, error) {
 
 ### 测试数据
 
-通过与真实 Dragonfly 实例 (192.168.1.100:6380) 进行完整同步测试：
+通过与真实 Dragonfly 实例 (192.168.1.100:16379) 进行完整同步测试：
 
 #### Hash 类型
 - `hash_ziplist_test_1`: 3 个字段 (field1=val1, field2=val2, field3=val3)

@@ -259,7 +259,7 @@ def main():
     """Main entry point."""
     # Configuration (modify as needed)
     SOURCE_HOST = "localhost"
-    SOURCE_PORT = 6380
+    SOURCE_PORT = 16379
     SOURCE_PASSWORD = ""
 
     TARGET_HOST = "localhost"

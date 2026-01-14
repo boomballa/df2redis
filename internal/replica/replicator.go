@@ -81,7 +81,7 @@ func NewReplicator(cfg *config.Config) *Replicator {
 		ctx:                ctx,
 		cancel:             cancel,
 		state:              StateDisconnected,
-		listeningPort:      6380, // default port
+		listeningPort:      16379, // default port
 		checkpointMgr:      checkpoint.NewManager(checkpointPath),
 		checkpointInterval: checkpointInterval,
 		done:               make(chan struct{}),

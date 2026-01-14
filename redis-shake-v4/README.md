@@ -39,7 +39,7 @@ RedisShake is a powerful tool for Redis data transformation and migration, offer
 docker run --network host \
     -e SYNC=true \
     -e SHAKE_SRC_ADDRESS=127.0.0.1:6379 \
-    -e SHAKE_DST_ADDRESS=127.0.0.1:6380 \
+    -e SHAKE_DST_ADDRESS=127.0.0.1:16379 \
     ghcr.io/tair-opensource/redisshake:latest
 ```
 
@@ -60,7 +60,7 @@ To move data between two Redis instances and skip some keys:
 address = "127.0.0.1:6379"
 
 [redis_writer]
-address = "127.0.0.1:6380"
+address = "127.0.0.1:16379"
 
 [filter]
 # skip keys with "temp:" or "cache:" prefix

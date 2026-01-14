@@ -5,7 +5,7 @@ filepath = "../data/backup/dragonfly-dump.rdb"
 
 [redis_writer]
 cluster = true
-address = "127.0.0.1:6380"
+address = "127.0.0.1:16379"
 username = ""
 password = ""
 tls = false

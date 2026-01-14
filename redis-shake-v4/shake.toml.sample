@@ -29,7 +29,7 @@ try_diskless = false       # Set to true for diskless sync if the source has rep
 
 [redis_writer]
 cluster = false            # set to true if target is a redis cluster
-address = "127.0.0.1:6380" # when cluster is true, set address to one of the cluster node
+address = "127.0.0.1:16379" # when cluster is true, set address to one of the cluster node
 username = ""              # keep empty if not using ACL
 password = ""              # keep empty if no authentication is required
 tls = false

@@ -4,7 +4,7 @@
 # Dragonfly source configuration
 source:
   type: dragonfly
-  addr: localhost:6380          # Dragonfly address (modify as needed)
+  addr: localhost:16379          # Dragonfly address (modify as needed)
   password: ""                  # Dragonfly password (optional)
   tls: false
 

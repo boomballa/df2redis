@@ -1,6 +1,6 @@
 source:
   type: dragonfly
-  addr: localhost:6380          # Dragonfly address
+  addr: localhost:16379          # Dragonfly address
   password: ""                  # Optional password
   tls: false
 

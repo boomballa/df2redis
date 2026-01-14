@@ -44,7 +44,7 @@ var (
 )
 
 // Init creates the global logger.
-// logFilePrefix examples: "df2redis-test_replicate" or "dragonfly_192.168.1.100_6380_replicate".
+// logFilePrefix examples: "df2redis-test_replicate" or "dragonfly_192.168.1.100_16379_replicate".
 func Init(logDir string, level Level, logFilePrefix string, consoleEnabled bool) error {
 	var initErr error
 	once.Do(func() {

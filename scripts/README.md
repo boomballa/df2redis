@@ -101,10 +101,10 @@ The script will:
 🧪 df2redis RDB Phase Data Sync Test
 ======================================================================
 
-Source: localhost:6380
+✓ Connected to Source (Dragonfly): localhost:16379
 Target: localhost:6379 (redis-cluster)
 
-✓ Connected to Source (Dragonfly): localhost:6380
+✓ Connected to Source (Dragonfly): localhost:16379
 ✓ Connected to Target (Redis): localhost:6379
 
 Press Enter when df2redis RDB phase has started...
@@ -248,7 +248,7 @@ Edit the script to match your environment:
 ```python
 # Modify these values to match your environment
 SOURCE_HOST = "localhost"
-SOURCE_PORT = 6380
+SOURCE_PORT = 16379
 SOURCE_PASSWORD = ""
 
 TARGET_HOST = "localhost"
@@ -373,7 +373,7 @@ Success rate: 100.00%
 ```bash
 # Modify these values to match your environment
 SOURCE_HOST="localhost"         # Dragonfly host
-SOURCE_PORT="6380"              # Dragonfly port
+SOURCE_PORT="16379"              # Dragonfly port
 TARGET_HOST="localhost"         # Redis host
 TARGET_PORT="6379"              # Redis port
 TARGET_PASS=""                  # Redis password

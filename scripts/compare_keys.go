@@ -13,7 +13,7 @@ import (
 
 var (
 	srcAddr  = flag.String("src", "127.0.0.1:6379", "Source Redis/Dragonfly address")
-	tgtAddr  = flag.String("tgt", "127.0.0.1:6380", "Target Redis address")
+	tgtAddr  = flag.String("tgt", "127.0.0.1:16379", "Target Redis address")
 	password = flag.String("pwd", "", "Redis password")
 	batch    = flag.Int64("batch", 1000, "Scan batch size")
 )
