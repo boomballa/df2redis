@@ -27,12 +27,12 @@ func GenerateShakeConfigFile(cfg *config.Config, stateDir string) (string, error
 	logPath := filepath.Join(stateDir, "shake.log")
 	targetCluster := strings.Contains(strings.ToLower(cfg.Target.Type), "cluster")
 
-	// Map QPS: 0 in df2redis means unlimited, but shake sample says 300000 is a safe max.
-	// We'll use 0 if configured 0, assuming shake handles it (or give a very large number).
-	// Shake v4: "target_redis_max_qps = 0" usually means unlimited.
+	// Map QPS: 0 in df2redis means unlimited.
+	// However, redis-shake panics if target_redis_max_qps is 0 (divide by zero in ratelimit).
+	// We set it to a sufficiently large value (e.g. 1000000) to effectively simulate "unlimited".
 	qps := cfg.Advanced.QPS
 	if qps <= 0 {
-		qps = 0 // unlimited
+		qps = 1_000_000
 	}
 
 	pipelineCount := cfg.Advanced.BatchSize
