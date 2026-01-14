@@ -61,6 +61,13 @@ conflict:
   policy: "overwrite"          
 
 ########################################
+##### ⚡ Advanced Tuning ################
+########################################
+advanced:
+  qps: 0                       # Rate limit (0 = unlimited). Set to e.g. 2000 to protect target.
+  batchSize: 500               # Number of entries per batch write.
+
+########################################
 ##### 🛠️ Legacy shake placeholders ###
 ########################################
 migrate:

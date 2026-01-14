@@ -2,13 +2,14 @@ package replica
 
 import (
 	"context"
+	"df2redis/internal/redisx"
 	"fmt"
 	"log"
 	"strings"
 	"sync"
 	"time"
 
-	"df2redis/internal/redisx"
+	"golang.org/x/time/rate"
 )
 
 // PipelineClient defines the interface for pipeline operations
@@ -54,6 +55,10 @@ type FlowWriter struct {
 	lastMonitorTime    time.Time
 	monitorInterval    time.Duration
 	highWatermarkCount int64 // Count of times channel usage exceeded 80%
+
+	// Dynamic Throttling
+	limiter   *rate.Limiter
+	limiterMu sync.RWMutex
 
 	// Async flush helper
 	asyncFlush func([]*RDBEntry)
@@ -130,6 +135,7 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 		writeSemaphore:      make(chan struct{}, maxConcurrent),
 		lastMonitorTime:     time.Now(),
 		monitorInterval:     5 * time.Second,
+		limiter:             rate.NewLimiter(rate.Inf, 0), // Default to unlimited
 	}
 
 	// Log adaptive concurrency settings and mode for visibility
@@ -197,6 +203,29 @@ func (fw *FlowWriter) GetStats() (received, written, batches int64) {
 	fw.stats.mu.Lock()
 	defer fw.stats.mu.Unlock()
 	return fw.stats.totalReceived, fw.stats.totalWritten, fw.stats.totalBatches
+	return fw.stats.totalReceived, fw.stats.totalWritten, fw.stats.totalBatches
+}
+
+// UpdateConfig updates dynamic parameters thread-safely
+func (fw *FlowWriter) UpdateConfig(qps int, batchSize int) {
+	// Update QPS (Rate Limiter)
+	fw.limiterMu.Lock()
+	if qps <= 0 {
+		fw.limiter.SetLimit(rate.Inf)
+		fw.limiter.SetBurst(0)
+		log.Printf("  [FLOW-%d] [CONFIG] Rate limit disabled (unlimited)", fw.flowID)
+	} else {
+		fw.limiter.SetLimit(rate.Limit(qps))
+		fw.limiter.SetBurst(batchSize) // Burst should allow at least one batch
+		log.Printf("  [FLOW-%d] [CONFIG] Rate limit set to %d QPS", fw.flowID, qps)
+	}
+	fw.limiterMu.Unlock()
+
+	// Update Batch Size (Atomic-ish)
+	if batchSize > 0 && batchSize != fw.batchSize {
+		fw.batchSize = batchSize
+		log.Printf("  [FLOW-%d] [CONFIG] Batch size updated to %d", fw.flowID, batchSize)
+	}
 }
 
 // batchWriteLoop is the main async write loop
@@ -267,6 +296,20 @@ func (fw *FlowWriter) batchWriteLoop() {
 func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 	if len(batch) == 0 {
 		return
+	}
+
+	// Dynamic Rate Limiting
+	// We wait for N tokens where N = batch items
+	fw.limiterMu.RLock()
+	limiter := fw.limiter
+	fw.limiterMu.RUnlock()
+
+	if limiter.Limit() != rate.Inf {
+		// Wait for tokens. ctx ensures we can cancel while waiting.
+		if err := limiter.WaitN(fw.ctx, len(batch)); err != nil {
+			// Context cancelled or error
+			return
+		}
 	}
 
 	start := time.Now()

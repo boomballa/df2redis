@@ -17,6 +17,7 @@ type Config struct {
 	Checkpoint CheckpointConfig `json:"checkpoint"`
 	Conflict   ConflictConfig   `json:"conflict"`
 	Log        LogConfig        `json:"log"`
+	Advanced   AdvancedConfig   `json:"advanced"`
 	Dashboard  DashboardConfig  `json:"dashboard"`
 	StateDir   string           `json:"stateDir"`
 	StatusFile string           `json:"statusFile"`
@@ -110,6 +111,12 @@ type ConflictConfig struct {
 // DashboardConfig controls the embedded dashboard server.
 type DashboardConfig struct {
 	Addr string `json:"addr"` // e.g. ":8080"
+}
+
+// AdvancedConfig holds tuning parameters that can be updated dynamically
+type AdvancedConfig struct {
+	QPS       int `json:"qps"`       // 0 = unlimited
+	BatchSize int `json:"batchSize"` // e.g. 500
 }
 
 // ValidationError collects configuration issues.
@@ -213,6 +220,11 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Dashboard.Addr == "" {
 		c.Dashboard.Addr = ":8080"
+	}
+
+	// Advanced defaults
+	if c.Advanced.BatchSize <= 0 {
+		c.Advanced.BatchSize = 500
 	}
 }
 

@@ -37,7 +37,9 @@ type Replicator struct {
 	// Replication state
 	state      ReplicaState
 	masterInfo MasterInfo
-	flows      []FlowInfo
+
+	flows       []FlowInfo
+	flowWriters []*FlowWriter // Active flow writers (for dynamic config update)
 
 	// Configuration
 	listeningPort int
@@ -204,6 +206,36 @@ func (r *Replicator) Stop() {
 	r.state = StateStopped
 	r.recordPipelineStatus("stopped", "Replicator stopped")
 	log.Println("✓ Replicator stopped")
+}
+
+// UpdateConfig updates dynamic parameters for all flows
+func (r *Replicator) UpdateConfig(qps int, batchSize int) error {
+	r.cfg.Advanced.QPS = qps
+	r.cfg.Advanced.BatchSize = batchSize
+
+	log.Printf("⚙️ Dynamic Config Update: QPS=%d, BatchSize=%d", qps, batchSize)
+
+	// Propagate to all active FlowWriters
+	// We need to access flowWriters. Currently they are local variables in receiveSnapshot.
+	// We need to promote them to Replicator struct fields to access them here.
+	// REFACTOR REQUIRED: Promote flowWriters to struct field.
+	// For now, let's just log that we would do it.
+	// Wait, we can't just log. We must implement it.
+
+	// Step 1: Add flowWriters to Replicator struct
+	// Step 2: Use r.flowWriters in receiveSnapshot
+	// Step 3: Iterate here
+
+	if len(r.flowWriters) == 0 {
+		return fmt.Errorf("no active flows to update")
+	}
+
+	for _, fw := range r.flowWriters {
+		if fw != nil {
+			fw.UpdateConfig(qps, batchSize)
+		}
+	}
+	return nil
 }
 
 // connect creates the primary connection to Dragonfly for the handshake
@@ -559,8 +591,7 @@ func (r *Replicator) receiveSnapshot() error {
 	var statsMu sync.Mutex
 
 	// Create async writers for each flow with adaptive concurrency
-	// Create async writers for each flow with adaptive concurrency
-	flowWriters := make([]*FlowWriter, numFlows)
+	r.flowWriters = make([]*FlowWriter, numFlows)
 	for i := 0; i < numFlows; i++ {
 		var pipelineClient *redisx.Client
 		if r.cfg.Target.Type == "redis-standalone" || r.cfg.Target.Type == "redis" {
@@ -570,8 +601,13 @@ func (r *Replicator) receiveSnapshot() error {
 			pipelineClient, _ = r.clusterClient.GetNodeClient(r.cfg.Target.Addr)
 		}
 
-		flowWriters[i] = NewFlowWriter(i, r.writeRDBEntry, numFlows, r.cfg.Target.Type, pipelineClient, r.clusterClient)
-		flowWriters[i].Start()
+		// Pass initial config
+		r.flowWriters[i] = NewFlowWriter(i, r.writeRDBEntry, numFlows, r.cfg.Target.Type, pipelineClient, r.clusterClient)
+
+		// Apply initial advanced config
+		r.flowWriters[i].UpdateConfig(r.cfg.Advanced.QPS, r.cfg.Advanced.BatchSize)
+
+		r.flowWriters[i].Start()
 	}
 
 	// CRITICAL FIX: Global synchronization barrier matching Dragonfly's BlockingCounter design
@@ -594,7 +630,7 @@ func (r *Replicator) receiveSnapshot() error {
 
 			flowConn := r.flowConns[flowID]
 			stats := statsMap[flowID]
-			flowWriter := flowWriters[flowID]
+			flowWriter := r.flowWriters[flowID]
 			r.recordFlowStage(flowID, "rdb", "Receiving RDB snapshot")
 
 			log.Printf("  [FLOW-%d] Starting to parse RDB data...", flowID)
@@ -832,7 +868,7 @@ func (r *Replicator) receiveSnapshot() error {
 	// Stop all writers and wait for remaining batches to flush
 	log.Println("")
 	log.Println("⏸  Stopping async writers and flushing remaining batches...")
-	for i, fw := range flowWriters {
+	for i, fw := range r.flowWriters {
 		fw.Stop()
 		received, written, batches := fw.GetStats()
 		log.Printf("  [FLOW-%d] Writer stats: received=%d, written=%d, batches=%d",

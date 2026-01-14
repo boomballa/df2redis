@@ -30,6 +30,9 @@ type DashboardServer struct {
 	snapshotMu sync.RWMutex
 	snapshot   state.Snapshot
 
+	// Callback for dynamic configuration
+	onConfigUpdate func(qps int, batchSize int) error
+
 	// Check task management
 	checkMu      sync.RWMutex
 	checkRunning bool
@@ -39,9 +42,10 @@ type DashboardServer struct {
 
 // Options configure the dashboard server.
 type Options struct {
-	Addr  string
-	Cfg   *config.Config
-	Store *state.Store
+	Addr           string
+	Cfg            *config.Config
+	Store          *state.Store
+	OnConfigUpdate func(qps int, batchSize int) error
 }
 
 // New creates a dashboard server.
@@ -51,10 +55,11 @@ func New(opts Options) (*DashboardServer, error) {
 		return nil, err
 	}
 	return &DashboardServer{
-		addr:  opts.Addr,
-		cfg:   opts.Cfg,
-		store: opts.Store,
-		tmpl:  tmpl,
+		addr:           opts.Addr,
+		cfg:            opts.Cfg,
+		store:          opts.Store,
+		tmpl:           tmpl,
+		onConfigUpdate: opts.OnConfigUpdate,
 	}, nil
 }
 
@@ -71,7 +76,9 @@ func (s *DashboardServer) Start(ready chan<- string) error {
 	mux.HandleFunc("/api/sync/progress", s.handleSyncProgress)
 	mux.HandleFunc("/api/check/latest", s.handleCheckLatest)
 	mux.HandleFunc("/api/events", s.handleEvents)
+	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.HandleFunc("/api/logs", s.handleLogs)
+	mux.HandleFunc("/api/config", s.handleConfigUpdate) // New Config API
 	// Check validation API endpoints
 	mux.HandleFunc("/api/check/start", s.handleCheckStart)
 	mux.HandleFunc("/api/check/stop", s.handleCheckStop)
@@ -221,6 +228,43 @@ func (s *DashboardServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 		"offset": offset,
 		"count":  len(content.Lines),
 	})
+}
+
+// handleConfigUpdate handles dynamic configuration updates
+func (s *DashboardServer) handleConfigUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		QPS       int `json:"qps"`
+		BatchSize int `json:"batchSize"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if s.onConfigUpdate == nil {
+		http.Error(w, "Dynamic configuration not supported in this mode", http.StatusNotImplemented)
+		return
+	}
+
+	// Logging
+	log.Printf("[dashboard] UPDATE CONFIG request: QPS=%d, BatchSize=%d", req.QPS, req.BatchSize)
+
+	// Execute callback which propagates to Replicator -> FlowWriters
+	if err := s.onConfigUpdate(req.QPS, req.BatchSize); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to update config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Update local config reference for display purposes
+	s.cfg.Advanced.QPS = req.QPS
+	s.cfg.Advanced.BatchSize = req.BatchSize
+
+	writeJSON(w, map[string]string{"status": "ok", "message": "Configuration updated successfully"})
 }
 
 func (s *DashboardServer) currentSnapshot() state.Snapshot {
