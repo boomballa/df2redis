@@ -769,8 +769,18 @@ func (r *Replicator) receiveSnapshot() error {
 	// After this point, goroutines continue reading journal blobs until we send STARTSTABLE.
 	log.Println("")
 	log.Println("⏸  Waiting for all FLOWs to complete RDB static snapshot...")
-	<-rdbCompletionBarrier
-	log.Println("  ✓ All FLOWs completed RDB static snapshot")
+
+	// Fix deadlock: use select to fail fast if any FLOW errors out
+	select {
+	case <-rdbCompletionBarrier:
+		log.Println("  ✓ All FLOWs completed RDB static snapshot")
+	case err := <-errChan:
+		log.Printf("  ✗ RDB phase failed: %v", err)
+		r.cancel() // Stop all other flows
+		return fmt.Errorf("RDB phase failed early: %w", err)
+	case <-r.ctx.Done():
+		return fmt.Errorf("RDB phase cancelled")
+	}
 
 	// Intermediate stats - at this point RDB snapshot is complete but journal blobs may still be coming
 	log.Println("")
@@ -1081,8 +1091,10 @@ func (r *Replicator) receiveJournal() error {
 	for flowEntry := range entryChan {
 		// Handle errors
 		if flowEntry.Error != nil {
-			log.Printf("  ✗ FLOW-%d error: %v", flowEntry.FlowID, flowEntry.Error)
-			continue
+			err := fmt.Errorf("FLOW-%d fatal error: %w", flowEntry.FlowID, flowEntry.Error)
+			log.Printf("  ✗ %v", err)
+			r.cancel() // Stop all other flows immediately
+			return err
 		}
 
 		entriesCount++
