@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"df2redis/internal/config"
+	"df2redis/internal/logger"
 )
 
 // Importer wraps redis-shake invocation for RDB restore.
@@ -39,8 +41,10 @@ func (i *Importer) Run(ctx context.Context) error {
 		return err
 	}
 	cmd := exec.CommandContext(ctx, i.cfg.ShakeBinary, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// Pipe output to both console and the detailed log file
+	logWriter := logger.Writer()
+	cmd.Stdout = io.MultiWriter(os.Stdout, logWriter)
+	cmd.Stderr = io.MultiWriter(os.Stderr, logWriter)
 	cmd.Dir = filepath.Dir(i.cfg.ShakeBinary)
 
 	start := time.Now()

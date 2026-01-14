@@ -24,7 +24,24 @@ func GenerateShakeConfigFile(cfg *config.Config, stateDir string) (string, error
 		return "", fmt.Errorf("failed to create state directory: %w", err)
 	}
 	path := filepath.Join(stateDir, "shake.generated.toml")
-	logPath := filepath.Join(stateDir, "shake.log")
+	// Redirect redis-shake internal log to our main log directory
+	logDir := cfg.Log.Dir
+	if logDir == "" {
+		logDir = "logs"
+	}
+	if !filepath.IsAbs(logDir) {
+		logDir = filepath.Join(filepath.Dir(cfg.ResolveStateDir()), logDir) // approximated relative to project root?
+		// Actually best to just use absolute path if possible or rely on cfg.Log.Dir being relative to CWD
+		// cfg.Log.Dir is usually relative to CWD.
+	}
+	// Use absolute path for log file to be safe
+	absLogDir, _ := filepath.Abs(logDir)
+
+	shakeLogName := "shake.log"
+	if cfg.TaskName != "" {
+		shakeLogName = fmt.Sprintf("%s_shake.log", cfg.TaskName)
+	}
+	logPath := filepath.Join(absLogDir, shakeLogName)
 	targetCluster := strings.Contains(strings.ToLower(cfg.Target.Type), "cluster")
 
 	// Map QPS: 0 in df2redis means unlimited.

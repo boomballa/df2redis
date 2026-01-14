@@ -228,12 +228,14 @@ func runColdImport(args []string) int {
 	var shakeBinary string
 	var shakeConfig string
 	var shakeArgs string
+	var taskNameFlag string
 	fs.StringVar(&configPath, "config", "", "Configuration file path (YAML)")
 	fs.StringVar(&configPath, "c", "", "Configuration file path (YAML)")
 	fs.StringVar(&rdbPath, "rdb", "", "Existing RDB file path (overrides migrate.snapshotPath)")
 	fs.StringVar(&shakeBinary, "shake-binary", "", "redis-shake binary path (overrides migrate.shakeBinary)")
 	fs.StringVar(&shakeConfig, "shake-conf", "", "redis-shake config file (overrides migrate.shakeConfigFile)")
 	fs.StringVar(&shakeArgs, "shake-args", "", "redis-shake runtime args (overrides migrate.shakeArgs)")
+	fs.StringVar(&taskNameFlag, "task-name", "", "Task name for log file prefix")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -250,6 +252,10 @@ func runColdImport(args []string) int {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return errorToExitCode(err)
+	}
+
+	if taskNameFlag != "" {
+		cfg.TaskName = taskNameFlag
 	}
 
 	// Partial validation for cold-import (Source is not required)
