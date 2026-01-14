@@ -24,18 +24,14 @@ func GenerateShakeConfigFile(cfg *config.Config, stateDir string) (string, error
 		return "", fmt.Errorf("failed to create state directory: %w", err)
 	}
 	path := filepath.Join(stateDir, "shake.generated.toml")
-	// Redirect redis-shake internal log to our main log directory
-	logDir := cfg.Log.Dir
-	if logDir == "" {
-		logDir = "logs"
+	// Calculate relative path from stateDir (shake's work dir) to logDir
+	// redis-shake v4 joins 'dir' + 'log_file', so we must provide a relative path if we want it elsewhere.
+
+	// Use cfg.ResolvePath which handles resolution relative to config file location correctly
+	absLogDir := cfg.ResolvePath(cfg.Log.Dir)
+	if absLogDir == "" {
+		absLogDir = cfg.ResolvePath("logs") // Fallback
 	}
-	if !filepath.IsAbs(logDir) {
-		logDir = filepath.Join(filepath.Dir(cfg.ResolveStateDir()), logDir) // approximated relative to project root?
-		// Actually best to just use absolute path if possible or rely on cfg.Log.Dir being relative to CWD
-		// cfg.Log.Dir is usually relative to CWD.
-	}
-	// Use absolute path for log file to be safe
-	absLogDir, _ := filepath.Abs(logDir)
 
 	shakeLogName := "shake.log"
 	if cfg.TaskName != "" {
