@@ -130,7 +130,21 @@ GOOS=darwin GOARCH=amd64 go build -o bin/df2redis-mac ./cmd/df2redis
 # 即将推出 - 请查看 releases 页面
 ```
 
-### 基本使用
+---
+
+## 🛠 命令参考
+
+| 命令 | 说明 |
+| --- | --- |
+| `df2redis replicate --config <file>` | 启动完整复制（全量 RDB + 增量 Journal），持续运行。 |
+| `df2redis migrate --config <file>` | 启动迁移（仅全量 RDB），完成后自动退出。使用高性能原生协议。 |
+| `df2redis cold-import --config <file>` | 离线导入本地 RDB 文件（基于 `redis-shake`）。 |
+| `df2redis check --config <file>` | 数据一致性校验（基于 `redis-full-check`）。 |
+| `df2redis dashboard --config <file>` | 启动独立 Dashboard 服务。 |
+
+---
+
+## ⚡ 快速开始
 
 #### 1. 创建配置文件
 

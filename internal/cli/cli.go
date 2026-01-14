@@ -122,15 +122,24 @@ func runMigrate(args []string) int {
 		return 0
 	}
 
-	runCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stopSignals()
+	// runCtx not needed anymore as Replicator manages its own context/signals
+	// runCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// defer stopSignals()
 
 	if err := cfg.EnsureStateDir(); err != nil {
 		log.Printf("Failed to create state directory: %v", err)
 		return 1
 	}
 
+	// Initialize logging for migrate command
+	if err := initLogger(cfg, "migrate"); err != nil {
+		log.Printf("Failed to initialize logging: %v", err)
+		return 1
+	}
+	defer logger.Close()
+
 	store := state.NewStore(cfg.StatusFilePath())
+	_ = store.SetPipelineStatus("starting", "Preparing to run migration")
 
 	var dashboardAddr string
 	if showAddr != "" {
@@ -159,37 +168,56 @@ func runMigrate(args []string) int {
 				Store: store,
 			})
 			if err != nil {
-				log.Printf("⚠️ Failed to initialize dashboard: %v", err)
+				logger.Error("Failed to initialize dashboard: %v", err)
 				return
 			}
-			log.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📺 Auto dashboard ready\n   🔊 Listen : %s\n   🌐 Visit : %s\n   ⌨️ Hint  : press Ctrl+C to stop the dashboard service\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", dashboardAddr, formatDashboardURL(dashboardAddr))
+			logger.Console("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📺 Auto dashboard ready\n   🔊 Listen : %s\n   🌐 Visit : %s\n   ⌨️ Hint  : press Ctrl+C to stop the dashboard service\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", dashboardAddr, formatDashboardURL(dashboardAddr))
 			if err := server.Start(nil); err != nil {
-				log.Printf("dashboard stopped: %v", err)
+				logger.Warn("dashboard stopped: %v", err)
 			}
 		}()
 	}
 
-	ctxObj, err := pipeline.NewContext(runCtx, cfg, store)
-	if err != nil {
-		log.Printf("Failed to initialize context: %v", err)
-		return 1
+	// Migration Mode: Snapshot Only = True
+	cfg.Migrate.SnapshotOnly = true
+
+	logger.Console("🚀 df2redis migration starting (Snapshot Only)")
+	logger.Console("📋 Config dir: %s", cfg.ConfigDir())
+	logger.Console("📂 Log dir: %s", cfg.Log.Dir)
+	logger.Console("🎯 Target: %s", cfg.Target.Addr)
+
+	// Build replicator
+	replicator := replica.NewReplicator(cfg)
+	replicator.AttachStateStore(store)
+
+	// Configure signal handling
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	// Start replicator
+	errCh := make(chan error, 1)
+	go func() {
+		if err := replicator.Start(); err != nil {
+			errCh <- err
+		} else {
+			errCh <- nil // Success
+		}
+	}()
+
+	// Wait for completion or signal
+	select {
+	case err := <-errCh:
+		if err != nil {
+			logger.Error("❌ Migration failed: %v", err)
+			return 1
+		}
+		logger.Console("\n✅ Migration completed successfully")
+		return 0
+	case sig := <-sigCh:
+		logger.Console("\n📡 Signal %v received, shutting down...", sig)
+		replicator.Stop()
+		return 0
 	}
-	defer ctxObj.Close()
-
-	pl := pipeline.New().
-		Add(pipeline.NewPrecheckStage()).
-		Add(pipeline.NewShakeConfigStage()).
-		Add(pipeline.NewBgsaveStage()).
-		Add(pipeline.NewImportStage()).
-		Add(pipeline.NewIncrementalPlaceholderStage())
-
-	if ok := pl.Run(ctxObj); !ok {
-		log.Println("Migration pipeline failed; see logs for details.")
-		return 1
-	}
-
-	log.Println("Migration pipeline finished.")
-	return 0
 }
 
 func runColdImport(args []string) int {

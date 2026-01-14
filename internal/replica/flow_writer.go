@@ -203,7 +203,7 @@ func (fw *FlowWriter) GetStats() (received, written, batches int64) {
 	fw.stats.mu.Lock()
 	defer fw.stats.mu.Unlock()
 	return fw.stats.totalReceived, fw.stats.totalWritten, fw.stats.totalBatches
-	return fw.stats.totalReceived, fw.stats.totalWritten, fw.stats.totalBatches
+
 }
 
 // UpdateConfig updates dynamic parameters thread-safely

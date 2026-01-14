@@ -170,6 +170,13 @@ func (r *Replicator) Start() error {
 	log.Println("🎯 Replicator started successfully!")
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
+	// If SnapshotOnly mode is enabled (for migrate command), exit here.
+	if r.cfg.Migrate.SnapshotOnly {
+		log.Println("🏁 SnapshotOnly mode enabled: Stopping before incremental / stable sync.")
+		r.recordPipelineStatus("completed", "Migration (Snapshot Only) finished successfully")
+		return nil
+	}
+
 	// Receive and parse the journal stream
 	// Note: Pipeline status will be updated to "incremental" when journal stream starts
 	if err := r.receiveJournal(); err != nil {

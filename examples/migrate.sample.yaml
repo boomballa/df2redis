@@ -1,3 +1,10 @@
+# 🚚 Configuration for 'migrate' mode (Dragonfly -> Release Snapshot Native Migration)
+# Usage: ./bin/df2redis migrate --config examples/migrate.sample.yaml
+#
+# Note: 'migrate' mode uses the native Dragonfly replication protocol to perform
+# a high-performance FULL SYNC (RDB) and then exits. It does NOT enter the 
+# continuous replication phase. For continuous sync, use 'replicate' command.
+
 source:
   type: dragonfly
   addr: localhost:6379          # Dragonfly address
@@ -10,18 +17,22 @@ target:
   addr: localhost:6379          # Redis address
   password: ""                  # Optional password
   tls: false
+  cluster:
+     seeds: []                  # Optional seeds
 
 stateDir: ../out
-statusFile: ../out/status.json
+statusFile: ../out/status-migrate.json
 
 migrate:
-  snapshotPath: ../data/backup/xxx.rdb
-  shakeBinary: ../redis-shake-v4/redis-shake
-  shakeArgs: ""          # Optional: full CLI args (if not using config file)
-  shakeConfigFile: ""    # Optional: redis-shake config file path (if using -conf)
+  # snapshotOnly is implicitly TRUE for 'migrate' command.
+  # You can still configure auto-bgsave behaviors if needed.
   autoBgsave: false      # Auto-trigger BGSAVE on source
   bgsaveTimeoutSeconds: 300
 
 advanced:
-  qps: 0
-  batchSize: 500
+  qps: 0                    # Rate limit (0 = unlimited)
+  batchSize: 500            # Batch size for RDB import
+
+log:
+  dir: "logs"
+  level: "info"

@@ -79,6 +79,7 @@ type MigrateConfig struct {
 	ShakeConfigFile string  `json:"shakeConfigFile"`
 	AutoBgsave      Boolish `json:"autoBgsave"`
 	BgsaveTimeout   int     `json:"bgsaveTimeoutSeconds"`
+	SnapshotOnly    bool    `json:"snapshotOnly"` // If true, exit after RDB sync (for migrate command)
 }
 
 // CheckpointConfig controls LSN checkpoint persistence
