@@ -29,6 +29,7 @@ go.work.sum
 
 # Internal development documentation (for Claude Code only)
 CLAUDE.md
+.claude/
 
 # generated artifacts
 # 运行时生成的文件
