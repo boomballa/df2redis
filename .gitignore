@@ -83,3 +83,7 @@ bin/df2redis*
 .log/*
 examples/logs/*
 examples/logslog/
+
+# Local Configuration Directory
+conf/*
+!conf/README.md
