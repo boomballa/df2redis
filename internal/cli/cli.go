@@ -553,24 +553,17 @@ func runReplicate(args []string) int {
 	if dashboardAddr == "" {
 		dashboardAddr = cfg.Dashboard.Addr
 	}
-	fmt.Println("DEBUG: Config loaded, initializing store...")
 	store := state.NewStore(cfg.StatusFilePath())
-	fmt.Println("DEBUG: Store initialized, setting status...")
 	_ = store.SetPipelineStatus("starting", "Preparing to start replicator")
-	fmt.Println("DEBUG: Status set.")
 
 	// Initialize logging
-	fmt.Printf("DEBUG: Initializing logger (consoleEnabled=%v)...\n", cfg.Log.ConsoleEnabledValue())
 	if err := initLogger(cfg, "replicate"); err != nil {
-		fmt.Printf("Error initializing logger: %v\n", err)
 		log.Printf("Failed to initialize logging: %v", err)
 		return 1
 	}
 	defer logger.Close()
-	fmt.Println("DEBUG: Logger initialized. Attempting Console log...")
 
 	logger.Console("🚀 df2redis replicator starting")
-	fmt.Println("DEBUG: Console log call complete.")
 	logger.Console("📋 Config dir: %s", cfg.ConfigDir())
 	logger.Console("📂 Log dir: %s", cfg.Log.Dir)
 	logger.Console("📝 Log level: %s", cfg.Log.Level)

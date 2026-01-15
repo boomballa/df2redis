@@ -82,7 +82,7 @@
               padding: 12,
               displayColors: false,
               callbacks: {
-                label: function(context) {
+                label: function (context) {
                   return formatNumber(context.parsed.y);
                 }
               }
@@ -115,7 +115,7 @@
                 font: {
                   size: 11
                 },
-                callback: function(value) {
+                callback: function (value) {
                   if (value >= 1000000) {
                     return (value / 1000000).toFixed(1) + 'M';
                   }
@@ -438,9 +438,13 @@
     });
   }
 
-  async function fetchLogs(offset, lines) {
+  async function fetchLogs(offset, lines, mode = '') {
     try {
-      const res = await fetch(`/api/logs?offset=${offset}&lines=${lines}`);
+      let url = `/api/logs?offset=${offset}&lines=${lines}`;
+      if (mode) {
+        url += `&mode=${mode}`;
+      }
+      const res = await fetch(url);
       if (!res.ok) throw new Error('fetch logs failed');
       const data = await res.json();
       console.log('[Live Logs] Fetched data:', data);
@@ -454,7 +458,7 @@
   function renderLogLines(lines, append = false) {
     console.log('[Live Logs] Rendering lines:', lines ? lines.length : 0, 'append:', append);
     if (!lines || lines.length === 0) {
-      if (!append) {
+      if (!append && !lines) {
         logContent.innerHTML = '<div class="log-loading">No logs available</div>';
       }
       return;
@@ -500,6 +504,11 @@
     // Update status
     logShownCount.textContent = logContent.querySelectorAll('.log-line').length;
     logTotalCount.textContent = totalLines;
+
+    // Ensure we scroll to bottom if we just loaded tail or appended
+    if (append || isAtBottom) {
+      scrollToBottom();
+    }
   }
 
   function escapeRegex(str) {
@@ -508,16 +517,27 @@
 
   async function loadInitialLogs() {
     currentOffset = 0;
-    const data = await fetchLogs(0, 100);
-    console.log('[Live Logs] loadInitialLogs data:', data);
+    // FETCH TAIL: Use mode=tail to get the last 100 lines immediately
+    const data = await fetchLogs(0, 100, 'tail');
+    console.log('[Live Logs] loadInitialLogs (tail) data:', data);
+
     if (data) {
       totalLines = data.total;
-      currentOffset = data.count;
+      // IMPORTANT: When fetching tail, the server returns the last N lines.
+      // We must set currentOffset to totalLines so subsequent "loadMore" 
+      // (or auto-refresh) fetches only *new* lines that appear after this point.
+      currentOffset = totalLines;
+
       renderLogLines(data.lines, false);
       scrollToBottom();
+
+      // Explicitly set "at bottom" state to true to enable auto-refresh
+      isAtBottom = true;
       updateLoadMoreButton();
+      updateAutoRefreshState();
     } else {
       console.error('[Live Logs] No data received from fetchLogs');
+      logContent.innerHTML = '<div class="log-loading" style="color:#ef4444">Failed to load logs</div>';
     }
   }
 
@@ -553,19 +573,14 @@
   }
 
   async function jumpToLatest() {
-    // Jump to the latest: load last 100 lines
-    // First fetch to get total line count
-    const tempData = await fetchLogs(0, 1);
-    if (!tempData) return;
-
-    const total = tempData.total;
-    const offset = Math.max(0, total - 100);
-
-    const data = await fetchLogs(offset, 100);
+    // Jump to the latest: load last 100 lines using tail mode
+    const data = await fetchLogs(0, 100, 'tail'); // offset ignored when mode=tail
     console.log('[Live Logs] jumpToLatest data:', data);
+
     if (data) {
       totalLines = data.total;
-      currentOffset = total; // Set to end so "Load More" is disabled
+      currentOffset = totalLines; // Set to end
+
       renderLogLines(data.lines, false);
       scrollToBottom();
       updateLoadMoreButton();

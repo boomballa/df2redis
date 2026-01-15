@@ -221,8 +221,13 @@ func (s *DashboardServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Determine mode
+	mode := r.URL.Query().Get("mode")
+
 	offset := 0 // default: start from beginning
-	if offsetParam != "" {
+	if mode == "tail" {
+		offset = -1 // Signal to readLogFile to fetch the last N lines
+	} else if offsetParam != "" {
 		if parsed, err := strconv.Atoi(offsetParam); err == nil && parsed >= 0 {
 			offset = parsed
 		}
@@ -605,7 +610,14 @@ func readLogFile(path string, offset, count int) (*logContent, error) {
 
 	// Compute slice window
 	start := offset
-	if start > totalLines {
+
+	// Tail mode: calculate start based on count from end
+	if offset == -1 {
+		start = totalLines - count
+		if start < 0 {
+			start = 0
+		}
+	} else if start > totalLines {
 		start = totalLines
 	}
 
