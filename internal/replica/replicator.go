@@ -1,6 +1,7 @@
 package replica
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -26,7 +27,8 @@ type Replicator struct {
 	mainConn *redisx.Client
 
 	// Dedicated connections for each FLOW
-	flowConns []*redisx.Client
+	flowConns      []*redisx.Client
+	flowBufReaders []*bufio.Reader
 
 	// Redis Cluster client (replay commands)
 	clusterClient *redisx.ClusterClient
@@ -450,6 +452,7 @@ func (r *Replicator) establishFlows() error {
 
 	r.flows = make([]FlowInfo, numFlows)
 	r.flowConns = make([]*redisx.Client, numFlows)
+	r.flowBufReaders = make([]*bufio.Reader, numFlows)
 	r.initFlowTracking(numFlows)
 
 	// Create independent TCP connections for each FLOW
@@ -471,6 +474,8 @@ func (r *Replicator) establishFlows() error {
 		}
 
 		r.flowConns[i] = flowConn
+		// Use 1MB buffer to ensure RDBParser and JournalReader share the same buffer context
+		r.flowBufReaders[i] = bufio.NewReaderSize(flowConn, 1024*1024)
 
 		// 2. Send PING (optional, ensures the connection is alive)
 		if err := flowConn.Ping(); err != nil {
@@ -641,20 +646,15 @@ func (r *Replicator) receiveSnapshot() error {
 		go func(flowID int) {
 			defer wg.Done()
 
-			flowConn := r.flowConns[flowID]
+			// Use the persistent buffered reader to preserve data across RDB -> Journal transition
+			parser := NewRDBParser(r.flowBufReaders[flowID], flowID)
+
 			stats := statsMap[flowID]
 			flowWriter := r.flowWriters[flowID]
 			r.recordFlowStage(flowID, "rdb", "Receiving RDB snapshot")
 
-			log.Printf("  [FLOW-%d] Starting to parse RDB data...", flowID)
-
 			// Track whether this FLOW has completed RDB phase and synchronized via barrier
-			// This ensures we only increment flowCompletionCount once, regardless of whether
-			// we receive FULLSYNC_END marker or direct EOF from Dragonfly.
-			// we receive FULLSYNC_END marker or direct EOF from Dragonfly.
 			rdbCompleted := false
-
-			parser := NewRDBParser(flowConn, flowID)
 
 			// Set callback for inline journal entries during RDB phase
 			parser.onJournalEntry = func(entry *JournalEntry) error {
@@ -765,9 +765,10 @@ func (r *Replicator) receiveSnapshot() error {
 				}
 
 				// CRITICAL: Check for FULLSYNC_END marker
-				// This means "static RDB snapshot complete", but Dragonfly will CONTINUE
-				// sending journal blobs until we send STARTSTABLE.
-				// This logic is now handled by the parser.onFullSyncEnd callback.
+				// This means "static RDB snapshot complete", and we need to:
+				// 1. Read the 40-byte EOF token (Dragonfly sends it after RDB stream)
+				// 2. Participate in barrier synchronization
+				// 3. Wait for all FLOWs to complete before main thread sends STARTSTABLE
 				if entry.Type == RDB_TYPE_FULLSYNC_END_MARKER {
 					stats.mu.Lock()
 					inlineJournalOps := stats.InlineJournalOps
@@ -775,9 +776,51 @@ func (r *Replicator) receiveSnapshot() error {
 					log.Printf("  [FLOW-%d] ✓ RDB parsing done (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
 						flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps)
 
-					// CRITICAL: Continue ParseNext() loop to read journal blobs!
-					// Do NOT return - Dragonfly will keep sending data until STARTSTABLE.
-					// After main thread sends STARTSTABLE, Dragonfly will send EOF and we'll exit above.
+					// Step 1: Read the 40-byte EOF token that Dragonfly sends after RDB stream
+					// This must be done BEFORE barrier synchronization and STARTSTABLE
+					// According to Dragonfly source code (replica.cc), EOF token is sent after RDB stream,
+					// and should be read using a chained source (leftover + socket)
+					if r.flows[flowID].SyncType == "FULL" && len(r.flows[flowID].EOFToken) == 40 {
+						log.Printf("  [FLOW-%d] → Reading 40-byte EOF token after RDB stream...", flowID)
+
+						// Read EOF token from bufio reader (which is already positioned after RDB stream)
+						// The parser has already consumed all RDB opcodes, so the next 40 bytes should be the EOF token
+						eofTokenBuf := make([]byte, 40)
+						if _, err := io.ReadFull(r.flowBufReaders[flowID], eofTokenBuf); err != nil {
+							log.Printf("  [FLOW-%d] ⚠ Failed to read EOF token: %v", flowID, err)
+							errChan <- fmt.Errorf("FLOW-%d: failed to read EOF token: %w", flowID, err)
+							return
+						}
+
+						// Verify EOF token matches what we received in DFLY FLOW response
+						receivedToken := string(eofTokenBuf)
+						if receivedToken != r.flows[flowID].EOFToken {
+							errChan <- fmt.Errorf("FLOW-%d: EOF token mismatch\n  expected: %s\n  received: %s",
+								flowID, r.flows[flowID].EOFToken, receivedToken)
+							return
+						}
+						log.Printf("  [FLOW-%d] ✓ EOF token verified successfully", flowID)
+					}
+
+					// Step 2: Participate in barrier synchronization
+					flowCompletionCount.mu.Lock()
+					flowCompletionCount.count++
+					completedCount := flowCompletionCount.count
+					flowCompletionCount.mu.Unlock()
+
+					log.Printf("  [FLOW-%d] ⏸ Waiting for all FLOWs (%d/%d)...", flowID, completedCount, numFlows)
+
+					if completedCount == numFlows {
+						log.Printf("  [FLOW-%d] 🎯 All FLOWs completed RDB! Broadcasting signal...", flowID)
+						close(rdbCompletionBarrier)
+					}
+
+					// Step 3: Wait for barrier release (all FLOWs ready)
+					<-rdbCompletionBarrier
+					log.Printf("  [FLOW-%d] ✓ Barrier released", flowID)
+					rdbCompleted = true
+
+					// Step 4: Continue reading journal blobs until STARTSTABLE triggers EOF
 					log.Printf("  [FLOW-%d] → Continuing to read journal blobs until STARTSTABLE triggers EOF...", flowID)
 					continue
 				}
@@ -912,10 +955,9 @@ func (r *Replicator) receiveSnapshot() error {
 		totalKeys, totalSkipped, totalErrors, totalInlineJournal)
 	log.Printf("")
 
-	// Verify EOF tokens
-	if err := r.verifyEofTokens(); err != nil {
-		return fmt.Errorf("EOF token verification failed: %w", err)
-	}
+	// EOF token verification is now done inline in each FLOW goroutine
+	// immediately after RDB parsing completes (before barrier synchronization).
+	// No need to verify here - all tokens were already verified above.
 	log.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	return nil
 }
@@ -975,6 +1017,11 @@ func (r *Replicator) verifyEofTokens() error {
 			if r.flows[flowID].SyncType == "FULL" {
 				log.Printf("  [FLOW-%d] 🗑 Reading and discarding 40-byte EOF checksum (preventing 'unknown opcode' errors)...", flowID)
 
+				// Set read timeout to prevent indefinite blocking
+				if err := flowConn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+					log.Printf("  [FLOW-%d] ⚠ Failed to set read deadline: %v", flowID, err)
+				}
+
 				// Create a temporary buffer to discard the data
 				discardBuf := make([]byte, 40)
 				// ReadFull ensures we get exactly 40 bytes or fail
@@ -983,6 +1030,11 @@ func (r *Replicator) verifyEofTokens() error {
 					// We warn but don't error out, hoping for the best
 				} else {
 					log.Printf("  [FLOW-%d] ✓ EOF checksum discarded successfully.", flowID)
+				}
+
+				// Clear read deadline for subsequent journal streaming
+				if err := flowConn.SetReadDeadline(time.Time{}); err != nil {
+					log.Printf("  [FLOW-%d] ⚠ Failed to clear read deadline: %v", flowID, err)
 				}
 
 				// We still return here, as we don't need to do legacy verification
@@ -1207,7 +1259,9 @@ func (r *Replicator) receiveJournal() error {
 func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	reader := NewJournalReader(r.flowConns[flowID])
+	// Use the persistent buffered reader: this is CRITICAL to recover any journal data
+	// that was buffered during the RDB phase (immediately after the EOF token).
+	reader := NewJournalReader(r.flowBufReaders[flowID])
 	log.Printf("  [FLOW-%d] Starting journal stream reception", flowID)
 	r.recordFlowStage(flowID, "journal", "Listening to journal stream")
 

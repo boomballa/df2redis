@@ -35,6 +35,9 @@ type Client struct {
 	// RDB read timeout (configurable, default 60 seconds)
 	rdbTimeout time.Duration
 
+	// Explicit read deadline set by caller
+	readDeadline time.Time
+
 	mu     sync.Mutex
 	closed bool
 }
@@ -146,6 +149,18 @@ func (c *Client) RawRead(buf []byte) (int, error) {
 	return c.conn.Read(buf)
 }
 
+// SetReadDeadline sets the read deadline for future Read calls.
+// If t is zero, the deadline is cleared (or falls back to default behavior).
+func (c *Client) SetReadDeadline(t time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return errors.New("redisx: client closed")
+	}
+	c.readDeadline = t
+	return c.conn.SetReadDeadline(t)
+}
+
 // Read implements io.Reader for journal processing.
 // It reads via bufio.Reader to avoid skipping buffered bytes.
 func (c *Client) Read(buf []byte) (int, error) {
@@ -154,11 +169,21 @@ func (c *Client) Read(buf []byte) (int, error) {
 	if c.closed {
 		return 0, errors.New("redisx: client closed")
 	}
-	// Journal streams are long-lived; relax the read deadline (~24h)
-	// and rely on TCP keepalive (30s) for liveness.
-	if err := c.conn.SetReadDeadline(time.Now().Add(24 * time.Hour)); err != nil {
-		return 0, err
+
+	// If an explicit deadline is set, use it.
+	// Otherwise, default to 24h for long-lived journal streams.
+	if !c.readDeadline.IsZero() {
+		if err := c.conn.SetReadDeadline(c.readDeadline); err != nil {
+			return 0, err
+		}
+	} else {
+		// Journal streams are long-lived; relax the read deadline (~24h)
+		// and rely on TCP keepalive (30s) for liveness.
+		if err := c.conn.SetReadDeadline(time.Now().Add(24 * time.Hour)); err != nil {
+			return 0, err
+		}
 	}
+
 	// bufio.Reader manages buffering vs. the underlying conn
 	return c.reader.Read(buf)
 }
@@ -275,12 +300,13 @@ func (c *Client) Info(section string) (string, error) {
 // This significantly improves performance for bulk operations on standalone Redis.
 //
 // Usage:
-//   cmds := [][]interface{}{
-//     {"SET", "key1", "value1"},
-//     {"SET", "key2", "value2"},
-//     {"HSET", "hash1", "field1", "value1"},
-//   }
-//   results, err := client.Pipeline(cmds)
+//
+//	cmds := [][]interface{}{
+//	  {"SET", "key1", "value1"},
+//	  {"SET", "key2", "value2"},
+//	  {"HSET", "hash1", "field1", "value1"},
+//	}
+//	results, err := client.Pipeline(cmds)
 //
 // Returns a slice of results corresponding to each command.
 // If any command fails, returns error immediately.

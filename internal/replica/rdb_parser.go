@@ -25,6 +25,7 @@ type RDBParser struct {
 	lz4BlobCount     int   // number of LZ4 blobs processed
 	zstdBlobCount    int   // number of ZSTD blobs processed
 	journalBlobCount int   // number of journal blobs processed
+	seenFullSyncEnd  bool  // whether FULLSYNC_END marker has been seen
 
 	// Debug tracking for deadlock diagnosis
 	keysProcessed    int       // total keys processed (for progress logging)
@@ -101,6 +102,19 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 		opcode, err := p.readByte()
 		if err != nil {
 			return nil, err
+		}
+
+		// Dragonfly Special: After FULLSYNC_END, we expect an eventual EOF Token (40 bytes hex)
+		// This comes after the client sends STARTSTABLE.
+		// If we see a hex character (0-9, a-f) and we've already seen FULLSYNC_END, treat it as the token.
+		if p.seenFullSyncEnd && isHexChar(opcode) {
+			token := make([]byte, 40)
+			token[0] = opcode
+			if _, err := io.ReadFull(p.reader, token[1:]); err != nil {
+				return nil, fmt.Errorf("failed to read completion EOF token: %w", err)
+			}
+			log.Printf("  [FLOW-%d] [PARSER] ✓ Received EOF Token: %s", p.flowID, string(token[:8])+"...")
+			return nil, io.EOF
 		}
 
 		// Debug: Log every opcode encountered (helps diagnose missing JOURNAL_BLOB)
@@ -211,6 +225,9 @@ func (p *RDBParser) ParseNext() (*RDBEntry, error) {
 				return nil, fmt.Errorf("failed to read FULLSYNC_END suffix: %w", err)
 			}
 			log.Printf("  [FLOW-%d] [PARSER] ✓ FULLSYNC_END suffix read.", p.flowID)
+
+			log.Printf("  [FLOW-%d] [PARSER] ✓ FULLSYNC_END suffix read.", p.flowID)
+			p.seenFullSyncEnd = true
 
 			if p.onFullSyncEnd != nil {
 				log.Printf("  [FLOW-%d] [PARSER] 📞 Invoking onFullSyncEnd callback...", p.flowID)
