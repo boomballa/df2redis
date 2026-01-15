@@ -68,7 +68,11 @@ func NewStore(path string) *Store {
 func (s *Store) Load() (Snapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.load()
+}
 
+// load reads the snapshot from disk without locking (internal use).
+func (s *Store) load() (Snapshot, error) {
 	var snap Snapshot
 	data, err := os.ReadFile(s.path)
 	if err != nil {
@@ -93,7 +97,11 @@ func (s *Store) Load() (Snapshot, error) {
 func (s *Store) Write(snap Snapshot) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.write(snap)
+}
 
+// write persists snapshot to disk without locking (internal use).
+func (s *Store) write(snap Snapshot) error {
 	snap.UpdatedAt = time.Now()
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return err
@@ -114,7 +122,7 @@ func (s *Store) UpdateStage(name string, status string, message string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	snap, err := s.Load()
+	snap, err := s.load()
 	if err != nil {
 		return err
 	}
@@ -126,7 +134,7 @@ func (s *Store) UpdateStage(name string, status string, message string) error {
 		Message:   message,
 		UpdatedAt: time.Now(),
 	}
-	return s.Write(snap)
+	return s.write(snap)
 }
 
 // SetPipelineStatus updates overall pipeline status.
@@ -134,7 +142,7 @@ func (s *Store) SetPipelineStatus(status string, message string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	snap, err := s.Load()
+	snap, err := s.load()
 	if err != nil {
 		return err
 	}
@@ -146,7 +154,7 @@ func (s *Store) SetPipelineStatus(status string, message string) error {
 			Message:   message,
 		})
 	}
-	return s.Write(snap)
+	return s.write(snap)
 }
 
 // RecordMetric stores numeric metrics.
@@ -154,7 +162,7 @@ func (s *Store) RecordMetric(name string, value float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	snap, err := s.Load()
+	snap, err := s.load()
 	if err != nil {
 		return err
 	}
@@ -162,7 +170,7 @@ func (s *Store) RecordMetric(name string, value float64) error {
 		snap.Metrics = map[string]float64{}
 	}
 	snap.Metrics[name] = value
-	return s.Write(snap)
+	return s.write(snap)
 }
 
 // UpdateMetrics merges a batch of metric values into the snapshot.
@@ -174,7 +182,7 @@ func (s *Store) UpdateMetrics(updates map[string]float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	snap, err := s.Load()
+	snap, err := s.load()
 	if err != nil {
 		return err
 	}
@@ -184,7 +192,7 @@ func (s *Store) UpdateMetrics(updates map[string]float64) error {
 	for k, v := range updates {
 		snap.Metrics[k] = v
 	}
-	return s.Write(snap)
+	return s.write(snap)
 }
 
 // SaveCheckResult records the latest data validation result.
@@ -192,10 +200,10 @@ func (s *Store) SaveCheckResult(res CheckResult) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	snap, err := s.Load()
+	snap, err := s.load()
 	if err != nil {
 		return err
 	}
 	snap.Check = &res
-	return s.Write(snap)
+	return s.write(snap)
 }
