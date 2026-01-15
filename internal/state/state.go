@@ -111,6 +111,9 @@ func (s *Store) Write(snap Snapshot) error {
 
 // UpdateStage records stage status.
 func (s *Store) UpdateStage(name string, status string, message string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	snap, err := s.Load()
 	if err != nil {
 		return err
@@ -128,6 +131,9 @@ func (s *Store) UpdateStage(name string, status string, message string) error {
 
 // SetPipelineStatus updates overall pipeline status.
 func (s *Store) SetPipelineStatus(status string, message string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	snap, err := s.Load()
 	if err != nil {
 		return err
@@ -145,6 +151,9 @@ func (s *Store) SetPipelineStatus(status string, message string) error {
 
 // RecordMetric stores numeric metrics.
 func (s *Store) RecordMetric(name string, value float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	snap, err := s.Load()
 	if err != nil {
 		return err
@@ -161,6 +170,10 @@ func (s *Store) UpdateMetrics(updates map[string]float64) error {
 	if len(updates) == 0 {
 		return nil
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	snap, err := s.Load()
 	if err != nil {
 		return err
@@ -176,6 +189,9 @@ func (s *Store) UpdateMetrics(updates map[string]float64) error {
 
 // SaveCheckResult records the latest data validation result.
 func (s *Store) SaveCheckResult(res CheckResult) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	snap, err := s.Load()
 	if err != nil {
 		return err
