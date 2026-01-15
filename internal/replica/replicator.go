@@ -749,9 +749,35 @@ func (r *Replicator) receiveSnapshot() error {
 							log.Printf("  [FLOW-%d] ✓ Barrier released, EOF FLOW exiting", flowID)
 							rdbCompleted = true
 						} else {
-							// Normal case: EOF after STARTSTABLE (already participated in barrier)
-							log.Printf("  [FLOW-%d] ✓ RDB stream terminated with EOF (after STARTSTABLE) (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
+							// Normal case: EOF after FULLSYNC_END (already participated in barrier)
+							// At this point, the RDB parser has consumed:
+							// - FULLSYNC_END (0xC8) + 8 bytes padding
+							// - Possible journal blobs
+							// - JOURNAL_OFFSET (0xD3) + 8 bytes offset
+							// - EOF (0xFF) + 8 bytes CRC64 checksum
+							// The next 40 bytes in the buffered reader should be the EOF token
+							log.Printf("  [FLOW-%d] ✓ RDB stream terminated with EOF (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
 								flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps)
+
+							// Verify the 40-byte EOF token that Dragonfly sends after RDB stream
+							if r.flows[flowID].SyncType == "FULL" && len(r.flows[flowID].EOFToken) == 40 {
+								log.Printf("  [FLOW-%d] → Reading 40-byte EOF token after EOF (0xFF) opcode...", flowID)
+
+								eofTokenBuf := make([]byte, 40)
+								if _, err := io.ReadFull(r.flowBufReaders[flowID], eofTokenBuf); err != nil {
+									log.Printf("  [FLOW-%d] ⚠ Failed to read EOF token: %v", flowID, err)
+									errChan <- fmt.Errorf("FLOW-%d: failed to read EOF token: %w", flowID, err)
+									return
+								}
+
+								receivedToken := string(eofTokenBuf)
+								if receivedToken != r.flows[flowID].EOFToken {
+									errChan <- fmt.Errorf("FLOW-%d: EOF token mismatch\n  expected: %s\n  received: %s",
+										flowID, r.flows[flowID].EOFToken, receivedToken)
+									return
+								}
+								log.Printf("  [FLOW-%d] ✓ EOF token verified successfully", flowID)
+							}
 						}
 
 						r.recordFlowStage(flowID, "rdb_done",
@@ -766,43 +792,17 @@ func (r *Replicator) receiveSnapshot() error {
 
 				// CRITICAL: Check for FULLSYNC_END marker
 				// This means "static RDB snapshot complete", and we need to:
-				// 1. Read the 40-byte EOF token (Dragonfly sends it after RDB stream)
-				// 2. Participate in barrier synchronization
-				// 3. Wait for all FLOWs to complete before main thread sends STARTSTABLE
+				// 1. Participate in barrier synchronization
+				// 2. Wait for all FLOWs to complete before main thread sends STARTSTABLE
+				// 3. Continue parsing until EOF (0xFF), then verify 40-byte EOF token
 				if entry.Type == RDB_TYPE_FULLSYNC_END_MARKER {
 					stats.mu.Lock()
 					inlineJournalOps := stats.InlineJournalOps
 					stats.mu.Unlock()
-					log.Printf("  [FLOW-%d] ✓ RDB parsing done (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
+					log.Printf("  [FLOW-%d] ✓ RDB static snapshot done (success=%d, skipped=%d, failed=%d, inline_journal=%d)",
 						flowID, stats.KeyCount, stats.SkippedCount, stats.ErrorCount, inlineJournalOps)
 
-					// Step 1: Read the 40-byte EOF token that Dragonfly sends after RDB stream
-					// This must be done BEFORE barrier synchronization and STARTSTABLE
-					// According to Dragonfly source code (replica.cc), EOF token is sent after RDB stream,
-					// and should be read using a chained source (leftover + socket)
-					if r.flows[flowID].SyncType == "FULL" && len(r.flows[flowID].EOFToken) == 40 {
-						log.Printf("  [FLOW-%d] → Reading 40-byte EOF token after RDB stream...", flowID)
-
-						// Read EOF token from bufio reader (which is already positioned after RDB stream)
-						// The parser has already consumed all RDB opcodes, so the next 40 bytes should be the EOF token
-						eofTokenBuf := make([]byte, 40)
-						if _, err := io.ReadFull(r.flowBufReaders[flowID], eofTokenBuf); err != nil {
-							log.Printf("  [FLOW-%d] ⚠ Failed to read EOF token: %v", flowID, err)
-							errChan <- fmt.Errorf("FLOW-%d: failed to read EOF token: %w", flowID, err)
-							return
-						}
-
-						// Verify EOF token matches what we received in DFLY FLOW response
-						receivedToken := string(eofTokenBuf)
-						if receivedToken != r.flows[flowID].EOFToken {
-							errChan <- fmt.Errorf("FLOW-%d: EOF token mismatch\n  expected: %s\n  received: %s",
-								flowID, r.flows[flowID].EOFToken, receivedToken)
-							return
-						}
-						log.Printf("  [FLOW-%d] ✓ EOF token verified successfully", flowID)
-					}
-
-					// Step 2: Participate in barrier synchronization
+					// Step 1: Participate in barrier synchronization
 					flowCompletionCount.mu.Lock()
 					flowCompletionCount.count++
 					completedCount := flowCompletionCount.count
@@ -815,13 +815,18 @@ func (r *Replicator) receiveSnapshot() error {
 						close(rdbCompletionBarrier)
 					}
 
-					// Step 3: Wait for barrier release (all FLOWs ready)
+					// Step 2: Wait for barrier release (all FLOWs ready)
 					<-rdbCompletionBarrier
 					log.Printf("  [FLOW-%d] ✓ Barrier released", flowID)
 					rdbCompleted = true
 
-					// Step 4: Continue reading journal blobs until STARTSTABLE triggers EOF
-					log.Printf("  [FLOW-%d] → Continuing to read journal blobs until STARTSTABLE triggers EOF...", flowID)
+					// Step 3: Continue parsing until EOF (0xFF) opcode
+					// According to Dragonfly protocol, after FULLSYNC_END there may be:
+					// - More journal blobs
+					// - JOURNAL_OFFSET (0xD3) + 8 bytes
+					// - EOF (0xFF) + 8 bytes CRC64 checksum
+					// - 40-byte EOF token (verified after EOF opcode)
+					log.Printf("  [FLOW-%d] → Continuing to parse until EOF (0xFF) opcode...", flowID)
 					continue
 				}
 
