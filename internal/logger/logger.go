@@ -192,3 +192,19 @@ func Writer() io.Writer {
 	}
 	return os.Stdout
 }
+
+// NewStandaloneLogger creates a distinct file logger that does not interfere with the global logger.
+func NewStandaloneLogger(filePath, prefix string) (*log.Logger, error) {
+	// Ensure directory exists
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		return nil, err
+	}
+
+	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return nil, err
+	}
+
+	// Use standard flags
+	return log.New(f, prefix, log.LstdFlags|log.Lmsgprefix), nil
+}

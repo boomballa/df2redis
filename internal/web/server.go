@@ -1,7 +1,6 @@
 package web
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -33,11 +32,10 @@ type DashboardServer struct {
 	// Callback for dynamic configuration
 	onConfigUpdate func(qps int, batchSize int) error
 
-	// Check task management
-	checkMu      sync.RWMutex
-	checkRunning bool
-	checkCancel  context.CancelFunc
-	checkStatus  *CheckStatus
+	checkStatus *CheckStatus
+
+	// Dedicated logger for dashboard events
+	logger *log.Logger
 }
 
 // Options configure the dashboard server.
@@ -54,12 +52,39 @@ func New(opts Options) (*DashboardServer, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Setup separate dashboard logger
+	logDir := opts.Cfg.Log.Dir
+	if logDir == "" {
+		logDir = "log" // Default fallback
+	}
+	// resolve absolute path for log dir
+	absLogDir := opts.Cfg.ResolvePath(logDir)
+
+	// Determine dashboard log filename
+	logName := "dashboard.log"
+	if opts.Cfg.TaskName != "" {
+		logName = fmt.Sprintf("%s_dashboard.log", opts.Cfg.TaskName)
+	}
+
+	// Create independent logger
+	dashLogger, err := logger.NewStandaloneLogger(
+		filepath.Join(absLogDir, logName),
+		"[dashboard] ",
+	)
+	if err != nil {
+		// Fallback to stderr if file creation fails
+		dashLogger = log.New(os.Stderr, "[dashboard] ", log.LstdFlags)
+		fmt.Printf("Failed to create dashboard log file: %v\n", err)
+	}
+
 	return &DashboardServer{
 		addr:           opts.Addr,
 		cfg:            opts.Cfg,
 		store:          opts.Store,
 		tmpl:           tmpl,
 		onConfigUpdate: opts.OnConfigUpdate,
+		logger:         dashLogger,
 	}, nil
 }
 
@@ -100,8 +125,8 @@ func (s *DashboardServer) Start(ready chan<- string) error {
 	if ready != nil {
 		ready <- actualAddr
 	}
-	log.Printf("[dashboard] serving at http://%s", actualAddr)
-	server := &http.Server{Handler: mux}
+	s.logger.Printf("serving at http://%s", actualAddr)
+	server := &http.Server{Handler: mux, ErrorLog: s.logger}
 	return server.Serve(ln)
 }
 
@@ -205,12 +230,19 @@ func (s *DashboardServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 		logPath = s.inferLogFilePath()
 	}
 
-	log.Printf("[dashboard] Reading logs from: %s (offset=%d, lines=%d)", logPath, offset, lines)
+	// Determine actual log file path
+	logPath := logger.GetLogFilePath()
+	if logPath == "" {
+		// Fallback: infer log file path from config
+		logPath = s.inferLogFilePath()
+	}
+
+	s.logger.Printf("Reading logs from: %s (offset=%d, lines=%d)", logPath, offset, lines)
 
 	// Read log file
 	content, err := readLogFile(logPath, offset, lines)
 	if err != nil {
-		log.Printf("[dashboard] Failed to read log file %s: %v", logPath, err)
+		s.logger.Printf("Failed to read log file %s: %v", logPath, err)
 		writeJSON(w, map[string]interface{}{
 			"error":  fmt.Sprintf("failed to read log file: %v", err),
 			"lines":  []string{},
@@ -220,7 +252,7 @@ func (s *DashboardServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[dashboard] Successfully read %d lines from log file (total: %d)", len(content.Lines), content.TotalLines)
+	s.logger.Printf("Successfully read %d lines from log file (total: %d)", len(content.Lines), content.TotalLines)
 
 	writeJSON(w, map[string]interface{}{
 		"lines":  content.Lines,
@@ -252,7 +284,7 @@ func (s *DashboardServer) handleConfigUpdate(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Logging
-	log.Printf("[dashboard] UPDATE CONFIG request: QPS=%d, BatchSize=%d", req.QPS, req.BatchSize)
+	s.logger.Printf("UPDATE CONFIG request: QPS=%d, BatchSize=%d", req.QPS, req.BatchSize)
 
 	// Execute callback which propagates to Replicator -> FlowWriters
 	if err := s.onConfigUpdate(req.QPS, req.BatchSize); err != nil {
@@ -635,7 +667,7 @@ func (s *DashboardServer) inferLogFilePath() string {
 			continue
 		}
 		if _, err := os.Stat(absPath); err == nil {
-			log.Printf("[dashboard] Found log file: %s", absPath)
+			s.logger.Printf("Found log file: %s", absPath)
 			return absPath // Return absolute path
 		}
 	}
@@ -644,7 +676,7 @@ func (s *DashboardServer) inferLogFilePath() string {
 	if len(candidates) > 0 {
 		absPath, err := filepath.Abs(candidates[0])
 		if err == nil {
-			log.Printf("[dashboard] No log file found, using fallback: %s", absPath)
+			s.logger.Printf("No log file found, using fallback: %s", absPath)
 			return absPath
 		}
 		return candidates[0]

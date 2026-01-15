@@ -30,7 +30,7 @@ func GenerateShakeConfigFile(cfg *config.Config, stateDir string) (string, error
 	// Use cfg.ResolvePath which handles resolution relative to config file location correctly
 	absLogDir := cfg.ResolvePath(cfg.Log.Dir)
 	if absLogDir == "" {
-		absLogDir = cfg.ResolvePath("logs") // Fallback
+		absLogDir = cfg.ResolvePath("log") // Fallback
 	}
 
 	shakeLogName := "shake.log"

@@ -34,5 +34,5 @@ advanced:
   batchSize: 500            # Batch size for RDB import
 
 log:
-  dir: "logs"
+  dir: "../log"
   level: "info"

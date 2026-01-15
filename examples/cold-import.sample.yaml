@@ -26,5 +26,5 @@ advanced:
   batchSize: 500               # Pipeline batch size (mapped to pipeline_count_limit)
 
 log:
-  dir: "logs"
+  dir: "../log"
   level: "info"
