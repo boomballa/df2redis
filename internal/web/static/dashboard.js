@@ -575,22 +575,36 @@
       return;
     }
 
-    // Incremental mode: fetch new lines from currentOffset to end
-    console.log('[Live Logs] refreshLogs: incremental fetch from offset', currentOffset);
+    // Try incremental fetch first to detect growth rate
+    console.log('[Live Logs] refreshLogs: checking for new lines from offset', currentOffset);
     const data = await fetchLogs(currentOffset, 1000); // Max 1000 new lines per refresh
 
-    if (data && data.lines && data.lines.length > 0) {
-      console.log('[Live Logs] refreshLogs: received', data.lines.length, 'new lines');
-      totalLines = data.total;
-      currentOffset = totalLines; // Update to latest position
+    if (data) {
+      const newLinesCount = data.total - currentOffset;
 
-      // Append new lines (will trigger DOM cleanup inside renderLogLines)
-      renderLogLines(data.lines, true); // append=true
-      scrollToBottom();
-    } else if (data) {
-      // No new logs, just update total count
-      console.log('[Live Logs] refreshLogs: no new lines');
-      totalLines = data.total;
+      // CRITICAL: Detect high-velocity log growth (RDB phase)
+      // If more than 500 lines added in 5 seconds, we're falling behind
+      // Switch to tail mode to show latest logs instead of appending old ones
+      if (newLinesCount > 500) {
+        console.log('[Live Logs] ⚡ High velocity detected:', newLinesCount, 'new lines in 5s → switching to TAIL mode');
+        await loadInitialLogs(); // Reload tail to jump to latest
+        return;
+      }
+
+      // Normal incremental mode (Journal phase or low activity)
+      if (newLinesCount > 0 && data.lines && data.lines.length > 0) {
+        console.log('[Live Logs] refreshLogs: incremental append', data.lines.length, 'new lines');
+        totalLines = data.total;
+        currentOffset = totalLines; // Update to latest position
+
+        // Append new lines (will trigger DOM cleanup inside renderLogLines)
+        renderLogLines(data.lines, true); // append=true
+        scrollToBottom();
+      } else {
+        // No new logs, just update total count
+        console.log('[Live Logs] refreshLogs: no new lines (current:', currentOffset, 'total:', data.total, ')');
+        totalLines = data.total;
+      }
     }
   }
 
