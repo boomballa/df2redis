@@ -44,6 +44,36 @@ func DialCluster(ctx context.Context, seeds []string, password string) (*Cluster
 	return cc, nil
 }
 
+// DialStandalone connects to a single Redis instance but returns a ClusterClient adapter.
+// This allows the replicator to treat standalone and cluster targets uniformly.
+func DialStandalone(ctx context.Context, addr string, password string) (*ClusterClient, error) {
+	if addr == "" {
+		return nil, errors.New("redisx: addr is empty")
+	}
+
+	cc := &ClusterClient{
+		seeds:    []string{addr},
+		password: password,
+		clients:  make(map[string]*Client),
+	}
+
+	// Connect to the single node
+	client, err := Dial(ctx, Config{Addr: addr, Password: password})
+	if err != nil {
+		return nil, err
+	}
+	cc.clients[addr] = client
+
+	// Map all slots to this single node
+	cc.mu.Lock()
+	for i := 0; i < 16384; i++ {
+		cc.slots[i] = addr
+	}
+	cc.mu.Unlock()
+
+	return cc, nil
+}
+
 // Close closes all connections in the pool.
 func (cc *ClusterClient) Close() error {
 	cc.mu.Lock()

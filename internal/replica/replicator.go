@@ -138,7 +138,13 @@ func (r *Replicator) Start() error {
 	}
 
 	var err error
-	r.clusterClient, err = redisx.DialCluster(r.ctx, seeds, r.cfg.Target.Password)
+	if strings.Contains(strings.ToLower(r.cfg.Target.Type), "cluster") {
+		// Cluster mode: auto-detect topology
+		r.clusterClient, err = redisx.DialCluster(r.ctx, seeds, r.cfg.Target.Password)
+	} else {
+		// Standalone mode: force single node topology
+		r.clusterClient, err = redisx.DialStandalone(r.ctx, seeds[0], r.cfg.Target.Password)
+	}
 	if err != nil {
 		r.recordPipelineStatus("error", fmt.Sprintf("Failed to connect to target Redis: %v", err))
 		return fmt.Errorf("failed to connect to target Redis: %w", err)
