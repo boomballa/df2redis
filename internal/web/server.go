@@ -76,7 +76,7 @@ func (s *DashboardServer) Start(ready chan<- string) error {
 	mux.HandleFunc("/api/sync/progress", s.handleSyncProgress)
 	mux.HandleFunc("/api/check/latest", s.handleCheckLatest)
 	mux.HandleFunc("/api/events", s.handleEvents)
-	mux.HandleFunc("/api/events", s.handleEvents)
+
 	mux.HandleFunc("/api/logs", s.handleLogs)
 	mux.HandleFunc("/api/config", s.handleConfigUpdate) // New Config API
 	// Check validation API endpoints
