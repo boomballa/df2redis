@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -32,7 +33,11 @@ type DashboardServer struct {
 	// Callback for dynamic configuration
 	onConfigUpdate func(qps int, batchSize int) error
 
-	checkStatus *CheckStatus
+	// Check task management
+	checkMu      sync.RWMutex
+	checkRunning bool
+	checkCancel  context.CancelFunc
+	checkStatus  *CheckStatus
 
 	// Dedicated logger for dashboard events
 	logger *log.Logger
@@ -221,13 +226,6 @@ func (s *DashboardServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 		if parsed, err := strconv.Atoi(offsetParam); err == nil && parsed >= 0 {
 			offset = parsed
 		}
-	}
-
-	// Determine actual log file path
-	logPath := logger.GetLogFilePath()
-	if logPath == "" {
-		// Fallback: infer log file path from config
-		logPath = s.inferLogFilePath()
 	}
 
 	// Determine actual log file path
