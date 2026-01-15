@@ -451,66 +451,59 @@
   function applySyntaxHighlighting(line) {
     let text = escapeHTML(line);
 
-    // Helper to replace text without touching existing HTML tags
-    // For simplicity in this specific log format, we can do replacements in specific order
-    // and use a placeholder or smarter regex.
-    // However, given the breakage, let's keep it simple and fix the overlapping matches.
+    // ORDER MATTERS!
+    // We must apply generic text patterns (Key-Value, Numbers) FIRST,
+    // before we introduce any HTML tags (like <span class="...">) to the string.
+    // Otherwise, generic patterns will match the attributes of our HTML tags (e.g. matching 'class="log-..."').
 
-    // 1. Timestamp: YYYY/MM/DD HH:MM:SS
-    // Note: We highlight this FIRST. Subsequent number highlighting must avoid this.
-    text = text.replace(
-      /^(\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2})/,
-      '<span class="log-timestamp">$1</span>'
-    );
-
-    // 2. [df2redis]
-    text = text.replace(
-      /(\[df2redis[^\]]*\])/g,
-      '<span class="log-app-name">$1</span>'
-    );
-
-    // 3. [FLOW-N]
-    text = text.replace(
-      /(\[FLOW-\d+\])/g,
-      '<span class="log-flow">$1</span>'
-    );
-
-    // 4. [MODULE]
-    text = text.replace(
-      /(\[(WRITER|READER|PARSER|INIT|CONFIG|DEBUG|JOURNAL|RDB|CLUSTER|PIPELINE|CHECKER|JOURNAL-BLOB|JOURNAL-BLOB-PROCESS|INLINE-JOURNAL)\])/gi,
-      '<span class="log-module">$1</span>'
-    );
-
-    // 5. Symbols
-    text = text.replace(/([✓✔])/g, '<span class="log-symbol-success">$1</span>');
-    text = text.replace(/([✗✘❌])/g, '<span class="log-symbol-error">$1</span>');
-    text = text.replace(/([⚠️⚠])/g, '<span class="log-symbol-warning">$1</span>');
-    text = text.replace(/([→➔➜▸•⏩])/g, '<span class="log-symbol-arrow">$1</span>');
-
-    // 6. Key-value pairs (key=value)
-    // We match this BEFORE numbers to avoid splitting values
+    // 1. Key-value pairs (key=value)
+    // We match this first on raw text.
     text = text.replace(
       /\b([a-zA-Z_][a-zA-Z0-9_]*)(=)([^\s,)]+)/g,
       '<span class="log-key">$1</span>$2<span class="log-value">$3</span>'
     );
 
-    // 7. Numbers
-    // CRITICAL FIX: Lookbehind is not supported in all browsers, so we use a checking function
-    // or we just avoid highlighting numbers that are likely part of a date/time we already wrapped.
-    // Since we wrapped Timestamp in <span class="log-timestamp">...</span>,
-    // the regex will see: <span class="log-timestamp">2026/01/15...
-    // We simply skip highlighting numbers if they look like date parts (4 digits starting line) or simple logic.
-    // simpler fix: don't highlight pure numbers, only numbers with units OR specific stats.
-
+    // 2. Numbers (Specific stats)
+    // Match specific stats patterns mainly to avoid matching random parts of dates/IDs too aggressively.
+    text = text.replace(
+      /\b(count|lines|entries|nodes|success|fail|skipped|db|inline_journal)\s*[:=]?\s*(\d+)/gi,
+      '$1: <span class="log-number">$2</span>'
+    );
+    // Also match numbers with units (e.g. 500ms, 100MB) if not already highlighted
+    // We use a lookahead or just rely on the specific units regex being distinct.
     text = text.replace(
       /\b(\d+(?:\.\d+)?(?:ms|s|MB|KB|GB|bytes|ops\/sec|%))\b/g,
       '<span class="log-number">$1</span>'
     );
-    // Highlight plain integers only if they are NOT 4 digits (year) or 2 digits (day/month) inside a date context?
-    // For safety, let's just highlight stats-like numbers for now to unbreak the view.
+
+    // 3. Symbols
+    text = text.replace(/([✓✔])/g, '<span class="log-symbol-success">$1</span>');
+    text = text.replace(/([✗✘❌])/g, '<span class="log-symbol-error">$1</span>');
+    text = text.replace(/([⚠️⚠])/g, '<span class="log-symbol-warning">$1</span>');
+    text = text.replace(/([→➔➜▸•⏩])/g, '<span class="log-symbol-arrow">$1</span>');
+
+    // 4. Timestamp: YYYY/MM/DD HH:MM:SS
     text = text.replace(
-      /\b(count|lines|entries|nodes|success|fail|skipped|db)\s*[:=]?\s*(\d+)/gi,
-      '$1: <span class="log-number">$2</span>'
+      /^(\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2})/,
+      '<span class="log-timestamp">$1</span>'
+    );
+
+    // 5. [df2redis]
+    text = text.replace(
+      /(\[df2redis[^\]]*\])/g,
+      '<span class="log-app-name">$1</span>'
+    );
+
+    // 6. [FLOW-N]
+    text = text.replace(
+      /(\[FLOW-\d+\])/g,
+      '<span class="log-flow">$1</span>'
+    );
+
+    // 7. [MODULE]
+    text = text.replace(
+      /(\[(WRITER|READER|PARSER|INIT|CONFIG|DEBUG|JOURNAL|RDB|CLUSTER|PIPELINE|CHECKER|JOURNAL-BLOB|JOURNAL-BLOB-PROCESS|INLINE-JOURNAL)\])/gi,
+      '<span class="log-module">$1</span>'
     );
 
     return text;
