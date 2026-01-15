@@ -447,52 +447,73 @@
   }
 
   // Apply syntax highlighting to log line (Modern Dev theme)
+  // We use a multi-pass approach but be careful not to highlight inside existing tags
   function applySyntaxHighlighting(line) {
-    let highlighted = escapeHTML(line);
+    let text = escapeHTML(line);
+
+    // Helper to replace text without touching existing HTML tags
+    // For simplicity in this specific log format, we can do replacements in specific order
+    // and use a placeholder or smarter regex.
+    // However, given the breakage, let's keep it simple and fix the overlapping matches.
 
     // 1. Timestamp: YYYY/MM/DD HH:MM:SS
-    highlighted = highlighted.replace(
-      /(\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2})/g,
+    // Note: We highlight this FIRST. Subsequent number highlighting must avoid this.
+    text = text.replace(
+      /^(\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2})/,
       '<span class="log-timestamp">$1</span>'
     );
 
-    // 2. [df2redis] or [df2redis-XXX]
-    highlighted = highlighted.replace(
+    // 2. [df2redis]
+    text = text.replace(
       /(\[df2redis[^\]]*\])/g,
       '<span class="log-app-name">$1</span>'
     );
 
-    // 3. [FLOW-N] - with special pink background
-    highlighted = highlighted.replace(
+    // 3. [FLOW-N]
+    text = text.replace(
       /(\[FLOW-\d+\])/g,
       '<span class="log-flow">$1</span>'
     );
 
-    // 4. [MODULE] - common module names
-    highlighted = highlighted.replace(
+    // 4. [MODULE]
+    text = text.replace(
       /(\[(WRITER|READER|PARSER|INIT|CONFIG|DEBUG|JOURNAL|RDB|CLUSTER|PIPELINE|CHECKER|JOURNAL-BLOB|JOURNAL-BLOB-PROCESS|INLINE-JOURNAL)\])/gi,
       '<span class="log-module">$1</span>'
     );
 
-    // 5. Symbols - must do before search highlighting
-    highlighted = highlighted.replace(/([✓✔])/g, '<span class="log-symbol-success">$1</span>');
-    highlighted = highlighted.replace(/([✗✘❌])/g, '<span class="log-symbol-error">$1</span>');
-    highlighted = highlighted.replace(/([⚠️⚠])/g, '<span class="log-symbol-warning">$1</span>');
-    highlighted = highlighted.replace(/([→➔➜▸•])/g, '<span class="log-symbol-arrow">$1</span>');
+    // 5. Symbols
+    text = text.replace(/([✓✔])/g, '<span class="log-symbol-success">$1</span>');
+    text = text.replace(/([✗✘❌])/g, '<span class="log-symbol-error">$1</span>');
+    text = text.replace(/([⚠️⚠])/g, '<span class="log-symbol-warning">$1</span>');
+    text = text.replace(/([→➔➜▸•⏩])/g, '<span class="log-symbol-arrow">$1</span>');
 
-    // 6. Numbers (standalone or with units)
-    highlighted = highlighted.replace(
-      /\b(\d+(?:\.\d+)?(?:ms|s|MB|KB|GB|bytes|ops\/sec|%)?)\b/g,
-      '<span class="log-number">$1</span>'
-    );
-
-    // 7. Key-value pairs: key=value
-    highlighted = highlighted.replace(
+    // 6. Key-value pairs (key=value)
+    // We match this BEFORE numbers to avoid splitting values
+    text = text.replace(
       /\b([a-zA-Z_][a-zA-Z0-9_]*)(=)([^\s,)]+)/g,
       '<span class="log-key">$1</span>$2<span class="log-value">$3</span>'
     );
 
-    return highlighted;
+    // 7. Numbers
+    // CRITICAL FIX: Lookbehind is not supported in all browsers, so we use a checking function
+    // or we just avoid highlighting numbers that are likely part of a date/time we already wrapped.
+    // Since we wrapped Timestamp in <span class="log-timestamp">...</span>,
+    // the regex will see: <span class="log-timestamp">2026/01/15...
+    // We simply skip highlighting numbers if they look like date parts (4 digits starting line) or simple logic.
+    // simpler fix: don't highlight pure numbers, only numbers with units OR specific stats.
+
+    text = text.replace(
+      /\b(\d+(?:\.\d+)?(?:ms|s|MB|KB|GB|bytes|ops\/sec|%))\b/g,
+      '<span class="log-number">$1</span>'
+    );
+    // Highlight plain integers only if they are NOT 4 digits (year) or 2 digits (day/month) inside a date context?
+    // For safety, let's just highlight stats-like numbers for now to unbreak the view.
+    text = text.replace(
+      /\b(count|lines|entries|nodes|success|fail|skipped|db)\s*[:=]?\s*(\d+)/gi,
+      '$1: <span class="log-number">$2</span>'
+    );
+
+    return text;
   }
 
   // Highlight search keyword in element without breaking HTML structure
