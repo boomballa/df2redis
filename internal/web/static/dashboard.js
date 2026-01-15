@@ -495,6 +495,42 @@
     return highlighted;
   }
 
+  // Highlight search keyword in element without breaking HTML structure
+  function highlightTextInElement(element, keyword) {
+    const searchPattern = escapeRegex(keyword);
+
+    // Walk through all text nodes
+    const walker = document.createTreeWalker(
+      element,
+      NodeFilter.SHOW_TEXT,
+      null,
+      false
+    );
+
+    const textNodesToReplace = [];
+    let node;
+
+    while (node = walker.nextNode()) {
+      // Skip if already inside a highlight span
+      if (node.parentElement && node.parentElement.classList.contains('log-highlight')) {
+        continue;
+      }
+
+      // Check if this text node contains the keyword (case-insensitive)
+      if (node.textContent.toLowerCase().includes(keyword.toLowerCase())) {
+        textNodesToReplace.push(node);
+      }
+    }
+
+    // Replace text nodes with highlighted versions
+    textNodesToReplace.forEach(textNode => {
+      const regex = new RegExp(`(${searchPattern})`, 'gi');
+      const span = document.createElement('span');
+      span.innerHTML = textNode.textContent.replace(regex, '<span class="log-highlight">$1</span>');
+      textNode.parentNode.replaceChild(span, textNode);
+    });
+  }
+
   async function fetchLogs(offset, lines, mode = '') {
     try {
       let url = `/api/logs?offset=${offset}&lines=${lines}`;
@@ -541,16 +577,16 @@
       // Apply syntax highlighting first
       let content = applySyntaxHighlighting(line);
 
-      // Then apply search highlighting on top if needed
+      // Set the HTML content first
+      div.innerHTML = content;
+
+      // Then apply search highlighting using DOM manipulation to avoid breaking HTML
       if (searchKeyword) {
-        const regex = new RegExp(`(${escapeRegex(searchKeyword)})`, 'gi');
-        content = content.replace(regex, '<span class="log-highlight">$1</span>');
-        if (regex.test(line)) {
+        if (line.toLowerCase().includes(searchKeyword.toLowerCase())) {
           div.classList.add('highlighted');
+          highlightTextInElement(div, searchKeyword);
         }
       }
-
-      div.innerHTML = content;
       fragment.appendChild(div);
     });
 
