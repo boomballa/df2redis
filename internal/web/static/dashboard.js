@@ -446,6 +446,55 @@
     });
   }
 
+  // Apply syntax highlighting to log line (Modern Dev theme)
+  function applySyntaxHighlighting(line) {
+    let highlighted = escapeHTML(line);
+
+    // 1. Timestamp: YYYY/MM/DD HH:MM:SS
+    highlighted = highlighted.replace(
+      /(\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2})/g,
+      '<span class="log-timestamp">$1</span>'
+    );
+
+    // 2. [df2redis] or [df2redis-XXX]
+    highlighted = highlighted.replace(
+      /(\[df2redis[^\]]*\])/g,
+      '<span class="log-app-name">$1</span>'
+    );
+
+    // 3. [FLOW-N] - with special pink background
+    highlighted = highlighted.replace(
+      /(\[FLOW-\d+\])/g,
+      '<span class="log-flow">$1</span>'
+    );
+
+    // 4. [MODULE] - common module names
+    highlighted = highlighted.replace(
+      /(\[(WRITER|READER|PARSER|INIT|CONFIG|DEBUG|JOURNAL|RDB|CLUSTER|PIPELINE|CHECKER|JOURNAL-BLOB|JOURNAL-BLOB-PROCESS|INLINE-JOURNAL)\])/gi,
+      '<span class="log-module">$1</span>'
+    );
+
+    // 5. Symbols - must do before search highlighting
+    highlighted = highlighted.replace(/([✓✔])/g, '<span class="log-symbol-success">$1</span>');
+    highlighted = highlighted.replace(/([✗✘❌])/g, '<span class="log-symbol-error">$1</span>');
+    highlighted = highlighted.replace(/([⚠️⚠])/g, '<span class="log-symbol-warning">$1</span>');
+    highlighted = highlighted.replace(/([→➔➜▸•])/g, '<span class="log-symbol-arrow">$1</span>');
+
+    // 6. Numbers (standalone or with units)
+    highlighted = highlighted.replace(
+      /\b(\d+(?:\.\d+)?(?:ms|s|MB|KB|GB|bytes|ops\/sec|%)?)\b/g,
+      '<span class="log-number">$1</span>'
+    );
+
+    // 7. Key-value pairs: key=value
+    highlighted = highlighted.replace(
+      /\b([a-zA-Z_][a-zA-Z0-9_]*)(=)([^\s,)]+)/g,
+      '<span class="log-key">$1</span>$2<span class="log-value">$3</span>'
+    );
+
+    return highlighted;
+  }
+
   async function fetchLogs(offset, lines, mode = '') {
     try {
       let url = `/api/logs?offset=${offset}&lines=${lines}`;
@@ -489,8 +538,10 @@
         div.classList.add('log-debug');
       }
 
-      // Apply search highlighting
-      let content = escapeHTML(line);
+      // Apply syntax highlighting first
+      let content = applySyntaxHighlighting(line);
+
+      // Then apply search highlighting on top if needed
       if (searchKeyword) {
         const regex = new RegExp(`(${escapeRegex(searchKeyword)})`, 'gi');
         content = content.replace(regex, '<span class="log-highlight">$1</span>');
