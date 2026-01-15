@@ -413,6 +413,10 @@
   let refreshTimer = null;
   let isAtBottom = true;
 
+  // Track current viewing window for bidirectional pagination
+  let windowStartOffset = 0; // Earliest line in current view
+  let windowEndOffset = 0;   // Latest line in current view
+
   // Maximum number of log lines to keep in DOM (prevent browser slowdown)
   const MAX_LOG_LINES = 1000;
 
@@ -426,7 +430,8 @@
   const logScrollBottomBtn = document.getElementById('log-scroll-bottom-btn');
   const logJumpLatestBtn = document.getElementById('log-jump-latest-btn');
   const logPauseResumeBtn = document.getElementById('log-pause-resume-btn');
-  const logLoadMoreBtn = document.getElementById('log-load-more-btn');
+  const logLoadEarlierBtn = document.getElementById('log-load-earlier-btn');
+  const logLoadNewerBtn = document.getElementById('log-load-newer-btn');
   const autoRefreshIndicator = document.getElementById('auto-refresh-indicator');
   const logShownCount = document.getElementById('log-shown-count');
   const logTotalCount = document.getElementById('log-total-count');
@@ -458,10 +463,11 @@
     }
   }
 
-  function renderLogLines(lines, append = false) {
-    console.log('[Live Logs] Rendering lines:', lines ? lines.length : 0, 'append:', append);
+  function renderLogLines(lines, mode = 'replace') {
+    // mode: 'replace' (default), 'append' (add to bottom), 'prepend' (add to top)
+    console.log('[Live Logs] Rendering lines:', lines ? lines.length : 0, 'mode:', mode);
     if (!lines || lines.length === 0) {
-      if (!append && !lines) {
+      if (mode === 'replace' && !lines) {
         logContent.innerHTML = '<div class="log-loading">No logs available</div>';
       }
       return;
@@ -497,7 +503,8 @@
       fragment.appendChild(div);
     });
 
-    if (append) {
+    if (mode === 'append') {
+      // Add to bottom
       logContent.appendChild(fragment);
 
       // CRITICAL: Limit DOM size to prevent browser slowdown
@@ -509,8 +516,27 @@
         for (let i = 0; i < toRemove; i++) {
           allLogLines[i].remove();
         }
+        // Adjust window start offset when removing from top
+        windowStartOffset += toRemove;
+      }
+    } else if (mode === 'prepend') {
+      // Add to top
+      const firstChild = logContent.firstChild;
+      logContent.insertBefore(fragment, firstChild);
+
+      // Limit DOM size when prepending (remove from bottom)
+      const allLogLines = logContent.querySelectorAll('.log-line');
+      if (allLogLines.length > MAX_LOG_LINES) {
+        const toRemove = allLogLines.length - MAX_LOG_LINES;
+        console.log('[Live Logs] DOM cleanup: removing', toRemove, 'newest lines (total:', allLogLines.length, '→', MAX_LOG_LINES, ')');
+        for (let i = allLogLines.length - 1; i >= allLogLines.length - toRemove; i--) {
+          allLogLines[i].remove();
+        }
+        // Adjust window end offset when removing from bottom
+        windowEndOffset -= toRemove;
       }
     } else {
+      // Replace all
       logContent.innerHTML = '';
       logContent.appendChild(fragment);
     }
@@ -519,10 +545,11 @@
     logShownCount.textContent = logContent.querySelectorAll('.log-line').length;
     logTotalCount.textContent = totalLines;
 
-    // Ensure we scroll to bottom if we just loaded tail or appended
-    if (append || isAtBottom) {
+    // Scroll behavior
+    if (mode === 'append' || (mode === 'replace' && isAtBottom)) {
       scrollToBottom();
     }
+    // For prepend, maintain scroll position (browser does this automatically)
   }
 
   function escapeRegex(str) {
@@ -538,16 +565,20 @@
     if (data) {
       totalLines = data.total;
       // IMPORTANT: When fetching tail, the server returns the last N lines.
-      // We must set currentOffset to totalLines so subsequent "loadMore" 
+      // We must set currentOffset to totalLines so subsequent "loadMore"
       // (or auto-refresh) fetches only *new* lines that appear after this point.
       currentOffset = totalLines;
 
-      renderLogLines(data.lines, false);
+      // Set viewing window: we're showing the last 100 lines
+      windowEndOffset = totalLines;
+      windowStartOffset = Math.max(0, totalLines - data.lines.length);
+
+      renderLogLines(data.lines, 'replace');
       scrollToBottom();
 
       // Explicitly set "at bottom" state to true to enable auto-refresh
       isAtBottom = true;
-      updateLoadMoreButton();
+      updateNavigationButtons();
       updateAutoRefreshState();
     } else {
       console.error('[Live Logs] No data received from fetchLogs');
@@ -555,14 +586,46 @@
     }
   }
 
-  async function loadMoreLogs() {
-    const data = await fetchLogs(currentOffset, 50);
-    if (data) {
+  async function loadEarlierLogs() {
+    // Load 50 lines before current window start
+    const startOffset = Math.max(0, windowStartOffset - 50);
+    const linesToFetch = windowStartOffset - startOffset;
+
+    if (linesToFetch <= 0) {
+      console.log('[Live Logs] Already at the beginning');
+      return;
+    }
+
+    console.log('[Live Logs] Loading earlier logs: offset', startOffset, 'lines', linesToFetch);
+    const data = await fetchLogs(startOffset, linesToFetch);
+
+    if (data && data.lines && data.lines.length > 0) {
       totalLines = data.total;
-      const oldOffset = currentOffset;
-      currentOffset += data.count;
-      renderLogLines(data.lines, true);
-      updateLoadMoreButton();
+      windowStartOffset = startOffset;
+
+      renderLogLines(data.lines, 'prepend');
+      updateNavigationButtons();
+    }
+  }
+
+  async function loadNewerLogs() {
+    // Load 50 lines after current window end
+    const linesToFetch = Math.min(50, totalLines - windowEndOffset);
+
+    if (linesToFetch <= 0) {
+      console.log('[Live Logs] Already at the latest');
+      return;
+    }
+
+    console.log('[Live Logs] Loading newer logs: offset', windowEndOffset, 'lines', linesToFetch);
+    const data = await fetchLogs(windowEndOffset, linesToFetch);
+
+    if (data && data.lines && data.lines.length > 0) {
+      totalLines = data.total;
+      windowEndOffset += data.lines.length;
+
+      renderLogLines(data.lines, 'append');
+      updateNavigationButtons();
     }
   }
 
@@ -596,10 +659,12 @@
         console.log('[Live Logs] refreshLogs: incremental append', data.lines.length, 'new lines');
         totalLines = data.total;
         currentOffset = totalLines; // Update to latest position
+        windowEndOffset = totalLines; // Update window end
 
         // Append new lines (will trigger DOM cleanup inside renderLogLines)
-        renderLogLines(data.lines, true); // append=true
+        renderLogLines(data.lines, 'append');
         scrollToBottom();
+        updateNavigationButtons();
       } else {
         // No new logs, just update total count
         console.log('[Live Logs] refreshLogs: no new lines (current:', currentOffset, 'total:', data.total, ')');
@@ -616,10 +681,15 @@
     if (data) {
       totalLines = data.total;
       currentOffset = data.count;
-      renderLogLines(data.lines, false);
+
+      // Set viewing window
+      windowStartOffset = 0;
+      windowEndOffset = data.lines.length;
+
+      renderLogLines(data.lines, 'replace');
       // Scroll to top
       logViewer.scrollTop = 0;
-      updateLoadMoreButton();
+      updateNavigationButtons();
     }
   }
 
@@ -632,9 +702,13 @@
       totalLines = data.total;
       currentOffset = totalLines; // Set to end
 
-      renderLogLines(data.lines, false);
+      // Set viewing window
+      windowEndOffset = totalLines;
+      windowStartOffset = Math.max(0, totalLines - data.lines.length);
+
+      renderLogLines(data.lines, 'replace');
       scrollToBottom();
-      updateLoadMoreButton();
+      updateNavigationButtons();
 
       // Resume auto-refresh if enabled
       if (autoRefresh) {
@@ -644,14 +718,24 @@
     }
   }
 
-  function updateLoadMoreButton() {
-    if (currentOffset >= totalLines) {
-      logLoadMoreBtn.disabled = true;
-      logLoadMoreBtn.textContent = 'No More Logs';
+  function updateNavigationButtons() {
+    // Show/hide "Load Earlier" button
+    if (windowStartOffset > 0) {
+      logLoadEarlierBtn.style.display = 'block';
+      logLoadEarlierBtn.disabled = false;
     } else {
-      logLoadMoreBtn.disabled = false;
-      logLoadMoreBtn.textContent = `Load 50 More Lines`;
+      logLoadEarlierBtn.style.display = 'none';
     }
+
+    // Show/hide "Load Newer" button
+    if (windowEndOffset < totalLines) {
+      logLoadNewerBtn.style.display = 'block';
+      logLoadNewerBtn.disabled = false;
+    } else {
+      logLoadNewerBtn.style.display = 'none';
+    }
+
+    console.log('[Live Logs] Navigation buttons updated: window[', windowStartOffset, '-', windowEndOffset, '] total:', totalLines);
   }
 
   function scrollToBottom() {
@@ -720,7 +804,7 @@
       logSearchClear.style.display = 'inline-flex';
       // Re-render current lines with highlighting
       const lines = Array.from(logContent.querySelectorAll('.log-line')).map(el => el.textContent);
-      renderLogLines(lines, false);
+      renderLogLines(lines, 'replace');
     } else {
       clearSearch();
     }
@@ -732,12 +816,13 @@
     logSearchClear.style.display = 'none';
     // Re-render without highlighting
     const lines = Array.from(logContent.querySelectorAll('.log-line')).map(el => el.textContent);
-    renderLogLines(lines, false);
+    renderLogLines(lines, 'replace');
   }
 
   // Event listeners
   logViewer.addEventListener('scroll', checkScrollPosition);
-  logLoadMoreBtn.addEventListener('click', loadMoreLogs);
+  logLoadEarlierBtn.addEventListener('click', loadEarlierLogs);
+  logLoadNewerBtn.addEventListener('click', loadNewerLogs);
   logJumpTopBtn.addEventListener('click', jumpToTop);
   logRefreshBtn.addEventListener('click', refreshLogs);
   logScrollBottomBtn.addEventListener('click', scrollToBottom);

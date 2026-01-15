@@ -256,15 +256,23 @@
         </div>
     </div>
 
+    <!-- Top navigation: Load earlier logs -->
+    <div class="log-footer" id="log-header" style="margin-bottom: 0.5rem;">
+        <button id="log-load-earlier-btn" class="log-load-more-btn" style="display: none;">
+            ⬆ Load 50 Earlier Lines
+        </button>
+    </div>
+
     <div class="log-viewer" id="log-viewer">
         <div class="log-content" id="log-content">
             <div class="log-loading">Loading logs...</div>
         </div>
     </div>
 
+    <!-- Bottom navigation: Load newer logs -->
     <div class="log-footer">
-        <button id="log-load-more-btn" class="log-load-more-btn">
-            Load 50 More Lines
+        <button id="log-load-newer-btn" class="log-load-more-btn" style="display: none;">
+            ⬇ Load 50 Newer Lines
         </button>
         <div class="log-status" id="log-status">
             Showing <span id="log-shown-count">0</span> of <span id="log-total-count">0</span> lines
