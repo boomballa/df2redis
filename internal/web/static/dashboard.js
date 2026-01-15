@@ -413,6 +413,9 @@
   let refreshTimer = null;
   let isAtBottom = true;
 
+  // Maximum number of log lines to keep in DOM (prevent browser slowdown)
+  const MAX_LOG_LINES = 1000;
+
   const logViewer = document.getElementById('log-viewer');
   const logContent = document.getElementById('log-content');
   const logSearchInput = document.getElementById('log-search-input');
@@ -496,6 +499,17 @@
 
     if (append) {
       logContent.appendChild(fragment);
+
+      // CRITICAL: Limit DOM size to prevent browser slowdown
+      // When appending new lines, remove oldest lines if we exceed MAX_LOG_LINES
+      const allLogLines = logContent.querySelectorAll('.log-line');
+      if (allLogLines.length > MAX_LOG_LINES) {
+        const toRemove = allLogLines.length - MAX_LOG_LINES;
+        console.log('[Live Logs] DOM cleanup: removing', toRemove, 'oldest lines (total:', allLogLines.length, '→', MAX_LOG_LINES, ')');
+        for (let i = 0; i < toRemove; i++) {
+          allLogLines[i].remove();
+        }
+      }
     } else {
       logContent.innerHTML = '';
       logContent.appendChild(fragment);
@@ -553,8 +567,31 @@
   }
 
   async function refreshLogs() {
-    // Reload from beginning
-    await loadInitialLogs();
+    // Smart incremental refresh: only fetch new lines since last check
+    if (!isAtBottom || currentOffset === 0) {
+      // Not at bottom or first load: reload tail
+      console.log('[Live Logs] refreshLogs: reloading tail (not at bottom or first load)');
+      await loadInitialLogs();
+      return;
+    }
+
+    // Incremental mode: fetch new lines from currentOffset to end
+    console.log('[Live Logs] refreshLogs: incremental fetch from offset', currentOffset);
+    const data = await fetchLogs(currentOffset, 1000); // Max 1000 new lines per refresh
+
+    if (data && data.lines && data.lines.length > 0) {
+      console.log('[Live Logs] refreshLogs: received', data.lines.length, 'new lines');
+      totalLines = data.total;
+      currentOffset = totalLines; // Update to latest position
+
+      // Append new lines (will trigger DOM cleanup inside renderLogLines)
+      renderLogLines(data.lines, true); // append=true
+      scrollToBottom();
+    } else if (data) {
+      // No new logs, just update total count
+      console.log('[Live Logs] refreshLogs: no new lines');
+      totalLines = data.total;
+    }
   }
 
   async function jumpToTop() {
