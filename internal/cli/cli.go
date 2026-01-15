@@ -50,6 +50,8 @@ func Execute(args []string) int {
 		return runRollback(args[1:])
 	case "dashboard":
 		return runDashboard(args[1:])
+	case "compare-keys":
+		return runCompareKeys(args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return 0

@@ -135,10 +135,13 @@ func logToConsole(format string, args ...interface{}) {
 	}
 	defaultLogger.mu.Lock()
 	defer defaultLogger.mu.Unlock()
+
 	// Preserve the original format/emojis on console output
 	timestamp := time.Now().Format("2006/01/02 15:04:05")
 	message := fmt.Sprintf(format, args...)
-	defaultLogger.consoleLog.Printf("%s [df2redis] %s", timestamp, message)
+
+	// Use fmt directly to ensure output to stdout
+	fmt.Fprintf(os.Stdout, "%s [df2redis] %s\n", timestamp, message)
 }
 
 // logToBoth mirrors the entry to both sinks

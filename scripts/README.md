@@ -1,8 +1,12 @@
 # df2redis Test Scripts
 
-## Overview
+## Scripts
 
-This directory contains test scripts for validating df2redis functionality.
+> [!NOTE]
+> The `compare_keys.go` script has been integrated into the main `df2redis` binary as the `compare-keys` command.
+> Usage: `df2redis compare-keys -src <source> -tgt <target>`
+
+This directory contains standalone utility scripts for development and debugging.
 
 ## Installation
 
