@@ -71,12 +71,12 @@ type Replicator struct {
 
 	// Global performance metrics (aggregated from all flows)
 	globalPerfMetrics struct {
-		opsWindow    []opsRecord // Global operation window (all flows combined)
-		qpsCurrent   float64
-		qpsPeak      float64
-		qpsSum       float64
-		qpsCount     int64
-		mu           sync.Mutex
+		opsWindow  []opsRecord // Global operation window (all flows combined)
+		qpsCurrent float64
+		qpsPeak    float64
+		qpsSum     float64
+		qpsCount   int64
+		mu         sync.Mutex
 	}
 }
 
@@ -648,6 +648,26 @@ func (r *Replicator) receiveSnapshot() error {
 		count int
 		mu    sync.Mutex
 	}{}
+
+	// CRITICAL FIX: Periodically collect performance metrics during RDB phase.
+	// In incremental phase, collectPerfMetrics is called by recordFlowLSN, but in RDB phase
+	// it is not triggered, causing dashboard metrics to be flat.
+	perfTicker := time.NewTicker(1 * time.Second)
+	perfDone := make(chan struct{})
+	go func() {
+		defer perfTicker.Stop()
+		for {
+			select {
+			case <-perfTicker.C:
+				r.collectPerfMetrics()
+			case <-perfDone:
+				return
+			case <-r.ctx.Done():
+				return
+			}
+		}
+	}()
+	defer close(perfDone)
 
 	// Start a goroutine per FLOW to read and parse RDB data
 	for i := 0; i < numFlows; i++ {
@@ -2145,6 +2165,9 @@ func (r *Replicator) onSnapshotKey(flowID int) {
 	if total%500 == 0 {
 		r.metrics.Set(state.MetricSyncedKeys, float64(total))
 		r.metrics.Set(state.MetricTargetKeysCurrent, base+float64(total))
+
+		// Collect performance metrics during RDB phase
+		r.collectPerfMetrics()
 	}
 }
 
