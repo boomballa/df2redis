@@ -163,6 +163,10 @@ func (s *DashboardServer) Start(ready chan<- string) error {
 	mux.HandleFunc("/api/check/status", s.handleCheckStatus)
 	fileServer := http.FileServer(http.Dir(staticDir()))
 	mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
+		// Disable caching for static files to ensure updates are loaded immediately
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
 		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/static")
 		fileServer.ServeHTTP(w, r)
 	})

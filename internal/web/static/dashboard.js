@@ -404,6 +404,335 @@
     });
   }
 
+  // ==============================================
+  // Performance Monitoring: QPS & Latency
+  // ==============================================
+
+  let qpsChart = null;
+  let latencyChart = null;
+
+  let qpsHistoryData = {
+    labels: [],
+    datasets: [{
+      label: 'QPS',
+      data: [],
+      borderColor: '#3b82f6',
+      backgroundColor: 'rgba(59, 130, 246, 0.1)',
+      borderWidth: 2,
+      tension: 0.4,
+      fill: true
+    }]
+  };
+
+  let latencyHistoryData = {
+    labels: [],
+    datasets: [
+      {
+        label: 'P99',
+        data: [],
+        borderColor: '#ef4444',
+        backgroundColor: 'rgba(239, 68, 68, 0.05)',
+        borderWidth: 2,
+        tension: 0.4,
+        fill: false
+      },
+      {
+        label: 'P95',
+        data: [],
+        borderColor: '#f59e0b',
+        backgroundColor: 'rgba(245, 158, 11, 0.05)',
+        borderWidth: 2,
+        tension: 0.4,
+        fill: false
+      },
+      {
+        label: 'P50',
+        data: [],
+        borderColor: '#94a3b8',
+        backgroundColor: 'rgba(148, 163, 184, 0.05)',
+        borderWidth: 2,
+        tension: 0.4,
+        fill: false
+      }
+    ]
+  };
+
+  function initQPSChart() {
+    const ctx = document.getElementById('qps-chart');
+    if (!ctx || !window.Chart) return;
+
+    qpsChart = new Chart(ctx, {
+      type: 'line',
+      data: qpsHistoryData,
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: {
+          mode: 'index',
+          intersect: false
+        },
+        plugins: {
+          legend: {
+            display: false
+          },
+          tooltip: {
+            backgroundColor: 'rgba(30, 41, 59, 0.95)',
+            titleColor: '#f1f5f9',
+            bodyColor: '#94a3b8',
+            borderColor: '#334155',
+            borderWidth: 1,
+            padding: 10,
+            displayColors: false,
+            callbacks: {
+              label: function(context) {
+                return 'QPS: ' + context.parsed.y.toFixed(0);
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            display: true,
+            grid: {
+              color: 'rgba(51, 65, 85, 0.3)'
+            },
+            ticks: {
+              color: '#64748b',
+              maxTicksLimit: 10
+            }
+          },
+          y: {
+            display: true,
+            beginAtZero: true,
+            grid: {
+              color: 'rgba(51, 65, 85, 0.3)'
+            },
+            ticks: {
+              color: '#64748b'
+            }
+          }
+        }
+      }
+    });
+  }
+
+  function initLatencyChart() {
+    const ctx = document.getElementById('latency-chart');
+    if (!ctx || !window.Chart) return;
+
+    latencyChart = new Chart(ctx, {
+      type: 'line',
+      data: latencyHistoryData,
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: {
+          mode: 'index',
+          intersect: false
+        },
+        plugins: {
+          legend: {
+            display: true,
+            position: 'top',
+            labels: {
+              color: '#94a3b8',
+              font: {
+                size: 11
+              },
+              padding: 10,
+              usePointStyle: true
+            }
+          },
+          tooltip: {
+            backgroundColor: 'rgba(30, 41, 59, 0.95)',
+            titleColor: '#f1f5f9',
+            bodyColor: '#94a3b8',
+            borderColor: '#334155',
+            borderWidth: 1,
+            padding: 10,
+            displayColors: true,
+            callbacks: {
+              label: function(context) {
+                return context.dataset.label + ': ' + context.parsed.y.toFixed(1) + ' ms';
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            display: true,
+            grid: {
+              color: 'rgba(51, 65, 85, 0.3)'
+            },
+            ticks: {
+              color: '#64748b',
+              maxTicksLimit: 10
+            }
+          },
+          y: {
+            display: true,
+            beginAtZero: true,
+            grid: {
+              color: 'rgba(51, 65, 85, 0.3)'
+            },
+            ticks: {
+              color: '#64748b',
+              callback: function(value) {
+                return value + ' ms';
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  function updatePerformanceMetrics(metrics) {
+    // Update QPS metrics
+    const qpsCurrent = metrics['perf.qps.current'] || 0;
+    const qpsPeak = metrics['perf.qps.peak'] || 0;
+    const qpsAvg = metrics['perf.qps.avg'] || 0;
+
+    document.getElementById('qps-current').textContent = qpsCurrent > 0 ? qpsCurrent.toFixed(0) : '--';
+    document.getElementById('qps-peak').textContent = qpsPeak > 0 ? qpsPeak.toFixed(0) : '--';
+    document.getElementById('qps-avg').textContent = qpsAvg > 0 ? qpsAvg.toFixed(0) : '--';
+
+    // Update QPS chart
+    if (!qpsChart) {
+      initQPSChart();
+    }
+
+    if (qpsChart && qpsCurrent > 0) {
+      const now = new Date();
+      const timeLabel = now.toLocaleTimeString('en-US', { hour12: false, minute: '2-digit', second: '2-digit' });
+
+      qpsHistoryData.labels.push(timeLabel);
+      qpsHistoryData.datasets[0].data.push(qpsCurrent);
+
+      // Keep last 60 data points (5 minutes at 5s intervals)
+      if (qpsHistoryData.labels.length > 60) {
+        qpsHistoryData.labels.shift();
+        qpsHistoryData.datasets[0].data.shift();
+      }
+
+      qpsChart.update('none'); // Update without animation for smoothness
+    }
+
+    // Update Latency metrics
+    const latencyP50 = metrics['perf.latency.p50'] || 0;
+    const latencyP95 = metrics['perf.latency.p95'] || 0;
+    const latencyP99 = metrics['perf.latency.p99'] || 0;
+    const latencyAvg = metrics['perf.latency.avg'] || 0;
+    const latencyMax = metrics['perf.latency.max'] || 0;
+
+    document.getElementById('latency-p50').textContent = latencyP50 > 0 ? latencyP50.toFixed(1) : '--';
+    document.getElementById('latency-p95').textContent = latencyP95 > 0 ? latencyP95.toFixed(1) : '--';
+    document.getElementById('latency-p99').textContent = latencyP99 > 0 ? latencyP99.toFixed(1) : '--';
+    document.getElementById('latency-avg').textContent = latencyAvg > 0 ? latencyAvg.toFixed(1) : '--';
+    document.getElementById('latency-max').textContent = latencyMax > 0 ? latencyMax.toFixed(1) : '--';
+
+    // Update Latency chart
+    if (!latencyChart) {
+      initLatencyChart();
+    }
+
+    if (latencyChart && (latencyP50 > 0 || latencyP95 > 0 || latencyP99 > 0)) {
+      const now = new Date();
+      const timeLabel = now.toLocaleTimeString('en-US', { hour12: false, minute: '2-digit', second: '2-digit' });
+
+      latencyHistoryData.labels.push(timeLabel);
+      latencyHistoryData.datasets[0].data.push(latencyP99); // P99
+      latencyHistoryData.datasets[1].data.push(latencyP95); // P95
+      latencyHistoryData.datasets[2].data.push(latencyP50); // P50
+
+      // Keep last 60 data points (5 minutes at 5s intervals)
+      if (latencyHistoryData.labels.length > 60) {
+        latencyHistoryData.labels.shift();
+        latencyHistoryData.datasets[0].data.shift();
+        latencyHistoryData.datasets[1].data.shift();
+        latencyHistoryData.datasets[2].data.shift();
+      }
+
+      latencyChart.update('none'); // Update without animation for smoothness
+    }
+  }
+
+  // ==============================================
+  // Inconsistent Samples Display
+  // ==============================================
+
+  function updateInconsistentSamples(checkData) {
+    const panel = document.getElementById('inconsistent-samples-panel');
+    const tbody = document.getElementById('inconsistent-samples-tbody');
+    const shownCount = document.getElementById('shown-sample-count');
+    const totalCount = document.getElementById('total-sample-count');
+
+    if (!checkData || !checkData.samples || checkData.samples.length === 0) {
+      panel.style.display = 'none';
+      return;
+    }
+
+    const samples = checkData.samples || [];
+    const inconsistentKeys = checkData.inconsistentKeys || 0;
+
+    // Show panel
+    panel.style.display = 'block';
+
+    // Update counts
+    const displayCount = Math.min(samples.length, 100);
+    shownCount.textContent = displayCount;
+    totalCount.textContent = inconsistentKeys;
+
+    // Clear and populate table
+    tbody.innerHTML = '';
+    samples.slice(0, 100).forEach(sample => {
+      const row = document.createElement('tr');
+
+      const keyCell = document.createElement('td');
+      keyCell.textContent = sample.key || '--';
+      keyCell.style.fontFamily = 'monospace';
+      keyCell.style.fontSize = '13px';
+      keyCell.style.color = '#f59e0b';
+      row.appendChild(keyCell);
+
+      const sourceCell = document.createElement('td');
+      sourceCell.textContent = sample.source || '--';
+      sourceCell.style.fontFamily = 'monospace';
+      sourceCell.style.fontSize = '12px';
+      sourceCell.style.color = '#94a3b8';
+      sourceCell.style.maxWidth = '200px';
+      sourceCell.style.overflow = 'hidden';
+      sourceCell.style.textOverflow = 'ellipsis';
+      sourceCell.style.whiteSpace = 'nowrap';
+      row.appendChild(sourceCell);
+
+      const targetCell = document.createElement('td');
+      targetCell.textContent = sample.target || '--';
+      targetCell.style.fontFamily = 'monospace';
+      targetCell.style.fontSize = '12px';
+      targetCell.style.color = '#94a3b8';
+      targetCell.style.maxWidth = '200px';
+      targetCell.style.overflow = 'hidden';
+      targetCell.style.textOverflow = 'ellipsis';
+      targetCell.style.whiteSpace = 'nowrap';
+      row.appendChild(targetCell);
+
+      tbody.appendChild(row);
+    });
+  }
+
+  // Initialize charts on page load
+  function initCharts() {
+    initQPSChart();
+    initLatencyChart();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initCharts);
+  } else {
+    initCharts();
+  }
+
   fetchStatus();
 })();
 
@@ -1140,334 +1469,5 @@
       clearInterval(pollTimer);
       pollTimer = null;
     }
-  }
-
-  // ==============================================
-  // Performance Monitoring: QPS & Latency
-  // ==============================================
-
-  let qpsChart = null;
-  let latencyChart = null;
-
-  let qpsHistoryData = {
-    labels: [],
-    datasets: [{
-      label: 'QPS',
-      data: [],
-      borderColor: '#3b82f6',
-      backgroundColor: 'rgba(59, 130, 246, 0.1)',
-      borderWidth: 2,
-      tension: 0.4,
-      fill: true
-    }]
-  };
-
-  let latencyHistoryData = {
-    labels: [],
-    datasets: [
-      {
-        label: 'P99',
-        data: [],
-        borderColor: '#ef4444',
-        backgroundColor: 'rgba(239, 68, 68, 0.05)',
-        borderWidth: 2,
-        tension: 0.4,
-        fill: false
-      },
-      {
-        label: 'P95',
-        data: [],
-        borderColor: '#f59e0b',
-        backgroundColor: 'rgba(245, 158, 11, 0.05)',
-        borderWidth: 2,
-        tension: 0.4,
-        fill: false
-      },
-      {
-        label: 'P50',
-        data: [],
-        borderColor: '#94a3b8',
-        backgroundColor: 'rgba(148, 163, 184, 0.05)',
-        borderWidth: 2,
-        tension: 0.4,
-        fill: false
-      }
-    ]
-  };
-
-  function initQPSChart() {
-    const ctx = document.getElementById('qps-chart');
-    if (!ctx || !window.Chart) return;
-
-    qpsChart = new Chart(ctx, {
-      type: 'line',
-      data: qpsHistoryData,
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: {
-          mode: 'index',
-          intersect: false
-        },
-        plugins: {
-          legend: {
-            display: false
-          },
-          tooltip: {
-            backgroundColor: 'rgba(30, 41, 59, 0.95)',
-            titleColor: '#f1f5f9',
-            bodyColor: '#94a3b8',
-            borderColor: '#334155',
-            borderWidth: 1,
-            padding: 10,
-            displayColors: false,
-            callbacks: {
-              label: function(context) {
-                return 'QPS: ' + context.parsed.y.toFixed(0);
-              }
-            }
-          }
-        },
-        scales: {
-          x: {
-            display: true,
-            grid: {
-              color: 'rgba(51, 65, 85, 0.3)'
-            },
-            ticks: {
-              color: '#64748b',
-              maxTicksLimit: 10
-            }
-          },
-          y: {
-            display: true,
-            beginAtZero: true,
-            grid: {
-              color: 'rgba(51, 65, 85, 0.3)'
-            },
-            ticks: {
-              color: '#64748b'
-            }
-          }
-        }
-      }
-    });
-  }
-
-  function initLatencyChart() {
-    const ctx = document.getElementById('latency-chart');
-    if (!ctx || !window.Chart) return;
-
-    latencyChart = new Chart(ctx, {
-      type: 'line',
-      data: latencyHistoryData,
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: {
-          mode: 'index',
-          intersect: false
-        },
-        plugins: {
-          legend: {
-            display: true,
-            position: 'top',
-            labels: {
-              color: '#94a3b8',
-              font: {
-                size: 11
-              },
-              padding: 10,
-              usePointStyle: true
-            }
-          },
-          tooltip: {
-            backgroundColor: 'rgba(30, 41, 59, 0.95)',
-            titleColor: '#f1f5f9',
-            bodyColor: '#94a3b8',
-            borderColor: '#334155',
-            borderWidth: 1,
-            padding: 10,
-            displayColors: true,
-            callbacks: {
-              label: function(context) {
-                return context.dataset.label + ': ' + context.parsed.y.toFixed(1) + ' ms';
-              }
-            }
-          }
-        },
-        scales: {
-          x: {
-            display: true,
-            grid: {
-              color: 'rgba(51, 65, 85, 0.3)'
-            },
-            ticks: {
-              color: '#64748b',
-              maxTicksLimit: 10
-            }
-          },
-          y: {
-            display: true,
-            beginAtZero: true,
-            grid: {
-              color: 'rgba(51, 65, 85, 0.3)'
-            },
-            ticks: {
-              color: '#64748b',
-              callback: function(value) {
-                return value + ' ms';
-              }
-            }
-          }
-        }
-      }
-    });
-  }
-
-  function updatePerformanceMetrics(metrics) {
-    // Update QPS metrics
-    const qpsCurrent = metrics['perf.qps.current'] || 0;
-    const qpsPeak = metrics['perf.qps.peak'] || 0;
-    const qpsAvg = metrics['perf.qps.avg'] || 0;
-
-    document.getElementById('qps-current').textContent = qpsCurrent > 0 ? qpsCurrent.toFixed(0) : '--';
-    document.getElementById('qps-peak').textContent = qpsPeak > 0 ? qpsPeak.toFixed(0) : '--';
-    document.getElementById('qps-avg').textContent = qpsAvg > 0 ? qpsAvg.toFixed(0) : '--';
-
-    // Update QPS chart
-    if (!qpsChart) {
-      initQPSChart();
-    }
-
-    if (qpsChart && qpsCurrent > 0) {
-      const now = new Date();
-      const timeLabel = now.toLocaleTimeString('en-US', { hour12: false, minute: '2-digit', second: '2-digit' });
-
-      qpsHistoryData.labels.push(timeLabel);
-      qpsHistoryData.datasets[0].data.push(qpsCurrent);
-
-      // Keep last 60 data points (5 minutes at 5s intervals)
-      if (qpsHistoryData.labels.length > 60) {
-        qpsHistoryData.labels.shift();
-        qpsHistoryData.datasets[0].data.shift();
-      }
-
-      qpsChart.update('none'); // Update without animation for smoothness
-    }
-
-    // Update Latency metrics
-    const latencyP50 = metrics['perf.latency.p50'] || 0;
-    const latencyP95 = metrics['perf.latency.p95'] || 0;
-    const latencyP99 = metrics['perf.latency.p99'] || 0;
-    const latencyAvg = metrics['perf.latency.avg'] || 0;
-    const latencyMax = metrics['perf.latency.max'] || 0;
-
-    document.getElementById('latency-p50').textContent = latencyP50 > 0 ? latencyP50.toFixed(1) : '--';
-    document.getElementById('latency-p95').textContent = latencyP95 > 0 ? latencyP95.toFixed(1) : '--';
-    document.getElementById('latency-p99').textContent = latencyP99 > 0 ? latencyP99.toFixed(1) : '--';
-    document.getElementById('latency-avg').textContent = latencyAvg > 0 ? latencyAvg.toFixed(1) : '--';
-    document.getElementById('latency-max').textContent = latencyMax > 0 ? latencyMax.toFixed(1) : '--';
-
-    // Update Latency chart
-    if (!latencyChart) {
-      initLatencyChart();
-    }
-
-    if (latencyChart && (latencyP50 > 0 || latencyP95 > 0 || latencyP99 > 0)) {
-      const now = new Date();
-      const timeLabel = now.toLocaleTimeString('en-US', { hour12: false, minute: '2-digit', second: '2-digit' });
-
-      latencyHistoryData.labels.push(timeLabel);
-      latencyHistoryData.datasets[0].data.push(latencyP99); // P99
-      latencyHistoryData.datasets[1].data.push(latencyP95); // P95
-      latencyHistoryData.datasets[2].data.push(latencyP50); // P50
-
-      // Keep last 60 data points (5 minutes at 5s intervals)
-      if (latencyHistoryData.labels.length > 60) {
-        latencyHistoryData.labels.shift();
-        latencyHistoryData.datasets[0].data.shift();
-        latencyHistoryData.datasets[1].data.shift();
-        latencyHistoryData.datasets[2].data.shift();
-      }
-
-      latencyChart.update('none'); // Update without animation for smoothness
-    }
-  }
-
-  // ==============================================
-  // Inconsistent Samples Display
-  // ==============================================
-
-  function updateInconsistentSamples(checkData) {
-    const panel = document.getElementById('inconsistent-samples-panel');
-    const tbody = document.getElementById('inconsistent-samples-tbody');
-    const shownCount = document.getElementById('shown-sample-count');
-    const totalCount = document.getElementById('total-sample-count');
-
-    if (!checkData || !checkData.samples || checkData.samples.length === 0) {
-      panel.style.display = 'none';
-      return;
-    }
-
-    const samples = checkData.samples || [];
-    const inconsistentKeys = checkData.inconsistentKeys || 0;
-
-    // Show panel
-    panel.style.display = 'block';
-
-    // Update counts
-    const displayCount = Math.min(samples.length, 100);
-    shownCount.textContent = displayCount;
-    totalCount.textContent = inconsistentKeys;
-
-    // Clear and populate table
-    tbody.innerHTML = '';
-    samples.slice(0, 100).forEach(sample => {
-      const row = document.createElement('tr');
-
-      const keyCell = document.createElement('td');
-      keyCell.textContent = sample.key || '--';
-      keyCell.style.fontFamily = 'monospace';
-      keyCell.style.fontSize = '13px';
-      keyCell.style.color = '#f59e0b';
-      row.appendChild(keyCell);
-
-      const sourceCell = document.createElement('td');
-      sourceCell.textContent = sample.source || '--';
-      sourceCell.style.fontFamily = 'monospace';
-      sourceCell.style.fontSize = '12px';
-      sourceCell.style.color = '#94a3b8';
-      sourceCell.style.maxWidth = '200px';
-      sourceCell.style.overflow = 'hidden';
-      sourceCell.style.textOverflow = 'ellipsis';
-      sourceCell.style.whiteSpace = 'nowrap';
-      row.appendChild(sourceCell);
-
-      const targetCell = document.createElement('td');
-      targetCell.textContent = sample.target || '--';
-      targetCell.style.fontFamily = 'monospace';
-      targetCell.style.fontSize = '12px';
-      targetCell.style.color = '#94a3b8';
-      targetCell.style.maxWidth = '200px';
-      targetCell.style.overflow = 'hidden';
-      targetCell.style.textOverflow = 'ellipsis';
-      targetCell.style.whiteSpace = 'nowrap';
-      row.appendChild(targetCell);
-
-      tbody.appendChild(row);
-    });
-  }
-
-  // Initialize charts on page load
-  function initCharts() {
-    initQPSChart();
-    initLatencyChart();
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initCharts);
-  } else {
-    initCharts();
   }
 })();
