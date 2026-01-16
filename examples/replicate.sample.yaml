@@ -29,7 +29,11 @@ target:
 ########################################
 ##### 📊 Dashboard config ##############
 ########################################
-# Embedded dashboard listen address (empty to disable)
+# Embedded dashboard listen address
+# - Specific port (e.g. ":7777"): Tries this port first, falls back to random 20000-30000 if unavailable
+# - Auto allocation (":0"): System assigns random available port in range 20000-30000
+# - Empty ("") or omitted: Disables dashboard
+# Multi-instance safe: If preferred port is busy, automatically selects random port from 20000-30000
 dashboard:
   addr: ":7777"                
 

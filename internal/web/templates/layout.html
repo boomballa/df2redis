@@ -1327,7 +1327,8 @@
     <div class="container">
         {{ template "content" . }}
     </div>
-    <script src="/static/chart.umd.js"></script>
+    <!-- Chart.js for performance visualizations -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="/static/dashboard.js"></script>
     {{ template "scripts" . }}
 </body>

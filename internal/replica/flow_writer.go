@@ -50,6 +50,24 @@ type FlowWriter struct {
 		mu            sync.Mutex
 	}
 
+	// Performance metrics for monitoring
+	perfMetrics struct {
+		qpsCurrent float64
+		qpsPeak    float64
+		qpsSum     float64 // Sum of all QPS samples for averaging
+		qpsCount   int64   // Number of QPS samples
+
+		latencies  []float64 // Sliding window (last 1000 samples)
+		latencyP50 float64
+		latencyP95 float64
+		latencyP99 float64
+		latencyAvg float64
+		latencyMax float64
+
+		lastFlushTime time.Time
+		mu            sync.Mutex
+	}
+
 	// Backpressure and monitoring
 	channelCapacity    int
 	lastMonitorTime    time.Time
@@ -369,6 +387,9 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 	log.Printf("  [FLOW-%d] [WRITER] ✓ Batch complete: %d entries in %v (%.0f ops/sec, nodes=%d, success=%d, fail=%d)",
 		fw.flowID, batchSize, duration, opsPerSec, numGroups, successCount, failCount)
 
+	// Update performance metrics for dashboard
+	fw.updatePerfMetrics(opsPerSec, duration.Milliseconds())
+
 	// Warn if slow
 	if duration > time.Second {
 		log.Printf("  [FLOW-%d] [WRITER] ⚠ Slow batch: %v for %d entries.", fw.flowID, duration, batchSize)
@@ -602,4 +623,86 @@ var crc16Table = [256]uint16{
 // writeEntry writes a single RDB entry using the provided write function
 func (fw *FlowWriter) writeEntry(entry *RDBEntry) error {
 	return fw.writeFn(entry)
+}
+
+// updatePerfMetrics records performance metrics after each batch flush
+func (fw *FlowWriter) updatePerfMetrics(qps float64, latencyMs int64) {
+	fw.perfMetrics.mu.Lock()
+	defer fw.perfMetrics.mu.Unlock()
+
+	// Update QPS metrics
+	fw.perfMetrics.qpsCurrent = qps
+	if qps > fw.perfMetrics.qpsPeak {
+		fw.perfMetrics.qpsPeak = qps
+	}
+	fw.perfMetrics.qpsSum += qps
+	fw.perfMetrics.qpsCount++
+
+	// Update latency metrics (sliding window of last 1000 samples)
+	fw.perfMetrics.latencies = append(fw.perfMetrics.latencies, float64(latencyMs))
+	if len(fw.perfMetrics.latencies) > 1000 {
+		fw.perfMetrics.latencies = fw.perfMetrics.latencies[1:] // Keep last 1000
+	}
+
+	// Update max latency
+	if float64(latencyMs) > fw.perfMetrics.latencyMax {
+		fw.perfMetrics.latencyMax = float64(latencyMs)
+	}
+
+	// Recalculate percentiles and average
+	fw.calculateLatencyStats()
+}
+
+// calculateLatencyStats computes P50/P95/P99 and average from latency samples
+func (fw *FlowWriter) calculateLatencyStats() {
+	if len(fw.perfMetrics.latencies) == 0 {
+		return
+	}
+
+	// Create a sorted copy for percentile calculation
+	sorted := make([]float64, len(fw.perfMetrics.latencies))
+	copy(sorted, fw.perfMetrics.latencies)
+
+	// Simple insertion sort (efficient for small arrays)
+	for i := 1; i < len(sorted); i++ {
+		key := sorted[i]
+		j := i - 1
+		for j >= 0 && sorted[j] > key {
+			sorted[j+1] = sorted[j]
+			j--
+		}
+		sorted[j+1] = key
+	}
+
+	// Calculate percentiles
+	n := len(sorted)
+	fw.perfMetrics.latencyP50 = sorted[int(float64(n)*0.50)]
+	fw.perfMetrics.latencyP95 = sorted[int(float64(n)*0.95)]
+	fw.perfMetrics.latencyP99 = sorted[int(float64(n)*0.99)]
+
+	// Calculate average
+	sum := 0.0
+	for _, v := range fw.perfMetrics.latencies {
+		sum += v
+	}
+	fw.perfMetrics.latencyAvg = sum / float64(len(fw.perfMetrics.latencies))
+}
+
+// GetPerfMetrics returns current performance metrics (thread-safe)
+func (fw *FlowWriter) GetPerfMetrics() (qpsCurrent, qpsPeak, qpsAvg, latencyP50, latencyP95, latencyP99, latencyAvg, latencyMax float64) {
+	fw.perfMetrics.mu.Lock()
+	defer fw.perfMetrics.mu.Unlock()
+
+	qpsCurrent = fw.perfMetrics.qpsCurrent
+	qpsPeak = fw.perfMetrics.qpsPeak
+	if fw.perfMetrics.qpsCount > 0 {
+		qpsAvg = fw.perfMetrics.qpsSum / float64(fw.perfMetrics.qpsCount)
+	}
+	latencyP50 = fw.perfMetrics.latencyP50
+	latencyP95 = fw.perfMetrics.latencyP95
+	latencyP99 = fw.perfMetrics.latencyP99
+	latencyAvg = fw.perfMetrics.latencyAvg
+	latencyMax = fw.perfMetrics.latencyMax
+
+	return
 }

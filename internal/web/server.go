@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -93,12 +94,59 @@ func New(opts Options) (*DashboardServer, error) {
 	}, nil
 }
 
+// allocateSmartPort attempts to find an available port using intelligent strategies:
+// 1. If preferredAddr specifies a port (e.g. ":7777"), try it first
+// 2. If port 0 or unavailable, randomly select from range 20000-30000
+// 3. Test each candidate port for availability
+// 4. Retry up to maxRetries times
+// Returns the successfully bound listener and actual address.
+func allocateSmartPort(preferredAddr string, maxRetries int) (net.Listener, string, error) {
+	const (
+		portRangeMin = 20000
+		portRangeMax = 30000
+	)
+
+	// Helper: test if a port is available
+	tryPort := func(addr string) (net.Listener, string, error) {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return nil, "", err
+		}
+		actualAddr := ln.Addr().String()
+		return ln, actualAddr, nil
+	}
+
+	// Strategy 1: Try preferred port if specified
+	if preferredAddr != "" && preferredAddr != ":0" {
+		if ln, addr, err := tryPort(preferredAddr); err == nil {
+			return ln, addr, nil
+		}
+		// Preferred port failed, log and fall through to random allocation
+		log.Printf("⚠️  Preferred port %s unavailable, trying random allocation...", preferredAddr)
+	}
+
+	// Strategy 2: Random port allocation in safe range (20000-30000)
+	for i := 0; i < maxRetries; i++ {
+		randomPort := portRangeMin + rand.Intn(portRangeMax-portRangeMin+1)
+		addr := fmt.Sprintf(":%d", randomPort)
+
+		if ln, actualAddr, err := tryPort(addr); err == nil {
+			log.Printf("✓ Smart port allocation: selected %s (attempt %d/%d)", actualAddr, i+1, maxRetries)
+			return ln, actualAddr, nil
+		}
+		// Port conflict, try next random port
+	}
+
+	return nil, "", fmt.Errorf("failed to allocate port after %d attempts", maxRetries)
+}
+
 // Start runs HTTP server. Blocks until server stops.
 // When ready is not nil it will receive the actual listen address once the port is bound.
 func (s *DashboardServer) Start(ready chan<- string) error {
 	if s.addr == "" {
 		s.addr = ":8080"
 	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/status", s.handleStatus)
@@ -121,16 +169,19 @@ func (s *DashboardServer) Start(ready chan<- string) error {
 
 	go s.refreshLoop()
 
-	ln, err := net.Listen("tcp", s.addr)
+	// Use smart port allocation with retry mechanism
+	ln, actualAddr, err := allocateSmartPort(s.addr, 10)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to allocate dashboard port: %w", err)
 	}
-	actualAddr := ln.Addr().String()
+
 	s.addr = actualAddr
 	if ready != nil {
 		ready <- actualAddr
 	}
-	s.logger.Printf("serving at http://%s", actualAddr)
+	s.logger.Printf("🌐 Dashboard listening at http://%s", actualAddr)
+	log.Printf("🌐 Dashboard listening at http://%s", actualAddr)
+
 	server := &http.Server{Handler: mux, ErrorLog: s.logger}
 	return server.Serve(ln)
 }

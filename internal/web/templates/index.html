@@ -127,6 +127,62 @@
     </section>
 </div>
 
+<!-- Performance Monitoring Section -->
+<div class="grid grid-2" style="margin-top:24px;">
+    <section class="card highlight">
+        <div class="card-title">⚡ QPS Performance</div>
+        <div class="metrics-grid" style="margin-top:12px; margin-bottom:16px;">
+            <div class="metric-item">
+                <div class="label">Current QPS</div>
+                <div class="value" id="qps-current">--</div>
+            </div>
+            <div class="metric-item">
+                <div class="label">Peak QPS</div>
+                <div class="value" id="qps-peak">--</div>
+            </div>
+            <div class="metric-item">
+                <div class="label">Avg QPS</div>
+                <div class="value" id="qps-avg">--</div>
+            </div>
+        </div>
+        <div style="height:200px; position:relative;">
+            <canvas id="qps-chart"></canvas>
+        </div>
+    </section>
+
+    <section class="card">
+        <div class="card-title">🕐 Batch Write Latency</div>
+        <div class="metrics-grid" style="margin-top:12px; margin-bottom:16px;">
+            <div class="metric-item">
+                <div class="label">P50</div>
+                <div class="value" id="latency-p50">--</div>
+            </div>
+            <div class="metric-item">
+                <div class="label">P95</div>
+                <div class="value" id="latency-p95">--</div>
+            </div>
+            <div class="metric-item">
+                <div class="label">P99</div>
+                <div class="value" id="latency-p99">--</div>
+            </div>
+            <div class="metric-item">
+                <div class="label">Avg</div>
+                <div class="value" id="latency-avg">--</div>
+            </div>
+            <div class="metric-item">
+                <div class="label">Max</div>
+                <div class="value" id="latency-max">--</div>
+            </div>
+        </div>
+        <div class="perf-info" style="padding:12px; background:rgba(59,130,246,0.1); border-radius:8px; border-left:3px solid #3b82f6;">
+            <p style="color:#94a3b8; font-size:13px; line-height:1.6;">
+                <strong style="color:#3b82f6;">Note:</strong> Latency measured in milliseconds (ms).
+                Represents batch write operation time from submission to completion.
+            </p>
+        </div>
+    </section>
+</div>
+
 <div class="grid grid-2" style="margin-top:24px;">
     <section class="card">
         <div class="card-title">Sync Flow Visualization</div>
@@ -368,6 +424,36 @@
                 <div class="check-stat-label">Elapsed</div>
                 <div class="check-stat-value" id="check-elapsed-time">0s</div>
             </div>
+        </div>
+    </div>
+
+    <!-- Inconsistent Keys Sample Display -->
+    <div id="inconsistent-samples-panel" style="display:none; margin-top:24px;">
+        <div class="card-title" style="margin-bottom:12px;">
+            🔍 Inconsistent Keys
+            <span id="sample-count-badge" style="font-size:0.85em; color:#f59e0b; margin-left:8px;">
+                (showing <span id="shown-sample-count">0</span> of <span id="total-sample-count">0</span>)
+            </span>
+        </div>
+        <div style="overflow-x:auto;">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th style="width:40%;">Key</th>
+                        <th style="width:30%;">Source Value</th>
+                        <th style="width:30%;">Target Value</th>
+                    </tr>
+                </thead>
+                <tbody id="inconsistent-samples-tbody">
+                    <!-- Dynamically populated -->
+                </tbody>
+            </table>
+        </div>
+        <div style="margin-top:12px; padding:10px; background:rgba(239,68,68,0.1); border-radius:6px; border-left:3px solid #ef4444;">
+            <p style="color:#94a3b8; font-size:13px; line-height:1.6;">
+                <strong style="color:#ef4444;">Warning:</strong> These samples represent data inconsistencies detected during validation.
+                Limited to first 100 samples for performance. Check result files for complete list.
+            </p>
         </div>
     </div>
 </section>

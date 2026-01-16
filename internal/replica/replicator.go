@@ -2176,4 +2176,69 @@ func (r *Replicator) recordFlowLSN(flowID int, lsn uint64) {
 
 	r.rdbStats.mu.Unlock()
 	r.replayStats.mu.Unlock()
+
+	// Collect performance metrics from all active flow writers
+	r.collectPerfMetrics()
+}
+
+// collectPerfMetrics aggregates performance metrics from all flow writers
+func (r *Replicator) collectPerfMetrics() {
+	if r.metrics == nil || len(r.flowWriters) == 0 {
+		return
+	}
+
+	var (
+		totalQPSCurrent float64
+		maxQPSPeak      float64
+		totalQPSAvg     float64
+		maxLatencyP50   float64
+		maxLatencyP95   float64
+		maxLatencyP99   float64
+		totalLatencyAvg float64
+		maxLatencyMax   float64
+		count           int
+	)
+
+	// Aggregate metrics from all flows
+	for _, fw := range r.flowWriters {
+		if fw == nil {
+			continue
+		}
+
+		qpsCurrent, qpsPeak, qpsAvg, latencyP50, latencyP95, latencyP99, latencyAvg, latencyMax := fw.GetPerfMetrics()
+
+		totalQPSCurrent += qpsCurrent
+		if qpsPeak > maxQPSPeak {
+			maxQPSPeak = qpsPeak
+		}
+		totalQPSAvg += qpsAvg
+
+		if latencyP50 > maxLatencyP50 {
+			maxLatencyP50 = latencyP50
+		}
+		if latencyP95 > maxLatencyP95 {
+			maxLatencyP95 = latencyP95
+		}
+		if latencyP99 > maxLatencyP99 {
+			maxLatencyP99 = latencyP99
+		}
+		totalLatencyAvg += latencyAvg
+		if latencyMax > maxLatencyMax {
+			maxLatencyMax = latencyMax
+		}
+
+		count++
+	}
+
+	// Record aggregated metrics
+	if count > 0 {
+		r.metrics.Set(state.MetricQPSCurrent, totalQPSCurrent)
+		r.metrics.Set(state.MetricQPSPeak, maxQPSPeak)
+		r.metrics.Set(state.MetricQPSAvg, totalQPSAvg/float64(count))
+		r.metrics.Set(state.MetricLatencyP50, maxLatencyP50)
+		r.metrics.Set(state.MetricLatencyP95, maxLatencyP95)
+		r.metrics.Set(state.MetricLatencyP99, maxLatencyP99)
+		r.metrics.Set(state.MetricLatencyAvg, totalLatencyAvg/float64(count))
+		r.metrics.Set(state.MetricLatencyMax, maxLatencyMax)
+	}
 }
