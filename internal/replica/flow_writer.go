@@ -17,6 +17,12 @@ type PipelineClient interface {
 	Pipeline(cmds [][]interface{}) ([]interface{}, error)
 }
 
+// opsRecord tracks operation count at a specific timestamp for QPS calculation
+type opsRecord struct {
+	count     int
+	timestamp time.Time
+}
+
 // FlowWriter handles async batched writes for a single flow
 type FlowWriter struct {
 	flowID        int
@@ -24,6 +30,7 @@ type FlowWriter struct {
 	batchSize     int
 	flushInterval time.Duration
 	writeFn       func(*RDBEntry) error // Function to write an entry
+	opsReporter   func(int)             // Callback to report ops count to global metrics
 	ctx           context.Context
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
@@ -52,6 +59,8 @@ type FlowWriter struct {
 
 	// Performance metrics for monitoring
 	perfMetrics struct {
+		// QPS tracking with 1-second sliding window
+		opsWindow  []opsRecord // Recent operations with timestamps
 		qpsCurrent float64
 		qpsPeak    float64
 		qpsSum     float64 // Sum of all QPS samples for averaging
@@ -83,7 +92,7 @@ type FlowWriter struct {
 }
 
 // NewFlowWriter creates a new async batch writer for a flow
-func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targetType string, pipelineClient *redisx.Client, clusterClient *redisx.ClusterClient) *FlowWriter {
+func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targetType string, pipelineClient *redisx.Client, clusterClient *redisx.ClusterClient, opsReporter func(int)) *FlowWriter {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	log.Printf("  [FLOW-%d] [INIT] Starting FlowWriter initialization, targetType=%s", flowID, targetType)
@@ -142,6 +151,7 @@ func NewFlowWriter(flowID int, writeFn func(*RDBEntry) error, numFlows int, targ
 		batchSize:           batchSize,
 		flushInterval:       time.Duration(flushInterval) * time.Millisecond,
 		writeFn:             writeFn,
+		opsReporter:         opsReporter,
 		targetType:          targetType,
 		pipelineClient:      pipelineClient,
 		clusterClient:       clusterClient,
@@ -387,8 +397,8 @@ func (fw *FlowWriter) flushBatch(batch []*RDBEntry) {
 	log.Printf("  [FLOW-%d] [WRITER] ✓ Batch complete: %d entries in %v (%.0f ops/sec, nodes=%d, success=%d, fail=%d)",
 		fw.flowID, batchSize, duration, opsPerSec, numGroups, successCount, failCount)
 
-	// Update performance metrics for dashboard
-	fw.updatePerfMetrics(opsPerSec, duration.Milliseconds())
+	// Update performance metrics for dashboard (use real op count, not instantaneous rate)
+	fw.updatePerfMetrics(batchSize, duration.Milliseconds())
 
 	// Warn if slow
 	if duration > time.Second {
@@ -626,22 +636,67 @@ func (fw *FlowWriter) writeEntry(entry *RDBEntry) error {
 }
 
 // updatePerfMetrics records performance metrics after each batch flush
-func (fw *FlowWriter) updatePerfMetrics(qps float64, latencyMs int64) {
+func (fw *FlowWriter) updatePerfMetrics(opsCount int, latencyMs int64) {
+	// Report operation count to global metrics (Replicator level)
+	if fw.opsReporter != nil {
+		fw.opsReporter(opsCount)
+	}
+
 	fw.perfMetrics.mu.Lock()
 	defer fw.perfMetrics.mu.Unlock()
 
-	// Update QPS metrics
-	fw.perfMetrics.qpsCurrent = qps
-	if qps > fw.perfMetrics.qpsPeak {
-		fw.perfMetrics.qpsPeak = qps
+	now := time.Now()
+
+	// Add current operation count to sliding window
+	fw.perfMetrics.opsWindow = append(fw.perfMetrics.opsWindow, opsRecord{
+		count:     opsCount,
+		timestamp: now,
+	})
+
+	// Remove operations older than 1 second
+	cutoff := now.Add(-1 * time.Second)
+	validIdx := 0
+	for i, record := range fw.perfMetrics.opsWindow {
+		if record.timestamp.After(cutoff) {
+			validIdx = i
+			break
+		}
 	}
-	fw.perfMetrics.qpsSum += qps
+	if validIdx > 0 && validIdx < len(fw.perfMetrics.opsWindow) {
+		fw.perfMetrics.opsWindow = fw.perfMetrics.opsWindow[validIdx:]
+	}
+
+	// Calculate real QPS: total ops in last 1 second
+	totalOps := 0
+	for _, record := range fw.perfMetrics.opsWindow {
+		totalOps += record.count
+	}
+
+	// Calculate actual time span covered
+	if len(fw.perfMetrics.opsWindow) > 0 {
+		timeSpan := now.Sub(fw.perfMetrics.opsWindow[0].timestamp).Seconds()
+		if timeSpan > 0 {
+			fw.perfMetrics.qpsCurrent = float64(totalOps) / timeSpan
+		} else {
+			fw.perfMetrics.qpsCurrent = float64(totalOps) // Less than 1 second of data
+		}
+	} else {
+		fw.perfMetrics.qpsCurrent = 0
+	}
+
+	// Update peak QPS
+	if fw.perfMetrics.qpsCurrent > fw.perfMetrics.qpsPeak {
+		fw.perfMetrics.qpsPeak = fw.perfMetrics.qpsCurrent
+	}
+
+	// Update average QPS tracking
+	fw.perfMetrics.qpsSum += fw.perfMetrics.qpsCurrent
 	fw.perfMetrics.qpsCount++
 
-	// Update latency metrics (sliding window of last 1000 samples)
+	// Update latency metrics (sliding window of last 100 samples for real-time responsiveness)
 	fw.perfMetrics.latencies = append(fw.perfMetrics.latencies, float64(latencyMs))
-	if len(fw.perfMetrics.latencies) > 1000 {
-		fw.perfMetrics.latencies = fw.perfMetrics.latencies[1:] // Keep last 1000
+	if len(fw.perfMetrics.latencies) > 100 {
+		fw.perfMetrics.latencies = fw.perfMetrics.latencies[1:] // Keep last 100
 	}
 
 	// Update max latency

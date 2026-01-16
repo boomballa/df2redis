@@ -68,6 +68,16 @@ type Replicator struct {
 	flowLSNs          []uint64
 	totalSyncedKeys   int64
 	initialTargetKeys float64
+
+	// Global performance metrics (aggregated from all flows)
+	globalPerfMetrics struct {
+		opsWindow    []opsRecord // Global operation window (all flows combined)
+		qpsCurrent   float64
+		qpsPeak      float64
+		qpsSum       float64
+		qpsCount     int64
+		mu           sync.Mutex
+	}
 }
 
 // NewReplicator creates a new replicator
@@ -619,8 +629,8 @@ func (r *Replicator) receiveSnapshot() error {
 			pipelineClient, _ = r.clusterClient.GetNodeClient(r.cfg.Target.Addr)
 		}
 
-		// Pass initial config
-		r.flowWriters[i] = NewFlowWriter(i, r.writeRDBEntry, numFlows, r.cfg.Target.Type, pipelineClient, r.clusterClient)
+		// Pass initial config with ops reporter callback for global QPS tracking
+		r.flowWriters[i] = NewFlowWriter(i, r.writeRDBEntry, numFlows, r.cfg.Target.Type, pipelineClient, r.clusterClient, r.ReportOps)
 
 		// Apply initial advanced config
 		r.flowWriters[i].UpdateConfig(r.cfg.Advanced.QPS, r.cfg.Advanced.BatchSize)
@@ -2181,47 +2191,96 @@ func (r *Replicator) recordFlowLSN(flowID int, lsn uint64) {
 	r.collectPerfMetrics()
 }
 
+// ReportOps is called by FlowWriter to report operations to global metrics
+func (r *Replicator) ReportOps(opsCount int) {
+	r.globalPerfMetrics.mu.Lock()
+	defer r.globalPerfMetrics.mu.Unlock()
+
+	now := time.Now()
+
+	// Add operation to global window
+	r.globalPerfMetrics.opsWindow = append(r.globalPerfMetrics.opsWindow, opsRecord{
+		count:     opsCount,
+		timestamp: now,
+	})
+
+	// Remove operations older than 1 second
+	cutoff := now.Add(-1 * time.Second)
+	validIdx := 0
+	for i, record := range r.globalPerfMetrics.opsWindow {
+		if record.timestamp.After(cutoff) {
+			validIdx = i
+			break
+		}
+	}
+	if validIdx > 0 && validIdx < len(r.globalPerfMetrics.opsWindow) {
+		r.globalPerfMetrics.opsWindow = r.globalPerfMetrics.opsWindow[validIdx:]
+	}
+
+	// Calculate real global QPS: total ops in last 1 second across ALL flows
+	totalOps := 0
+	for _, record := range r.globalPerfMetrics.opsWindow {
+		totalOps += record.count
+	}
+
+	// Calculate actual time span covered
+	if len(r.globalPerfMetrics.opsWindow) > 0 {
+		timeSpan := now.Sub(r.globalPerfMetrics.opsWindow[0].timestamp).Seconds()
+		if timeSpan > 0 {
+			r.globalPerfMetrics.qpsCurrent = float64(totalOps) / timeSpan
+		} else {
+			r.globalPerfMetrics.qpsCurrent = float64(totalOps)
+		}
+	} else {
+		r.globalPerfMetrics.qpsCurrent = 0
+	}
+
+	// Update peak QPS
+	if r.globalPerfMetrics.qpsCurrent > r.globalPerfMetrics.qpsPeak {
+		r.globalPerfMetrics.qpsPeak = r.globalPerfMetrics.qpsCurrent
+	}
+
+	// Update average tracking
+	r.globalPerfMetrics.qpsSum += r.globalPerfMetrics.qpsCurrent
+	r.globalPerfMetrics.qpsCount++
+}
+
 // collectPerfMetrics aggregates performance metrics from all flow writers
 func (r *Replicator) collectPerfMetrics() {
 	if r.metrics == nil || len(r.flowWriters) == 0 {
 		return
 	}
 
+	// Use global QPS metrics (already calculated in ReportOps)
+	r.globalPerfMetrics.mu.Lock()
+	globalQPSCurrent := r.globalPerfMetrics.qpsCurrent
+	globalQPSPeak := r.globalPerfMetrics.qpsPeak
+	globalQPSAvg := 0.0
+	if r.globalPerfMetrics.qpsCount > 0 {
+		globalQPSAvg = r.globalPerfMetrics.qpsSum / float64(r.globalPerfMetrics.qpsCount)
+	}
+	r.globalPerfMetrics.mu.Unlock()
+
 	var (
-		totalQPSCurrent float64
-		maxQPSPeak      float64
-		totalQPSAvg     float64
-		maxLatencyP50   float64
-		maxLatencyP95   float64
-		maxLatencyP99   float64
+		totalLatencyP50 float64
+		totalLatencyP95 float64
+		totalLatencyP99 float64
 		totalLatencyAvg float64
 		maxLatencyMax   float64
 		count           int
 	)
 
-	// Aggregate metrics from all flows
+	// Aggregate latency metrics from all flows (use average for smoother trends)
 	for _, fw := range r.flowWriters {
 		if fw == nil {
 			continue
 		}
 
-		qpsCurrent, qpsPeak, qpsAvg, latencyP50, latencyP95, latencyP99, latencyAvg, latencyMax := fw.GetPerfMetrics()
+		_, _, _, latencyP50, latencyP95, latencyP99, latencyAvg, latencyMax := fw.GetPerfMetrics()
 
-		totalQPSCurrent += qpsCurrent
-		if qpsPeak > maxQPSPeak {
-			maxQPSPeak = qpsPeak
-		}
-		totalQPSAvg += qpsAvg
-
-		if latencyP50 > maxLatencyP50 {
-			maxLatencyP50 = latencyP50
-		}
-		if latencyP95 > maxLatencyP95 {
-			maxLatencyP95 = latencyP95
-		}
-		if latencyP99 > maxLatencyP99 {
-			maxLatencyP99 = latencyP99
-		}
+		totalLatencyP50 += latencyP50
+		totalLatencyP95 += latencyP95
+		totalLatencyP99 += latencyP99
 		totalLatencyAvg += latencyAvg
 		if latencyMax > maxLatencyMax {
 			maxLatencyMax = latencyMax
@@ -2231,13 +2290,15 @@ func (r *Replicator) collectPerfMetrics() {
 	}
 
 	// Record aggregated metrics
+	r.metrics.Set(state.MetricQPSCurrent, globalQPSCurrent)
+	r.metrics.Set(state.MetricQPSPeak, globalQPSPeak)
+	r.metrics.Set(state.MetricQPSAvg, globalQPSAvg)
+
 	if count > 0 {
-		r.metrics.Set(state.MetricQPSCurrent, totalQPSCurrent)
-		r.metrics.Set(state.MetricQPSPeak, maxQPSPeak)
-		r.metrics.Set(state.MetricQPSAvg, totalQPSAvg/float64(count))
-		r.metrics.Set(state.MetricLatencyP50, maxLatencyP50)
-		r.metrics.Set(state.MetricLatencyP95, maxLatencyP95)
-		r.metrics.Set(state.MetricLatencyP99, maxLatencyP99)
+		// Use average latency across all flows for more dynamic visualization
+		r.metrics.Set(state.MetricLatencyP50, totalLatencyP50/float64(count))
+		r.metrics.Set(state.MetricLatencyP95, totalLatencyP95/float64(count))
+		r.metrics.Set(state.MetricLatencyP99, totalLatencyP99/float64(count))
 		r.metrics.Set(state.MetricLatencyAvg, totalLatencyAvg/float64(count))
 		r.metrics.Set(state.MetricLatencyMax, maxLatencyMax)
 	}

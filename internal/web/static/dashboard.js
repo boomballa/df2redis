@@ -604,7 +604,7 @@
 
     if (qpsChart && qpsCurrent > 0) {
       const now = new Date();
-      const timeLabel = now.toLocaleTimeString('en-US', { hour12: false, minute: '2-digit', second: '2-digit' });
+      const timeLabel = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
       qpsHistoryData.labels.push(timeLabel);
       qpsHistoryData.datasets[0].data.push(qpsCurrent);
@@ -638,7 +638,7 @@
 
     if (latencyChart && (latencyP50 > 0 || latencyP95 > 0 || latencyP99 > 0)) {
       const now = new Date();
-      const timeLabel = now.toLocaleTimeString('en-US', { hour12: false, minute: '2-digit', second: '2-digit' });
+      const timeLabel = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
       latencyHistoryData.labels.push(timeLabel);
       latencyHistoryData.datasets[0].data.push(latencyP99); // P99
