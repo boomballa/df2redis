@@ -131,54 +131,53 @@
 <div class="grid grid-2" style="margin-top:24px;">
     <section class="card highlight">
         <div class="card-title">⚡ QPS Performance</div>
-        <div class="metrics-grid" style="margin-top:12px; margin-bottom:16px;">
-            <div class="metric-item">
-                <div class="label">Current QPS</div>
-                <div class="value" id="qps-current">--</div>
+        <!-- Compact horizontal metrics display -->
+        <div style="display:flex; justify-content:space-around; padding:16px 0; border-bottom:1px solid rgba(51,65,85,0.5); margin-bottom:16px;">
+            <div style="text-align:center;">
+                <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Current</div>
+                <div style="font-size:24px; font-weight:600; color:#3b82f6;" id="qps-current">--</div>
             </div>
-            <div class="metric-item">
-                <div class="label">Peak QPS</div>
-                <div class="value" id="qps-peak">--</div>
+            <div style="text-align:center;">
+                <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Peak</div>
+                <div style="font-size:24px; font-weight:600; color:#10b981;" id="qps-peak">--</div>
             </div>
-            <div class="metric-item">
-                <div class="label">Avg QPS</div>
-                <div class="value" id="qps-avg">--</div>
+            <div style="text-align:center;">
+                <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Average</div>
+                <div style="font-size:24px; font-weight:600; color:#f59e0b;" id="qps-avg">--</div>
             </div>
         </div>
-        <div style="height:200px; position:relative;">
+        <div style="height:180px; position:relative;">
             <canvas id="qps-chart"></canvas>
         </div>
     </section>
 
     <section class="card">
         <div class="card-title">🕐 Batch Write Latency</div>
-        <div class="metrics-grid" style="margin-top:12px; margin-bottom:16px;">
-            <div class="metric-item">
-                <div class="label">P50</div>
-                <div class="value" id="latency-p50">--</div>
+        <!-- Compact horizontal metrics display -->
+        <div style="display:flex; justify-content:space-around; padding:16px 0; border-bottom:1px solid rgba(51,65,85,0.5); margin-bottom:16px;">
+            <div style="text-align:center;">
+                <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">P50 (ms)</div>
+                <div style="font-size:20px; font-weight:600; color:#94a3b8;" id="latency-p50">--</div>
             </div>
-            <div class="metric-item">
-                <div class="label">P95</div>
-                <div class="value" id="latency-p95">--</div>
+            <div style="text-align:center;">
+                <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">P95 (ms)</div>
+                <div style="font-size:20px; font-weight:600; color:#f59e0b;" id="latency-p95">--</div>
             </div>
-            <div class="metric-item">
-                <div class="label">P99</div>
-                <div class="value" id="latency-p99">--</div>
+            <div style="text-align:center;">
+                <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">P99 (ms)</div>
+                <div style="font-size:20px; font-weight:600; color:#ef4444;" id="latency-p99">--</div>
             </div>
-            <div class="metric-item">
-                <div class="label">Avg</div>
-                <div class="value" id="latency-avg">--</div>
+            <div style="text-align:center;">
+                <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Avg (ms)</div>
+                <div style="font-size:20px; font-weight:600; color:#3b82f6;" id="latency-avg">--</div>
             </div>
-            <div class="metric-item">
-                <div class="label">Max</div>
-                <div class="value" id="latency-max">--</div>
+            <div style="text-align:center;">
+                <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Max (ms)</div>
+                <div style="font-size:20px; font-weight:600; color:#a855f7;" id="latency-max">--</div>
             </div>
         </div>
-        <div class="perf-info" style="padding:12px; background:rgba(59,130,246,0.1); border-radius:8px; border-left:3px solid #3b82f6;">
-            <p style="color:#94a3b8; font-size:13px; line-height:1.6;">
-                <strong style="color:#3b82f6;">Note:</strong> Latency measured in milliseconds (ms).
-                Represents batch write operation time from submission to completion.
-            </p>
+        <div style="height:180px; position:relative;">
+            <canvas id="latency-chart"></canvas>
         </div>
     </section>
 </div>

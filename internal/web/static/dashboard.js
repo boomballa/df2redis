@@ -1147,6 +1147,8 @@
   // ==============================================
 
   let qpsChart = null;
+  let latencyChart = null;
+
   let qpsHistoryData = {
     labels: [],
     datasets: [{
@@ -1158,6 +1160,39 @@
       tension: 0.4,
       fill: true
     }]
+  };
+
+  let latencyHistoryData = {
+    labels: [],
+    datasets: [
+      {
+        label: 'P99',
+        data: [],
+        borderColor: '#ef4444',
+        backgroundColor: 'rgba(239, 68, 68, 0.05)',
+        borderWidth: 2,
+        tension: 0.4,
+        fill: false
+      },
+      {
+        label: 'P95',
+        data: [],
+        borderColor: '#f59e0b',
+        backgroundColor: 'rgba(245, 158, 11, 0.05)',
+        borderWidth: 2,
+        tension: 0.4,
+        fill: false
+      },
+      {
+        label: 'P50',
+        data: [],
+        borderColor: '#94a3b8',
+        backgroundColor: 'rgba(148, 163, 184, 0.05)',
+        borderWidth: 2,
+        tension: 0.4,
+        fill: false
+      }
+    ]
   };
 
   function initQPSChart() {
@@ -1219,15 +1254,86 @@
     });
   }
 
+  function initLatencyChart() {
+    const ctx = document.getElementById('latency-chart');
+    if (!ctx || !window.Chart) return;
+
+    latencyChart = new Chart(ctx, {
+      type: 'line',
+      data: latencyHistoryData,
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: {
+          mode: 'index',
+          intersect: false
+        },
+        plugins: {
+          legend: {
+            display: true,
+            position: 'top',
+            labels: {
+              color: '#94a3b8',
+              font: {
+                size: 11
+              },
+              padding: 10,
+              usePointStyle: true
+            }
+          },
+          tooltip: {
+            backgroundColor: 'rgba(30, 41, 59, 0.95)',
+            titleColor: '#f1f5f9',
+            bodyColor: '#94a3b8',
+            borderColor: '#334155',
+            borderWidth: 1,
+            padding: 10,
+            displayColors: true,
+            callbacks: {
+              label: function(context) {
+                return context.dataset.label + ': ' + context.parsed.y.toFixed(1) + ' ms';
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            display: true,
+            grid: {
+              color: 'rgba(51, 65, 85, 0.3)'
+            },
+            ticks: {
+              color: '#64748b',
+              maxTicksLimit: 10
+            }
+          },
+          y: {
+            display: true,
+            beginAtZero: true,
+            grid: {
+              color: 'rgba(51, 65, 85, 0.3)'
+            },
+            ticks: {
+              color: '#64748b',
+              callback: function(value) {
+                return value + ' ms';
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+
   function updatePerformanceMetrics(metrics) {
     // Update QPS metrics
     const qpsCurrent = metrics['perf.qps.current'] || 0;
     const qpsPeak = metrics['perf.qps.peak'] || 0;
     const qpsAvg = metrics['perf.qps.avg'] || 0;
 
-    document.getElementById('qps-current').textContent = qpsCurrent.toFixed(0);
-    document.getElementById('qps-peak').textContent = qpsPeak.toFixed(0);
-    document.getElementById('qps-avg').textContent = qpsAvg.toFixed(0);
+    document.getElementById('qps-current').textContent = qpsCurrent > 0 ? qpsCurrent.toFixed(0) : '--';
+    document.getElementById('qps-peak').textContent = qpsPeak > 0 ? qpsPeak.toFixed(0) : '--';
+    document.getElementById('qps-avg').textContent = qpsAvg > 0 ? qpsAvg.toFixed(0) : '--';
 
     // Update QPS chart
     if (!qpsChart) {
@@ -1257,11 +1363,36 @@
     const latencyAvg = metrics['perf.latency.avg'] || 0;
     const latencyMax = metrics['perf.latency.max'] || 0;
 
-    document.getElementById('latency-p50').textContent = latencyP50.toFixed(1) + ' ms';
-    document.getElementById('latency-p95').textContent = latencyP95.toFixed(1) + ' ms';
-    document.getElementById('latency-p99').textContent = latencyP99.toFixed(1) + ' ms';
-    document.getElementById('latency-avg').textContent = latencyAvg.toFixed(1) + ' ms';
-    document.getElementById('latency-max').textContent = latencyMax.toFixed(1) + ' ms';
+    document.getElementById('latency-p50').textContent = latencyP50 > 0 ? latencyP50.toFixed(1) : '--';
+    document.getElementById('latency-p95').textContent = latencyP95 > 0 ? latencyP95.toFixed(1) : '--';
+    document.getElementById('latency-p99').textContent = latencyP99 > 0 ? latencyP99.toFixed(1) : '--';
+    document.getElementById('latency-avg').textContent = latencyAvg > 0 ? latencyAvg.toFixed(1) : '--';
+    document.getElementById('latency-max').textContent = latencyMax > 0 ? latencyMax.toFixed(1) : '--';
+
+    // Update Latency chart
+    if (!latencyChart) {
+      initLatencyChart();
+    }
+
+    if (latencyChart && (latencyP50 > 0 || latencyP95 > 0 || latencyP99 > 0)) {
+      const now = new Date();
+      const timeLabel = now.toLocaleTimeString('en-US', { hour12: false, minute: '2-digit', second: '2-digit' });
+
+      latencyHistoryData.labels.push(timeLabel);
+      latencyHistoryData.datasets[0].data.push(latencyP99); // P99
+      latencyHistoryData.datasets[1].data.push(latencyP95); // P95
+      latencyHistoryData.datasets[2].data.push(latencyP50); // P50
+
+      // Keep last 60 data points (5 minutes at 5s intervals)
+      if (latencyHistoryData.labels.length > 60) {
+        latencyHistoryData.labels.shift();
+        latencyHistoryData.datasets[0].data.shift();
+        latencyHistoryData.datasets[1].data.shift();
+        latencyHistoryData.datasets[2].data.shift();
+      }
+
+      latencyChart.update('none'); // Update without animation for smoothness
+    }
   }
 
   // ==============================================
@@ -1328,10 +1459,15 @@
     });
   }
 
-  // Initialize QPS chart on page load
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initQPSChart);
-  } else {
+  // Initialize charts on page load
+  function initCharts() {
     initQPSChart();
+    initLatencyChart();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initCharts);
+  } else {
+    initCharts();
   }
 })();
