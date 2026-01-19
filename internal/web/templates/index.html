@@ -1,462 +1,461 @@
 {{ define "content" }}
-<div class="hero">
-    <div>
-        <h1>df2redis Live Dashboard</h1>
-        <p class="subtitle">Track Dragonfly → Redis synchronization at a glance.</p>
-    </div>
+<!-- Dashboard 2.0: Top HUD (Fixed) -->
+<div class="hud-bar">
+    <div class="hud-container">
+        <!-- Left: Branding & Task Info -->
+        <div class="hud-left">
+            <div class="hud-logo">df2redis</div>
+            <div class="hud-divider"></div>
+            <div class="hud-metric">
+                <div class="hud-metric-label">Task</div>
+                <div class="hud-metric-value">{{ if .TaskName }}{{ .TaskName }}{{ else }}standalone{{ end }}</div>
+            </div>
+            <div class="hud-metric">
+                <div class="hud-metric-label">Mode</div>
+                <div class="hud-metric-value" style="color:#a855f7;">Replicate</div>
+            </div>
+        </div>
 
-    {{ if .TaskName }}
-    <!-- Task Module -->
-    <div class="meta-section">
-        <div class="meta-section-title">
-            <span class="section-icon">🏷️</span>
-            <span>Task Information</span>
-        </div>
-        <div class="meta-row">
-            <div class="meta-pill task-pill">
-                <span>Task: <strong>{{ .TaskName }}</strong></span>
+        <!-- Center: Topology -->
+        <div class="hud-center">
+            <div class="hud-status-badge">
+                <span class="icon">🔄</span>
+                <span>{{ .Source.Addr }}</span>
             </div>
-            <div class="meta-pill">
-                <span class="icon">⏱️</span>
-                <span>Updated: <strong>{{ .GeneratedAt }}</strong></span>
-            </div>
-        </div>
-    </div>
-    {{ end }}
-
-    <!-- Data Source Module -->
-    <div class="meta-section">
-        <div class="meta-section-title">
-            <span class="section-icon">🔄</span>
-            <span>Data Source Configuration</span>
-        </div>
-        <div class="meta-row">
-            <div class="meta-pill">
-                <span class="icon">🗄️</span>
-                <span>Source: <strong>{{ .Source.Type }} @ {{ .Source.Addr }}</strong></span>
-            </div>
-            <div class="meta-pill">
+            <div style="color:var(--text-muted); font-size:1.2rem;">➔</div>
+            <div class="hud-status-badge">
                 <span class="icon">🎯</span>
-                <span>Target: <strong>{{ .Target.Type }} @ {{ .Target.Addr }}</strong></span>
+                <span>{{ .Target.Addr }}</span>
             </div>
         </div>
-    </div>
 
-    <!-- Storage & Logs Module -->
-    <div class="meta-section">
-        <div class="meta-section-title">
-            <span class="section-icon">💾</span>
-            <span>Storage & Logs</span>
-        </div>
-        <div class="meta-row">
-            <div class="meta-pill">
-                <span class="icon">🗂️</span>
-                <span>State: <strong>{{ .StateDir }}</strong></span>
+        <!-- Right: Global Metrics -->
+        <div class="hud-right">
+            <div class="hud-metric">
+                <div class="hud-metric-label">QPS <small>(CUR/PEAK)</small></div>
+                <div class="hud-metric-value">
+                    <span id="hud-qps-current" style="color:#60a5fa;">--</span> /
+                    <span id="hud-qps-peak" style="color:#94a3b8; font-size:0.9em;">--</span>
+                </div>
             </div>
-            <div class="meta-pill">
-                <span class="icon">📝</span>
-                <span>Status: <strong>{{ .StatusFile }}</strong></span>
+            <div class="hud-divider"></div>
+            <div class="hud-metric">
+                <div class="hud-metric-label">Keys Imported</div>
+                <div class="hud-metric-value" id="hud-keys-count" style="color:#34d399;">--</div>
             </div>
-            {{ if .LogFile }}
-            <div class="meta-pill">
-                <span class="icon">📋</span>
-                <span>Logs: <strong>{{ .LogFile }}</strong></span>
+            <div class="hud-divider"></div>
+            <div class="hud-status-badge" id="hud-global-status">
+                <span id="hud-status-icon">✓</span>
+                <span id="hud-status-text">Healthy</span>
             </div>
-            {{ end }}
         </div>
     </div>
 </div>
 
-<div class="grid grid-3" style="margin-top:24px;">
-    <div class="card highlight">
-        <div class="card-title">Sync Status</div>
-        <div class="state-badge" id="pipeline-status">{{ with .Snapshot }}{{ .PipelineStatus }}{{ else }}pending{{ end }}</div>
-        <p class="muted" style="margin-top:12px;">Current stage: <strong id="current-stage">incremental</strong></p>
-        <p class="muted">Last refresh: <span id="pipeline-updated">{{ with .Snapshot }}{{ .UpdatedAt }}{{ else }}--{{ end }}</span></p>
-    </div>
-    <div class="card">
-        <div class="card-title">Source</div>
-        <p class="muted">Type: <strong>{{ .Source.Type }}</strong></p>
-        <p class="muted">Addr: <strong>{{ .Source.Addr }}</strong></p>
-        <p class="muted">TLS: {{ if .Source.TLS }}enabled{{ else }}disabled{{ end }}</p>
-    </div>
-    <div class="card">
-        <div class="card-title">Target</div>
-        <p class="muted">Type: <strong>{{ .Target.Type }}</strong></p>
-        <p class="muted">Addr: <strong>{{ .Target.Addr }}</strong></p>
-        <p class="muted">TLS: {{ if .Target.TLS }}enabled{{ else }}disabled{{ end }}</p>
+<!-- Dashboard 2.0: Dynamic Alert Banner -->
+<div class="alert-banner" id="alert-banner">
+    <div class="alert-content">
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+            <span style="font-size:1.25rem;">⚠</span>
+            <span>System Alert: <span id="alert-message">Connection unstable</span></span>
+        </div>
+        <button class="alert-details-btn"
+            onclick="document.getElementById('errors-warnings').scrollIntoView({behavior: 'smooth'})">View
+            Details</button>
     </div>
 </div>
 
-<div class="grid grid-2" style="margin-top:24px;">
-    <section class="card highlight">
-        <div class="card-title">Metrics overview</div>
-        <div class="metrics-grid" id="metrics-list" style="margin-top:0;">
-            {{ with .Snapshot }}
-            {{ range $k, $v := .Metrics }}
-            <div class="metric-item">
-                <div class="label">{{ $k }}</div>
-                <div class="value">{{ printf "%.4f" $v }}</div>
-            </div>
-            {{ end }}
-            {{ else }}
-            <p class="muted">No metrics yet.</p>
-            {{ end }}
-        </div>
-    </section>
+<!-- Main Content Area (Spaced for HUD) -->
+<div style="margin-top:24px;">
 
-    <section class="card">
-        <div class="card-title">Stage progress</div>
-        <table class="table" id="stages-table">
-            <thead><tr><th>Stage</th><th>Status</th><th>Updated</th><th>Message</th></tr></thead>
-            <tbody>
-            {{ with .Snapshot }}
-            {{ range $name, $st := .Stages }}
-            <tr class="stage-row">
-                <td>{{ $name }}</td>
-                <td><span class="badge">{{ $st.Status }}</span></td>
-                <td>{{ $st.UpdatedAt }}</td>
-                <td>{{ $st.Message }}</td>
-            </tr>
-            {{ end }}
-            {{ else }}
-            <tr><td colspan="4" class="muted">No stage data.</td></tr>
-            {{ end }}
-            </tbody>
-        </table>
-    </section>
-</div>
+    <!-- Row 1: Performance Charts -->
+    <div class="grid grid-2">
+        <section class="card highlight">
+            <div class="card-title">⚡ QPS Performance</div>
+            <!-- Compact horizontal metrics display -->
+            <div
+                style="display:flex; justify-content:space-around; padding:16px 0; border-bottom:1px solid rgba(51,65,85,0.5); margin-bottom:16px;">
+                <div style="text-align:center;">
+                    <div
+                        style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">
+                        Current</div>
+                    <div style="font-size:24px; font-weight:600; color:#3b82f6;" id="qps-current">--</div>
+                </div>
+                <div style="text-align:center;">
+                    <div
+                        style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">
+                        Peak</div>
+                    <div style="font-size:24px; font-weight:600; color:#10b981;" id="qps-peak">--</div>
+                </div>
+                <div style="text-align:center;">
+                    <div
+                        style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">
+                        Average</div>
+                    <div style="font-size:24px; font-weight:600; color:#f59e0b;" id="qps-avg">--</div>
+                </div>
+            </div>
+            <div style="height:180px; position:relative;">
+                <canvas id="qps-chart"></canvas>
+            </div>
+        </section>
 
-<!-- Performance Monitoring Section -->
-<div class="grid grid-2" style="margin-top:24px;">
-    <section class="card highlight">
-        <div class="card-title">⚡ QPS Performance</div>
-        <!-- Compact horizontal metrics display -->
-        <div style="display:flex; justify-content:space-around; padding:16px 0; border-bottom:1px solid rgba(51,65,85,0.5); margin-bottom:16px;">
-            <div style="text-align:center;">
-                <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Current</div>
-                <div style="font-size:24px; font-weight:600; color:#3b82f6;" id="qps-current">--</div>
+        <section class="card">
+            <div class="card-title">🕐 Batch Write Latency</div>
+            <!-- Compact horizontal metrics display -->
+            <div
+                style="display:flex; justify-content:space-around; padding:16px 0; border-bottom:1px solid rgba(51,65,85,0.5); margin-bottom:16px;">
+                <div style="text-align:center;">
+                    <div
+                        style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">
+                        P50 (ms)</div>
+                    <div style="font-size:20px; font-weight:600; color:#94a3b8;" id="latency-p50">--</div>
+                </div>
+                <div style="text-align:center;">
+                    <div
+                        style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">
+                        P95 (ms)</div>
+                    <div style="font-size:20px; font-weight:600; color:#f59e0b;" id="latency-p95">--</div>
+                </div>
+                <div style="text-align:center;">
+                    <div
+                        style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">
+                        P99 (ms)</div>
+                    <div style="font-size:20px; font-weight:600; color:#ef4444;" id="latency-p99">--</div>
+                </div>
+                <div style="text-align:center;">
+                    <div
+                        style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">
+                        Avg (ms)</div>
+                    <div style="font-size:20px; font-weight:600; color:#3b82f6;" id="latency-avg">--</div>
+                </div>
+                <div style="text-align:center;">
+                    <div
+                        style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">
+                        Max (ms)</div>
+                    <div style="font-size:20px; font-weight:600; color:#a855f7;" id="latency-max">--</div>
+                </div>
             </div>
-            <div style="text-align:center;">
-                <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Peak</div>
-                <div style="font-size:24px; font-weight:600; color:#10b981;" id="qps-peak">--</div>
+            <div style="height:180px; position:relative;">
+                <canvas id="latency-chart"></canvas>
             </div>
-            <div style="text-align:center;">
-                <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Average</div>
-                <div style="font-size:24px; font-weight:600; color:#f59e0b;" id="qps-avg">--</div>
-            </div>
-        </div>
-        <div style="height:180px; position:relative;">
-            <canvas id="qps-chart"></canvas>
-        </div>
-    </section>
+        </section>
+    </div>
 
-    <section class="card">
-        <div class="card-title">🕐 Batch Write Latency</div>
-        <!-- Compact horizontal metrics display -->
-        <div style="display:flex; justify-content:space-around; padding:16px 0; border-bottom:1px solid rgba(51,65,85,0.5); margin-bottom:16px;">
-            <div style="text-align:center;">
-                <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">P50 (ms)</div>
-                <div style="font-size:20px; font-weight:600; color:#94a3b8;" id="latency-p50">--</div>
-            </div>
-            <div style="text-align:center;">
-                <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">P95 (ms)</div>
-                <div style="font-size:20px; font-weight:600; color:#f59e0b;" id="latency-p95">--</div>
-            </div>
-            <div style="text-align:center;">
-                <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">P99 (ms)</div>
-                <div style="font-size:20px; font-weight:600; color:#ef4444;" id="latency-p99">--</div>
-            </div>
-            <div style="text-align:center;">
-                <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Avg (ms)</div>
-                <div style="font-size:20px; font-weight:600; color:#3b82f6;" id="latency-avg">--</div>
-            </div>
-            <div style="text-align:center;">
-                <div style="font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Max (ms)</div>
-                <div style="font-size:20px; font-weight:600; color:#a855f7;" id="latency-max">--</div>
-            </div>
-        </div>
-        <div style="height:180px; position:relative;">
-            <canvas id="latency-chart"></canvas>
-        </div>
-    </section>
-</div>
-
-<div class="grid grid-2" style="margin-top:24px;">
-    <section class="card">
-        <div class="card-title">Sync Flow Visualization</div>
-        <div class="flow-diagram" id="flow-diagram">
-            <div class="flow-step" data-status="completed">
-                <div class="flow-node">
-                    <div class="flow-header">
-                        <div class="flow-icon">🤝</div>
-                        <div class="flow-label">Handshake</div>
+    <!-- Row 2: Flow Visualization & Stage Progress -->
+    <div class="grid grid-2" style="grid-template-columns: 2fr 1fr;">
+        <section class="card">
+            <div class="card-title">Sync Flow Visualization</div>
+            <div class="flow-diagram" id="flow-diagram">
+                <div class="flow-step" data-status="completed">
+                    <div class="flow-node">
+                        <div class="flow-header">
+                            <div class="flow-icon">🤝</div>
+                            <div class="flow-label">Handshake</div>
+                        </div>
+                        <div class="flow-description">Establishing connection with Dragonfly</div>
+                        <div class="flow-status">Status: <span class="status-text">Completed ✓</span></div>
                     </div>
-                    <div class="flow-description">Establishing connection with Dragonfly</div>
-                    <div class="flow-status">Status: <span class="status-text">Completed ✓</span></div>
+                    <div class="flow-connector"></div>
                 </div>
-                <div class="flow-connector"></div>
-            </div>
-            <div class="flow-step" data-status="completed">
-                <div class="flow-node">
-                    <div class="flow-header">
-                        <div class="flow-icon">📦</div>
-                        <div class="flow-label">RDB Snapshot</div>
+                <div class="flow-step" data-status="completed">
+                    <div class="flow-node">
+                        <div class="flow-header">
+                            <div class="flow-icon">📦</div>
+                            <div class="flow-label">RDB Snapshot</div>
+                        </div>
+                        <div class="flow-description">Full data transfer from source</div>
+                        <div class="flow-status">Imported: <span class="status-value">--</span> keys</div>
                     </div>
-                    <div class="flow-description">Full data transfer from source</div>
-                    <div class="flow-status">Imported: <span class="status-value">--</span> keys</div>
+                    <div class="flow-connector"></div>
                 </div>
-                <div class="flow-connector"></div>
-            </div>
-            <div class="flow-step" data-status="active">
-                <div class="flow-node">
-                    <div class="flow-header">
-                        <div class="flow-icon">📝</div>
-                        <div class="flow-label">Journal Stream (Continuous)</div>
+                <div class="flow-step" data-status="active">
+                    <div class="flow-node">
+                        <div class="flow-header">
+                            <div class="flow-icon">📝</div>
+                            <div class="flow-label">Journal Stream (Continuous)</div>
+                        </div>
+                        <div class="flow-description">Real-time incremental replication</div>
+                        <div class="flow-status">Applied: <span class="status-value"
+                                data-metric="sync.incremental.ops.success">--</span> operations</div>
                     </div>
-                    <div class="flow-description">Real-time incremental replication</div>
-                    <div class="flow-status">Applied: <span class="status-value" data-metric="sync.incremental.ops.success">--</span> operations</div>
+                    <div class="flow-connector"></div>
                 </div>
-                <div class="flow-connector"></div>
-            </div>
-            <div class="flow-step" data-status="pending">
-                <div class="flow-node">
-                    <div class="flow-header">
-                        <div class="flow-icon">✅</div>
-                        <div class="flow-label">Sync Complete</div>
+                <div class="flow-step" data-status="pending">
+                    <div class="flow-node">
+                        <div class="flow-header">
+                            <div class="flow-icon">✅</div>
+                            <div class="flow-label">Sync Complete</div>
+                        </div>
+                        <div class="flow-description">Manually stopped by user</div>
+                        <div class="flow-status">Status: <span class="status-text">Standby</span></div>
                     </div>
-                    <div class="flow-description">Manually stopped by user</div>
-                    <div class="flow-status">Status: <span class="status-text">Standby</span></div>
                 </div>
             </div>
-        </div>
-    </section>
+        </section>
 
-    <section class="card">
-        <div class="card-title">Errors & Warnings</div>
-        <div class="errors-warnings" id="errors-warnings">
-            {{ with .Snapshot }}
-            <div class="error-warning-section">
-                <div class="error-warning-header">
-                    <span class="error-warning-icon error-icon">✗</span>
-                    <span class="error-warning-label">Failed Commands</span>
-                    <span class="error-warning-count" id="failed-count">{{ if .Metrics }}{{ index .Metrics "sync.incremental.ops.failed" }}{{ else }}0{{ end }}</span>
-                </div>
-                <div class="error-warning-body" id="failed-details">
-                    <p class="muted">Command execution failures (MOVED, timeout, etc.)</p>
-                </div>
-            </div>
-
-            <div class="error-warning-section">
-                <div class="error-warning-header">
-                    <span class="error-warning-icon warning-icon">⚠</span>
-                    <span class="error-warning-label">Skipped Commands</span>
-                    <span class="error-warning-count" id="skipped-count">{{ if .Metrics }}{{ index .Metrics "sync.incremental.ops.skipped" }}{{ else }}0{{ end }}</span>
-                </div>
-                <div class="error-warning-body" id="skipped-details">
-                    <p class="muted">Commands skipped (SELECT, PING, global commands)</p>
-                </div>
-            </div>
-
-            <div class="error-warning-section success-section">
-                <div class="error-warning-header">
-                    <span class="error-warning-icon success-icon">✓</span>
-                    <span class="error-warning-label">Status</span>
-                </div>
-                <div class="error-warning-body">
-                    <p class="success-text" id="status-summary">All systems operational</p>
-                </div>
-            </div>
-            {{ else }}
-            <p class="muted">No data available.</p>
-            {{ end }}
-        </div>
-    </section>
-</div>
-
-<section class="card" id="live-logs-card" style="margin-top:24px;">
-    <div class="card-title">
-        Live Logs
-        <span class="log-auto-refresh-indicator" id="auto-refresh-indicator">
-            <span class="refresh-dot"></span> Auto-refresh ON
-        </span>
-    </div>
-
-    <div class="log-controls">
-        <div class="log-search">
-            <input type="text" id="log-search-input" placeholder="Search logs..." class="log-search-input">
-            <button id="log-search-btn" class="log-control-btn">
-                <span>🔍</span> Search
-            </button>
-            <button id="log-search-clear" class="log-control-btn" style="display:none;">
-                <span>✗</span> Clear
-            </button>
-        </div>
-        <div class="log-actions">
-            <button id="log-jump-top-btn" class="log-control-btn">
-                <span>⇡</span> Top
-            </button>
-            <button id="log-refresh-btn" class="log-control-btn">
-                <span>🔄</span> Refresh
-            </button>
-            <button id="log-scroll-bottom-btn" class="log-control-btn">
-                <span>↓</span> Scroll
-            </button>
-            <button id="log-jump-latest-btn" class="log-control-btn">
-                <span>⇣⇣</span> Latest
-            </button>
-            <button id="log-pause-resume-btn" class="log-control-btn">
-                <span>⏸</span> Pause
-            </button>
-        </div>
-    </div>
-
-    <!-- Top navigation: Load earlier logs -->
-    <div class="log-footer" id="log-header" style="margin-bottom: 0.5rem;">
-        <button id="log-load-earlier-btn" class="log-load-more-btn" style="display: none;">
-            ⬆ Load 50 Earlier Lines
-        </button>
-    </div>
-
-    <div class="log-viewer" id="log-viewer">
-        <div class="log-content" id="log-content">
-            <div class="log-loading">Loading logs...</div>
-        </div>
-    </div>
-
-    <!-- Bottom navigation: Load newer logs -->
-    <div class="log-footer">
-        <button id="log-load-newer-btn" class="log-load-more-btn" style="display: none;">
-            ⬇ Load 50 Newer Lines
-        </button>
-        <div class="log-status" id="log-status">
-            Showing <span id="log-shown-count">0</span> of <span id="log-total-count">0</span> lines
-        </div>
-    </div>
-</section>
-
-<section class="card" id="check-validation-card" style="margin-top:24px;">
-    <div class="card-title">📊 Data Validation</div>
-
-    <div class="check-config-form">
-        <div class="check-form-row">
-            <div class="check-form-group">
-                <label class="check-label" for="check-compare-mode">Compare Mode</label>
-                <select id="check-compare-mode" class="check-input">
-                    <option value="2">Length Only (Fast)</option>
-                    <option value="1">Full Value (Accurate)</option>
-                    <option value="4">Smart (Auto)</option>
-                    <option value="3">Key Outline (Fastest)</option>
-                </select>
-                <span class="check-hint">Comparison precision: length, full value, smart, or key outline</span>
-            </div>
-            <div class="check-form-group">
-                <label class="check-label" for="check-compare-times">Compare Rounds</label>
-                <input type="number" id="check-compare-times" class="check-input" value="3" min="1" max="10">
-                <span class="check-hint">Number of validation rounds to handle sync delays</span>
-            </div>
-        </div>
-
-        <div class="check-form-row">
-            <div class="check-form-group">
-                <label class="check-label" for="check-qps">QPS Limit</label>
-                <input type="number" id="check-qps" class="check-input" value="5000" min="1" max="50000">
-                <span class="check-hint">Max queries per second</span>
-            </div>
-            <div class="check-form-group">
-                <label class="check-label" for="check-batch-count">Batch Size</label>
-                <input type="number" id="check-batch-count" class="check-input" value="256" min="1" max="10000">
-                <span class="check-hint">Number of keys per batch</span>
-            </div>
-        </div>
-
-        <div class="check-form-row">
-            <div class="check-form-group">
-                <label class="check-label" for="check-parallel">Parallel</label>
-                <input type="number" id="check-parallel" class="check-input" value="2" min="1" max="100">
-                <span class="check-hint">Number of concurrent workers</span>
-            </div>
-        </div>
-
-        <div class="check-actions">
-            <button id="check-start-btn" class="check-btn check-btn-primary">
-                <span>▶</span> Start Validation
-            </button>
-            <button id="check-stop-btn" class="check-btn check-btn-danger" style="display:none;">
-                <span>⏹</span> Stop
-            </button>
-        </div>
-    </div>
-
-    <div class="check-progress-panel" id="check-progress-panel" style="display:none;">
-        <div class="check-progress-header">
-            <div class="check-progress-title">
-                Validation Progress
-                <span id="check-round-indicator" style="margin-left: 8px; font-size: 0.9em; color: #3b82f6;">Round 1/3</span>
-            </div>
-            <div class="check-progress-status" id="check-status-text">Initializing...</div>
-        </div>
-
-        <div class="check-progress-bar-container">
-            <div class="check-progress-bar" id="check-progress-bar" style="width: 0%;"></div>
-            <div class="check-progress-percent" id="check-progress-percent">0%</div>
-        </div>
-
-        <div class="check-stats-grid">
-            <div class="check-stat-item">
-                <div class="check-stat-icon check-stat-checked">✓</div>
-                <div class="check-stat-label">Consistent</div>
-                <div class="check-stat-value" id="check-consistent-count">0</div>
-            </div>
-            <div class="check-stat-item">
-                <div class="check-stat-icon check-stat-inconsistent">✗</div>
-                <div class="check-stat-label">Inconsistent</div>
-                <div class="check-stat-value" id="check-inconsistent-count">0</div>
-            </div>
-            <div class="check-stat-item">
-                <div class="check-stat-icon check-stat-error">⚠</div>
-                <div class="check-stat-label">Errors</div>
-                <div class="check-stat-value" id="check-error-count">0</div>
-            </div>
-            <div class="check-stat-item">
-                <div class="check-stat-icon check-stat-time">⏱</div>
-                <div class="check-stat-label">Elapsed</div>
-                <div class="check-stat-value" id="check-elapsed-time">0s</div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Inconsistent Keys Sample Display -->
-    <div id="inconsistent-samples-panel" style="display:none; margin-top:24px;">
-        <div class="card-title" style="margin-bottom:12px;">
-            🔍 Inconsistent Keys
-            <span id="sample-count-badge" style="font-size:0.85em; color:#f59e0b; margin-left:8px;">
-                (showing <span id="shown-sample-count">0</span> of <span id="total-sample-count">0</span>)
-            </span>
-        </div>
-        <div style="overflow-x:auto;">
-            <table class="table">
+        <section class="card">
+            <div class="card-title">Stage progress</div>
+            <table class="table" id="stages-table">
                 <thead>
                     <tr>
-                        <th style="width:40%;">Key</th>
-                        <th style="width:30%;">Source Value</th>
-                        <th style="width:30%;">Target Value</th>
+                        <th>Stage</th>
+                        <th>Status</th>
+                        <th>Updated</th>
+                        <th>Message</th>
                     </tr>
                 </thead>
-                <tbody id="inconsistent-samples-tbody">
-                    <!-- Dynamically populated -->
+                <tbody>
+                    {{ with .Snapshot }}
+                    {{ range $name, $st := .Stages }}
+                    <tr class="stage-row">
+                        <td>{{ $name }}</td>
+                        <td><span class="badge">{{ $st.Status }}</span></td>
+                        <td style="font-size:0.75rem;">{{ $st.UpdatedAt }}</td>
+                        <td style="font-size:0.75rem;">{{ $st.Message }}</td>
+                    </tr>
+                    {{ end }}
+                    {{ else }}
+                    <tr>
+                        <td colspan="4" class="muted">No stage data.</td>
+                    </tr>
+                    {{ end }}
                 </tbody>
             </table>
-        </div>
-        <div style="margin-top:12px; padding:10px; background:rgba(239,68,68,0.1); border-radius:6px; border-left:3px solid #ef4444;">
-            <p style="color:#94a3b8; font-size:13px; line-height:1.6;">
-                <strong style="color:#ef4444;">Warning:</strong> These samples represent data inconsistencies detected during validation.
-                Limited to first 100 samples for performance. Check result files for complete list.
-            </p>
-        </div>
+        </section>
     </div>
-</section>
 
-{{ end }}
+    <!-- Hidden Errors Section (Shown by Dynamic Banner) -->
+    <div id="errors-warnings" style="display:none;">
+        <section class="card" style="margin-top:24px; border-color:var(--error);">
+            <div class="card-title" style="color:var(--error);">Errors & Warnings</div>
+            <div class="errors-warnings-list">
+                {{ with .Snapshot }}
+                <div class="error-warning-section">
+                    <div class="error-warning-header">
+                        <span class="error-warning-icon error-icon">✗</span>
+                        <span class="error-warning-label">Failed Commands</span>
+                        <span class="error-warning-count" id="failed-count">{{ if .Metrics }}{{ index .Metrics
+                            "sync.incremental.ops.failed" }}{{ else }}0{{ end }}</span>
+                    </div>
+                    <div class="error-warning-body" id="failed-details">
+                        <p class="muted">Command execution failures (MOVED, timeout, etc.)</p>
+                    </div>
+                </div>
 
-{{ define "scripts" }}{{ end }}
+                <div class="error-warning-section">
+                    <div class="error-warning-header">
+                        <span class="error-warning-icon warning-icon">⚠</span>
+                        <span class="error-warning-label">Skipped Commands</span>
+                        <span class="error-warning-count" id="skipped-count">{{ if .Metrics }}{{ index .Metrics
+                            "sync.incremental.ops.skipped" }}{{ else }}0{{ end }}</span>
+                    </div>
+                    <div class="error-warning-body" id="skipped-details">
+                        <p class="muted">Commands skipped (SELECT, PING, global commands)</p>
+                    </div>
+                </div>
+
+                <div class="error-warning-section success-section">
+                    <div class="error-warning-header">
+                        <span class="error-warning-icon success-icon">✓</span>
+                        <span class="error-warning-label">Status</span>
+                    </div>
+                    <div class="error-warning-body">
+                        <p class="success-text" id="status-summary">All systems operational</p>
+                    </div>
+                </div>
+                {{ else }}
+                <p class="muted">No data available.</p>
+                {{ end }}
+            </div>
+        </section>
+    </div>
+
+    <section class="card" id="live-logs-card" style="margin-top:24px;">
+        <div class="card-title">
+            Live Logs
+            <span class="log-auto-refresh-indicator" id="auto-refresh-indicator">
+                <span class="refresh-dot"></span> Auto-refresh ON
+            </span>
+        </div>
+
+        <div class="log-controls">
+            <div class="log-search">
+                <input type="text" id="log-search-input" placeholder="Search logs..." class="log-search-input">
+                <button id="log-search-btn" class="log-control-btn">
+                    <span>🔍</span> Search
+                </button>
+                <button id="log-search-clear" class="log-control-btn" style="display:none;">
+                    <span>✗</span> Clear
+                </button>
+            </div>
+            <div class="log-actions">
+                <button id="log-jump-top-btn" class="log-control-btn">
+                    <span>⇡</span> Top
+                </button>
+                <button id="log-refresh-btn" class="log-control-btn">
+                    <span>🔄</span> Refresh
+                </button>
+                <button id="log-scroll-bottom-btn" class="log-control-btn">
+                    <span>↓</span> Scroll
+                </button>
+                <button id="log-jump-latest-btn" class="log-control-btn">
+                    <span>⇣⇣</span> Latest
+                </button>
+                <button id="log-pause-resume-btn" class="log-control-btn">
+                    <span>⏸</span> Pause
+                </button>
+            </div>
+        </div>
+
+        <!-- Top navigation: Load earlier logs -->
+        <div class="log-footer" id="log-header" style="margin-bottom: 0.5rem;">
+            <button id="log-load-earlier-btn" class="log-load-more-btn" style="display: none;">
+                ⬆ Load 50 Earlier Lines
+            </button>
+        </div>
+
+        <div class="log-viewer" id="log-viewer">
+            <div class="log-content" id="log-content">
+                <div class="log-loading">Loading logs...</div>
+            </div>
+        </div>
+
+        <!-- Bottom navigation: Load newer logs -->
+        <div class="log-footer">
+            <button id="log-load-newer-btn" class="log-load-more-btn" style="display: none;">
+                ⬇ Load 50 Newer Lines
+            </button>
+            <div class="log-status" id="log-status">
+                Showing <span id="log-shown-count">0</span> of <span id="log-total-count">0</span> lines
+            </div>
+        </div>
+    </section>
+
+    <section class="card" id="check-validation-card" style="margin-top:24px;">
+        <div class="card-title">📊 Data Validation</div>
+
+        <div class="check-config-form">
+            <div class="check-form-row">
+                <div class="check-form-group">
+                    <label class="check-label" for="check-compare-mode">Compare Mode</label>
+                    <select id="check-compare-mode" class="check-input">
+                        <option value="2">Length Only (Fast)</option>
+                        <option value="1">Full Value (Accurate)</option>
+                        <option value="4">Smart (Auto)</option>
+                        <option value="3">Key Outline (Fastest)</option>
+                    </select>
+                    <span class="check-hint">Comparison precision: length, full value, smart, or key outline</span>
+                </div>
+                <div class="check-form-group">
+                    <label class="check-label" for="check-compare-times">Compare Rounds</label>
+                    <input type="number" id="check-compare-times" class="check-input" value="3" min="1" max="10">
+                    <span class="check-hint">Number of validation rounds to handle sync delays</span>
+                </div>
+            </div>
+
+            <div class="check-form-row">
+                <div class="check-form-group">
+                    <label class="check-label" for="check-qps">QPS Limit</label>
+                    <input type="number" id="check-qps" class="check-input" value="5000" min="1" max="50000">
+                    <span class="check-hint">Max queries per second</span>
+                </div>
+                <div class="check-form-group">
+                    <label class="check-label" for="check-batch-count">Batch Size</label>
+                    <input type="number" id="check-batch-count" class="check-input" value="256" min="1" max="10000">
+                    <span class="check-hint">Number of keys per batch</span>
+                </div>
+            </div>
+
+            <div class="check-form-row">
+                <div class="check-form-group">
+                    <label class="check-label" for="check-parallel">Parallel</label>
+                    <input type="number" id="check-parallel" class="check-input" value="2" min="1" max="100">
+                    <span class="check-hint">Number of concurrent workers</span>
+                </div>
+            </div>
+
+            <div class="check-actions">
+                <button id="check-start-btn" class="check-btn check-btn-primary">
+                    <span>▶</span> Start Validation
+                </button>
+                <button id="check-stop-btn" class="check-btn check-btn-danger" style="display:none;">
+                    <span>⏹</span> Stop
+                </button>
+            </div>
+        </div>
+
+        <div class="check-progress-panel" id="check-progress-panel" style="display:none;">
+            <div class="check-progress-header">
+                <div class="check-progress-title">
+                    Validation Progress
+                    <span id="check-round-indicator" style="margin-left: 8px; font-size: 0.9em; color: #3b82f6;">Round
+                        1/3</span>
+                </div>
+                <div class="check-progress-status" id="check-status-text">Initializing...</div>
+            </div>
+
+            <div class="check-progress-bar-container">
+                <div class="check-progress-bar" id="check-progress-bar" style="width: 0%;"></div>
+                <div class="check-progress-percent" id="check-progress-percent">0%</div>
+            </div>
+
+            <div class="check-stats-grid">
+                <div class="check-stat-item">
+                    <div class="check-stat-icon check-stat-checked">✓</div>
+                    <div class="check-stat-label">Consistent</div>
+                    <div class="check-stat-value" id="check-consistent-count">0</div>
+                </div>
+                <div class="check-stat-item">
+                    <div class="check-stat-icon check-stat-inconsistent">✗</div>
+                    <div class="check-stat-label">Inconsistent</div>
+                    <div class="check-stat-value" id="check-inconsistent-count">0</div>
+                </div>
+                <div class="check-stat-item">
+                    <div class="check-stat-icon check-stat-error">⚠</div>
+                    <div class="check-stat-label">Errors</div>
+                    <div class="check-stat-value" id="check-error-count">0</div>
+                </div>
+                <div class="check-stat-item">
+                    <div class="check-stat-icon check-stat-time">⏱</div>
+                    <div class="check-stat-label">Elapsed</div>
+                    <div class="check-stat-value" id="check-elapsed-time">0s</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Inconsistent Keys Sample Display -->
+        <div id="inconsistent-samples-panel" style="display:none; margin-top:24px;">
+            <div class="card-title" style="margin-bottom:12px;">
+                🔍 Inconsistent Keys
+                <span id="sample-count-badge" style="font-size:0.85em; color:#f59e0b; margin-left:8px;">
+                    (showing <span id="shown-sample-count">0</span> of <span id="total-sample-count">0</span>)
+                </span>
+            </div>
+            <div style="overflow-x:auto;">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th style="width:40%;">Key</th>
+                            <th style="width:30%;">Source Value</th>
+                            <th style="width:30%;">Target Value</th>
+                        </tr>
+                    </thead>
+                    <tbody id="inconsistent-samples-tbody">
+                        <!-- Dynamically populated -->
+                    </tbody>
+                </table>
+            </div>
+            <div
+                style="margin-top:12px; padding:10px; background:rgba(239,68,68,0.1); border-radius:6px; border-left:3px solid #ef4444;">
+                <p style="color:#94a3b8; font-size:13px; line-height:1.6;">
+                    <strong style="color:#ef4444;">Warning:</strong> These samples represent data inconsistencies
+                    detected during validation.
+                    Limited to first 100 samples for performance. Check result files for complete list.
+                </p>
+            </div>
+        </div>
+    </section>
+
+    {{ end }}
+
+    {{ define "scripts" }}{{ end }}

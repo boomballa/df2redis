@@ -29,6 +29,148 @@
             --gradient-2: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
             --gradient-3: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
             --gradient-4: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+            /* Dashboard 2.0 New Variables */
+            --hud-bg: rgba(15, 23, 42, 0.95);
+            --hud-border: #334155;
+            --hud-height: 70px;
+        }
+
+        /* Dashboard 2.0 Global Adjustments */
+        body {
+            padding-top: calc(var(--hud-height) + 2rem); /* Space for fixed HUD */
+        }
+
+        /* Top HUD Bar */
+        .hud-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: var(--hud-height);
+            background: var(--hud-bg);
+            border-bottom: 1px solid var(--hud-border);
+            backdrop-filter: blur(12px);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            padding: 0 2rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .hud-container {
+            width: 100%;
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .hud-left, .hud-center, .hud-right {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .hud-logo {
+            font-size: 1.25rem;
+            font-weight: 800;
+            background: var(--gradient-3);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-right: 1rem;
+        }
+
+        .hud-divider {
+            width: 1px;
+            height: 24px;
+            background: var(--border);
+        }
+
+        .hud-metric {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .hud-metric-label {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+        }
+
+        .hud-metric-value {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .hud-status-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.35rem 0.75rem;
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            border-radius: 99px;
+            color: #34d399;
+            font-size: 0.8125rem;
+            font-weight: 600;
+        }
+        
+        .hud-status-badge.error {
+            background: rgba(239, 68, 68, 0.1);
+            border-color: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+
+        /* Dynamic Alert Banner */
+        .alert-banner {
+            position: fixed;
+            top: var(--hud-height);
+            left: 0;
+            right: 0;
+            background: rgba(239, 68, 68, 0.95);
+            color: white;
+            padding: 0.75rem;
+            z-index: 900;
+            display: none; /* Hidden by default */
+            transform-origin: top;
+            animation: slideDown 0.3s ease;
+            backdrop-filter: blur(8px);
+        }
+        
+        .alert-banner.active {
+            display: block;
+        }
+        
+        .alert-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 500;
+        }
+
+        .alert-details-btn {
+            background: rgba(255,255,255,0.2);
+            border: none;
+            padding: 0.25rem 0.75rem;
+            border-radius: 4px;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.875rem;
+        }
+
+        @keyframes slideDown {
+            from { transform: scaleY(0); opacity: 0; }
+            to { transform: scaleY(1); opacity: 1; }
         }
 
         body {

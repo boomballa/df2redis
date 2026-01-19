@@ -29,10 +29,63 @@
     updateErrorsWarnings(metrics);
     updateFlowDiagram(pipelineStatus, stages, metrics);
     updateFlowMetrics(metrics);
+    updateHUD(metrics, pipelineStatus);
 
     // Update performance monitoring panels
     updatePerformanceMetrics(metrics);
     updateInconsistentSamples(data.Check || data.check);
+  }
+
+  function updateHUD(metrics, pipelineStatus) {
+    // QPS
+    const qps = metrics['sync.incremental.qps'] || 0;
+    const qpsEl = document.getElementById('hud-qps-current');
+    if (qpsEl) qpsEl.textContent = formatNumber(qps);
+
+    // Peak QPS (using simple local tracking if not in metrics)
+    if (!window.peakQPS) window.peakQPS = 0;
+    if (qps > window.peakQPS) window.peakQPS = qps;
+    const peakEl = document.getElementById('hud-qps-peak');
+    if (peakEl) peakEl.textContent = formatNumber(window.peakQPS);
+
+    // Keys
+    const keysEl = document.getElementById('hud-keys-count');
+    // combine imported with any other key metric
+    const imported = metrics['sync.keys.imported'] || metrics['sync.rdb.keys'] || 0;
+    if (keysEl) keysEl.textContent = formatNumber(imported);
+
+    // Global Status & Alert Banner
+    const statusEl = document.getElementById('hud-global-status');
+    const statusText = document.getElementById('hud-status-text');
+    const statusIcon = document.getElementById('hud-status-icon');
+    const banner = document.getElementById('alert-banner');
+    const alertMsg = document.getElementById('alert-message');
+
+    const failed = metrics['sync.incremental.ops.failed'] || 0;
+    const skipped = metrics['sync.incremental.ops.skipped'] || 0;
+
+    if (pipelineStatus === 'failed' || failed > 0) {
+      // Status Badge
+      if (statusEl) {
+        statusEl.className = 'hud-status-badge error';
+        if (statusText) statusText.textContent = 'Attention Needed';
+        if (statusIcon) statusIcon.textContent = '⚠';
+      }
+      // Banner
+      if (banner) {
+        banner.classList.add('active');
+        if (alertMsg) alertMsg.textContent = `${formatNumber(failed)} command failures detected`;
+      }
+    } else {
+      // Status Badge
+      if (statusEl) {
+        statusEl.className = 'hud-status-badge';
+        if (statusText) statusText.textContent = 'Healthy';
+        if (statusIcon) statusIcon.textContent = '✓';
+      }
+      // Banner
+      if (banner) banner.classList.remove('active');
+    }
   }
 
   function updatePipeline(data) {
