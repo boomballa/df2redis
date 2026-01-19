@@ -1202,11 +1202,15 @@ type FlowEntry struct {
 
 // sendFlowACK sends REPLCONF ACK command on a specific FLOW connection
 func (r *Replicator) sendFlowACK(flowID int, lsn uint64) error {
+	log.Printf("  [FLOW-%d] [DEBUG] sendFlowACK called with LSN=%d", flowID, lsn)
+
 	flowConn := r.flowConns[flowID]
 	if flowConn == nil {
+		log.Printf("  [FLOW-%d] [DEBUG] flowConn is nil!", flowID)
 		return fmt.Errorf("flow connection %d is nil", flowID)
 	}
 
+	log.Printf("  [FLOW-%d] [DEBUG] Executing REPLCONF ACK command", flowID)
 	_, err := flowConn.Do("REPLCONF", "ACK", fmt.Sprintf("%d", lsn))
 	if err != nil {
 		log.Printf("  [FLOW-%d] ⚠️  REPLCONF ACK failed (LSN=%d): %v", flowID, lsn, err)
@@ -1227,19 +1231,25 @@ func (r *Replicator) startFlowHeartbeat(flowID int, currentLSN *uint64, forcePin
 	for {
 		select {
 		case <-ticker.C:
+			log.Printf("  [FLOW-%d] [DEBUG] Ticker fired, preparing to send ACK", flowID)
+
 			mu.Lock()
 			lsn := *currentLSN
 			ping := *forcePing
 			*forcePing = false
 			mu.Unlock()
 
+			log.Printf("  [FLOW-%d] [DEBUG] Current LSN=%d, forcePing=%v", flowID, lsn, ping)
+
 			if ping {
 				// PING received, send ACK immediately
+				log.Printf("  [FLOW-%d] [DEBUG] Sending ACK in response to PING", flowID)
 				if err := r.sendFlowACK(flowID, lsn); err != nil {
 					log.Printf("  [FLOW-%d] ⚠️  Heartbeat ACK failed: %v", flowID, err)
 				}
 			} else {
 				// Regular periodic ACK
+				log.Printf("  [FLOW-%d] [DEBUG] Sending periodic ACK", flowID)
 				if err := r.sendFlowACK(flowID, lsn); err != nil {
 					log.Printf("  [FLOW-%d] ⚠️  Heartbeat ACK failed: %v", flowID, err)
 				}
