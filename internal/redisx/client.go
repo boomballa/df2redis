@@ -191,12 +191,21 @@ func (c *Client) Read(buf []byte) (int, error) {
 // Write writes data directly to the underlying connection without waiting for a response.
 // This is used for REPLCONF ACK commands during journal streaming, where DragonflyDB master
 // does not send responses to avoid interleaving with journal data.
+//
+// IMPORTANT: This method does NOT acquire c.mu because Go's net.Conn supports concurrent
+// reads and writes. Acquiring the mutex would cause deadlock when Read() is blocking
+// waiting for data while Write() tries to send REPLCONF ACK.
 func (c *Client) Write(data []byte) (int, error) {
+	// Check closed status without blocking (Read may hold the lock)
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
+	closed := c.closed
+	c.mu.Unlock()
+
+	if closed {
 		return 0, errors.New("redisx: client closed")
 	}
+
+	// Write directly without holding mutex (net.Conn is goroutine-safe)
 	return c.conn.Write(data)
 }
 
