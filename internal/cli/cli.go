@@ -575,10 +575,9 @@ func runReplicate(args []string) int {
 
 	if dashboardAddr != "" {
 		server, err := web.New(web.Options{
-			Addr:            dashboardAddr,
-			Cfg:             cfg,
-			Store:           store,
-			HistoryProvider: replicator.GetHistoryStore,
+			Addr:  dashboardAddr,
+			Cfg:   cfg,
+			Store: store,
 		})
 		if err != nil {
 			logger.Error("Failed to initialize embedded dashboard: %v", err)

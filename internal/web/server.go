@@ -34,9 +34,6 @@ type DashboardServer struct {
 	// Callback for dynamic configuration
 	onConfigUpdate func(qps int, batchSize int) error
 
-	// Provider for in-memory history
-	historyProvider func() *state.HistoryStore
-
 	// Check task management
 	checkMu      sync.RWMutex
 	checkRunning bool
@@ -49,11 +46,10 @@ type DashboardServer struct {
 
 // Options configure the dashboard server.
 type Options struct {
-	Addr            string
-	Cfg             *config.Config
-	Store           *state.Store
-	OnConfigUpdate  func(qps int, batchSize int) error
-	HistoryProvider func() *state.HistoryStore
+	Addr           string
+	Cfg            *config.Config
+	Store          *state.Store
+	OnConfigUpdate func(qps int, batchSize int) error
 }
 
 // New creates a dashboard server.
@@ -89,13 +85,12 @@ func New(opts Options) (*DashboardServer, error) {
 	}
 
 	return &DashboardServer{
-		addr:            opts.Addr,
-		cfg:             opts.Cfg,
-		store:           opts.Store,
-		tmpl:            tmpl,
-		onConfigUpdate:  opts.OnConfigUpdate,
-		historyProvider: opts.HistoryProvider,
-		logger:          dashLogger,
+		addr:           opts.Addr,
+		cfg:            opts.Cfg,
+		store:          opts.Store,
+		tmpl:           tmpl,
+		onConfigUpdate: opts.OnConfigUpdate,
+		logger:         dashLogger,
 	}, nil
 }
 
@@ -367,11 +362,6 @@ func (s *DashboardServer) currentSnapshot() state.Snapshot {
 		if err == nil {
 			snap = loaded
 		}
-	}
-
-	// Inject in-memory history if provider is available
-	if s.historyProvider != nil {
-		snap.History = s.historyProvider()
 	}
 
 	return snap
