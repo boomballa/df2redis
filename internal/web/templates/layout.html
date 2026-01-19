@@ -842,18 +842,67 @@
             display: none !important;
         }
 
-        /* HUD Log Ticker */
-        .hud-log-container {
+        /* Premium Log Toggle Button */
+        .log-toggle-btn {
             display: flex;
             align-items: center;
-            gap: 0.5rem;
-            padding: 0.25rem 0.75rem;
-            background: rgba(15, 23, 42, 0.5);
+            gap: 6px;
+            background: rgba(15, 23, 42, 0.6);
             border: 1px solid var(--border);
-            border-radius: 4px;
-            max-width: 400px;
-            overflow: hidden;
-            transition: all 0.3s ease;
+            color: var(--text-secondary);
+            padding: 4px 12px;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            letter-spacing: 0.02em;
+            backdrop-filter: blur(4px);
+        }
+
+        .log-toggle-btn:hover {
+            background: rgba(59, 130, 246, 0.1);
+            border-color: var(--accent);
+            color: var(--accent);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        .log-toggle-btn:active {
+            transform: translateY(0);
+        }
+
+        .log-toggle-btn .chevron {
+            font-size: 0.7em;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            opacity: 0.7;
+        }
+
+        /* Default is collapsed in index.html logic, but button starts inactive. 
+           If logs are collapsed, chevron points DOWN (▼). 
+           When active (expanded), we want chevron to point UP. 
+           Wait, standard Chevron Down usually implies "Click to Expand". 
+           So when collapsed, it should be Down. When expanded, Up.
+           The logic in index.html is toggling 'collapsed'. 
+           If it starts collapsed, button is NOT active. 
+           So Active = Expanded = Rotate 180deg.
+        */
+        .log-toggle-btn.active {
+            background: rgba(59, 130, 246, 0.15);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .log-toggle-btn.active .chevron {
+            transform: rotate(180deg);
+        }
+
+        background: rgba(15, 23, 42, 0.5);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        max-width: 400px;
+        overflow: hidden;
+        transition: all 0.3s ease;
         }
 
         .hud-log-container.log-error {

@@ -27,13 +27,6 @@
                 <span class="icon">🎯</span>
                 <span>{{ .Target.Addr }}</span>
             </div>
-
-            <!-- New Log Ticker -->
-            <div class="hud-divider" style="margin:0 1rem;"></div>
-            <div id="hud-log-container" class="hud-log-container">
-                <span class="icon" style="opacity:0.7;">📝</span>
-                <span id="hud-log-text" class="hud-log-text">Waiting for logs...</span>
-            </div>
         </div>
 
         <!-- Right: Global Metrics -->
@@ -280,13 +273,14 @@
     <section class="card" id="live-logs-card" style="margin-top:24px;">
         <div class="card-title">
             Live Logs
-            <div style="display:flex; gap:10px; align-items:center;">
+            <div style="display:flex; gap:12px; align-items:center;">
                 <span class="log-auto-refresh-indicator" id="auto-refresh-indicator">
-                    <span class="refresh-dot"></span> Auto-refresh ON
+                    <span class="refresh-dot"></span> Live
                 </span>
-                <button onclick="document.getElementById('live-logs-body').classList.toggle('collapsed')"
-                    style="background:none; border:1px solid var(--border); color:var(--text-muted); cursor:pointer; padding:2px 8px; border-radius:4px; font-size:12px;">
-                    Show/Hide
+                <button class="log-toggle-btn"
+                    onclick="document.getElementById('live-logs-body').classList.toggle('collapsed'); this.classList.toggle('active')">
+                    <span>Viewer</span>
+                    <span class="chevron">▼</span>
                 </button>
             </div>
         </div>
