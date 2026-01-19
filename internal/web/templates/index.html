@@ -142,8 +142,8 @@
     </div>
 
     <!-- Row 2: Flow Visualization & Stage Progress -->
-    <div class="grid grid-2" style="grid-template-columns: 2fr 1fr;">
-        <section class="card">
+    <div class="grid grid-2" style="grid-template-columns: 1fr 1fr;">
+        <section class="card" id="flow-card">
             <div class="card-title">Sync Flow Visualization</div>
             <div class="flow-diagram" id="flow-diagram">
                 <div class="flow-step" data-status="completed">
@@ -193,34 +193,36 @@
             </div>
         </section>
 
-        <section class="card">
+        <section class="card" style="display:flex; flex-direction:column; max-height: 580px;">
             <div class="card-title">Stage progress</div>
-            <table class="table" id="stages-table">
-                <thead>
-                    <tr>
-                        <th>Stage</th>
-                        <th>Status</th>
-                        <th>Updated</th>
-                        <th>Message</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {{ with .Snapshot }}
-                    {{ range $name, $st := .Stages }}
-                    <tr class="stage-row">
-                        <td>{{ $name }}</td>
-                        <td><span class="badge">{{ $st.Status }}</span></td>
-                        <td style="font-size:0.75rem;">{{ $st.UpdatedAt }}</td>
-                        <td style="font-size:0.75rem;">{{ $st.Message }}</td>
-                    </tr>
-                    {{ end }}
-                    {{ else }}
-                    <tr>
-                        <td colspan="4" class="muted">No stage data.</td>
-                    </tr>
-                    {{ end }}
-                </tbody>
-            </table>
+            <div style="flex:1; overflow-y:auto; padding-right:4px;">
+                <table class="table" id="stages-table">
+                    <thead>
+                        <tr>
+                            <th style="position:sticky; top:0; z-index:10; background:#0f172a;">Stage</th>
+                            <th style="position:sticky; top:0; z-index:10; background:#0f172a;">Status</th>
+                            <th style="position:sticky; top:0; z-index:10; background:#0f172a;">Updated</th>
+                            <th style="position:sticky; top:0; z-index:10; background:#0f172a;">Message</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{ with .Snapshot }}
+                        {{ range $name, $st := .Stages }}
+                        <tr class="stage-row">
+                            <td>{{ $name }}</td>
+                            <td><span class="badge">{{ $st.Status }}</span></td>
+                            <td style="font-size:0.75rem;">{{ $st.UpdatedAt }}</td>
+                            <td style="font-size:0.75rem;">{{ $st.Message }}</td>
+                        </tr>
+                        {{ end }}
+                        {{ else }}
+                        <tr>
+                            <td colspan="4" class="muted">No stage data.</td>
+                        </tr>
+                        {{ end }}
+                    </tbody>
+                </table>
+            </div>
         </section>
     </div>
 
