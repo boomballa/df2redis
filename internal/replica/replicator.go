@@ -1236,8 +1236,7 @@ func (r *Replicator) startFlowHeartbeat(flowID int, currentLSN *uint64, forcePin
 		case <-ticker.C:
 			mu.Lock()
 			lsn := *currentLSN
-			ping := *forcePing
-			*forcePing = false
+			*forcePing = false // Reset forcePing flag after reading LSN
 			mu.Unlock()
 
 			// Send ACK (either forced by PING or periodic)
