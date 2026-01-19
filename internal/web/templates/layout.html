@@ -906,9 +906,10 @@
 
         .tooltip-content {
             position: absolute;
-            top: 140%;
+            top: 100%;
             right: 0;
-            margin-top: 4px;
+            margin-right: 0;
+            margin-top: 10px;
             width: 250px;
             background: #1e293b;
             border: 1px solid var(--border);
@@ -919,19 +920,27 @@
             color: var(--text-secondary);
             opacity: 0;
             visibility: hidden;
-            transform: translateY(-4px);
+            transform: translateY(-5px);
             transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
-            z-index: 50;
+            z-index: 1000;
             pointer-events: none;
         }
 
-        /* Triangle for tooltip */
+        .tooltip-container:hover .tooltip-content {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+
+        /* Triangle for tooltip (Up pointing arrow on the top side of box) */
         .tooltip-content::after {
             content: '';
             position: absolute;
             bottom: 100%;
-            right: 5px;
+            right: 4px;
+            /* Align with icon center (18px icon width / 2 - 6px arrow half width = 3px, using 4px for optical alignment) */
+            margin-top: 0;
             border: 6px solid transparent;
             border-bottom-color: #1e293b;
         }
@@ -941,18 +950,15 @@
             content: '';
             position: absolute;
             bottom: 100%;
-            right: 5px;
+            right: 4px;
+            margin-top: 0;
             border: 6px solid transparent;
             border-bottom-color: var(--border);
             transform: translateY(-1px);
             z-index: -1;
         }
 
-        .tooltip-container:hover .tooltip-content {
-            opacity: 1;
-            visibility: visible;
-            transform: translateY(0);
-        }
+        /* Removed duplicate hover state */
 
         .tooltip-content strong {
             color: var(--text-primary);
