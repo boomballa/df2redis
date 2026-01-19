@@ -29,7 +29,9 @@
     updateErrorsWarnings(metrics);
     updateFlowDiagram(pipelineStatus, stages, metrics);
     updateFlowMetrics(metrics);
+    updateFlowMetrics(metrics);
     updateHUD(metrics, pipelineStatus);
+    updateLogTicker();
 
     // Update performance monitoring panels
     updatePerformanceMetrics(metrics);
@@ -37,21 +39,22 @@
   }
 
   function updateHUD(metrics, pipelineStatus) {
-    // QPS
-    const qps = metrics['sync.incremental.qps'] || 0;
+    // QPS (Use same key as Charts: perf.qps.current)
+    const qps = metrics['perf.qps.current'] || 0;
+    const peak = metrics['perf.qps.peak'] || 0;
+
     const qpsEl = document.getElementById('hud-qps-current');
     if (qpsEl) qpsEl.textContent = formatNumber(qps);
 
-    // Peak QPS (using simple local tracking if not in metrics)
-    if (!window.peakQPS) window.peakQPS = 0;
-    if (qps > window.peakQPS) window.peakQPS = qps;
     const peakEl = document.getElementById('hud-qps-peak');
-    if (peakEl) peakEl.textContent = formatNumber(window.peakQPS);
+    if (peakEl) peakEl.textContent = formatNumber(peak);
 
-    // Keys
+    // Keys (Derived from Target Keys delta)
+    const targetKeysInitial = metrics['target.keys.initial'] || 0;
+    const targetKeysCurrent = metrics['target.keys.current'] || 0;
+    const imported = Math.max(0, targetKeysCurrent - targetKeysInitial);
+
     const keysEl = document.getElementById('hud-keys-count');
-    // combine imported with any other key metric
-    const imported = metrics['sync.keys.imported'] || metrics['sync.rdb.keys'] || 0;
     if (keysEl) keysEl.textContent = formatNumber(imported);
 
     // Global Status & Alert Banner
@@ -62,7 +65,6 @@
     const alertMsg = document.getElementById('alert-message');
 
     const failed = metrics['sync.incremental.ops.failed'] || 0;
-    const skipped = metrics['sync.incremental.ops.skipped'] || 0;
 
     if (pipelineStatus === 'failed' || failed > 0) {
       // Status Badge
@@ -85,6 +87,38 @@
       }
       // Banner
       if (banner) banner.classList.remove('active');
+    }
+  }
+
+  // Poll for latest log line for the Ticker
+  async function updateLogTicker() {
+    try {
+      // Fetch just the last 1 line
+      const res = await fetch('/api/logs?offset=0&lines=1&mode=tail');
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.lines && data.lines.length > 0) {
+          const line = data.lines[0];
+          const tickerEl = document.getElementById('hud-log-text');
+          if (tickerEl) {
+            // Strip HTML if any, keep simple text
+            const text = line.replace(/<[^>]*>?/gm, '');
+            // Truncate if too long
+            tickerEl.textContent = text.length > 100 ? text.substring(0, 100) + '...' : text;
+            tickerEl.title = text; // Tooltip shows full text
+
+            // Colorize based on level
+            const container = document.getElementById('hud-log-container');
+            if (container) {
+              container.className = 'hud-log-container'; // reset
+              if (line.includes('[ERROR]')) container.classList.add('log-error');
+              else if (line.includes('[WARN]')) container.classList.add('log-warn');
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Ticker update failed", e);
     }
   }
 

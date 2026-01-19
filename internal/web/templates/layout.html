@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -37,7 +38,8 @@
 
         /* Dashboard 2.0 Global Adjustments */
         body {
-            padding-top: calc(var(--hud-height) + 2rem); /* Space for fixed HUD */
+            padding-top: calc(var(--hud-height) + 2rem);
+            /* Space for fixed HUD */
         }
 
         /* Top HUD Bar */
@@ -66,7 +68,9 @@
             align-items: center;
         }
 
-        .hud-left, .hud-center, .hud-right {
+        .hud-left,
+        .hud-center,
+        .hud-right {
             display: flex;
             align-items: center;
             gap: 1.5rem;
@@ -77,6 +81,7 @@
             font-weight: 800;
             background: var(--gradient-3);
             -webkit-background-clip: text;
+            background-clip: text;
             -webkit-text-fill-color: transparent;
             margin-right: 1rem;
         }
@@ -120,7 +125,7 @@
             font-size: 0.8125rem;
             font-weight: 600;
         }
-        
+
         .hud-status-badge.error {
             background: rgba(239, 68, 68, 0.1);
             border-color: rgba(239, 68, 68, 0.2);
@@ -137,16 +142,17 @@
             color: white;
             padding: 0.75rem;
             z-index: 900;
-            display: none; /* Hidden by default */
+            display: none;
+            /* Hidden by default */
             transform-origin: top;
             animation: slideDown 0.3s ease;
             backdrop-filter: blur(8px);
         }
-        
+
         .alert-banner.active {
             display: block;
         }
-        
+
         .alert-content {
             max-width: 1400px;
             margin: 0 auto;
@@ -158,7 +164,7 @@
         }
 
         .alert-details-btn {
-            background: rgba(255,255,255,0.2);
+            background: rgba(255, 255, 255, 0.2);
             border: none;
             padding: 0.25rem 0.75rem;
             border-radius: 4px;
@@ -169,8 +175,15 @@
         }
 
         @keyframes slideDown {
-            from { transform: scaleY(0); opacity: 0; }
-            to { transform: scaleY(1); opacity: 1; }
+            from {
+                transform: scaleY(0);
+                opacity: 0;
+            }
+
+            to {
+                transform: scaleY(1);
+                opacity: 1;
+            }
         }
 
         body {
@@ -324,7 +337,9 @@
         }
 
         @media (max-width: 768px) {
-            .grid-2, .grid-3 {
+
+            .grid-2,
+            .grid-3 {
                 grid-template-columns: 1fr;
             }
         }
@@ -389,8 +404,15 @@
         }
 
         @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.85; }
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.85;
+            }
         }
 
         .badge {
@@ -402,31 +424,41 @@
             text-transform: lowercase;
         }
 
-        .badge-journal, .badge[class*="journal"], .badge[class*="incremental"] {
+        .badge-journal,
+        .badge[class*="journal"],
+        .badge[class*="incremental"] {
             background: rgba(59, 130, 246, 0.15);
             color: #60a5fa;
             border: 1px solid rgba(59, 130, 246, 0.3);
         }
 
-        .badge-established, .badge[class*="established"], .badge[class*="success"] {
+        .badge-established,
+        .badge[class*="established"],
+        .badge[class*="success"] {
             background: rgba(16, 185, 129, 0.15);
             color: #34d399;
             border: 1px solid rgba(16, 185, 129, 0.3);
         }
 
-        .badge-completed, .badge[class*="rdb_done"], .badge[class*="completed"] {
+        .badge-completed,
+        .badge[class*="rdb_done"],
+        .badge[class*="completed"] {
             background: rgba(168, 85, 247, 0.15);
             color: #c084fc;
             border: 1px solid rgba(168, 85, 247, 0.3);
         }
 
-        .badge-starting, .badge[class*="starting"], .badge[class*="handshake"] {
+        .badge-starting,
+        .badge[class*="starting"],
+        .badge[class*="handshake"] {
             background: rgba(245, 158, 11, 0.15);
             color: #fbbf24;
             border: 1px solid rgba(245, 158, 11, 0.3);
         }
 
-        .badge-stopped, .badge[class*="stopped"], .badge[class*="failed"] {
+        .badge-stopped,
+        .badge[class*="stopped"],
+        .badge[class*="failed"] {
             background: rgba(239, 68, 68, 0.15);
             color: #f87171;
             border: 1px solid rgba(239, 68, 68, 0.3);
@@ -697,8 +729,15 @@
         }
 
         @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.4;
+            }
         }
 
         .log-controls {
@@ -796,6 +835,44 @@
         .log-line:hover {
             background: rgba(59, 130, 246, 0.05);
             border-left-color: rgba(59, 130, 246, 0.3);
+        }
+
+        /* Collapsible Helper */
+        .collapsed {
+            display: none !important;
+        }
+
+        /* HUD Log Ticker */
+        .hud-log-container {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.25rem 0.75rem;
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            max-width: 400px;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .hud-log-container.log-error {
+            border-color: rgba(239, 68, 68, 0.5);
+            background: rgba(239, 68, 68, 0.1);
+        }
+
+        .hud-log-container.log-warn {
+            border-color: rgba(245, 158, 11, 0.5);
+            background: rgba(245, 158, 11, 0.1);
+        }
+
+        .hud-log-text {
+            font-family: Monaco, Menlo, monospace;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .log-line.log-error {
@@ -1183,8 +1260,13 @@
 
         /* Loading animation */
         @keyframes shimmer {
-            0% { background-position: -1000px 0; }
-            100% { background-position: 1000px 0; }
+            0% {
+                background-position: -1000px 0;
+            }
+
+            100% {
+                background-position: 1000px 0;
+            }
         }
 
         .loading {
@@ -1279,10 +1361,13 @@
         }
 
         @keyframes flowPulse {
-            0%, 100% {
+
+            0%,
+            100% {
                 box-shadow: 0 0 30px rgba(59, 130, 246, 0.5);
                 transform: scale(1);
             }
+
             50% {
                 box-shadow: 0 0 40px rgba(59, 130, 246, 0.7);
                 transform: scale(1.02);
@@ -1348,20 +1433,16 @@
             opacity: 1;
             border-left: none;
             width: 3px;
-            mask-image: repeating-linear-gradient(
-                0deg,
-                transparent,
-                transparent 4px,
-                black 4px,
-                black 8px
-            );
-            -webkit-mask-image: repeating-linear-gradient(
-                0deg,
-                transparent,
-                transparent 4px,
-                black 4px,
-                black 8px
-            );
+            mask-image: repeating-linear-gradient(0deg,
+                    transparent,
+                    transparent 4px,
+                    black 4px,
+                    black 8px);
+            -webkit-mask-image: repeating-linear-gradient(0deg,
+                    transparent,
+                    transparent 4px,
+                    black 4px,
+                    black 8px);
         }
 
         .flow-step[data-status="completed"] .flow-connector::after {
@@ -1376,20 +1457,16 @@
             opacity: 1;
             border-left: none;
             width: 3px;
-            mask-image: repeating-linear-gradient(
-                0deg,
-                transparent,
-                transparent 4px,
-                black 4px,
-                black 8px
-            );
-            -webkit-mask-image: repeating-linear-gradient(
-                0deg,
-                transparent,
-                transparent 4px,
-                black 4px,
-                black 8px
-            );
+            mask-image: repeating-linear-gradient(0deg,
+                    transparent,
+                    transparent 4px,
+                    black 4px,
+                    black 8px);
+            -webkit-mask-image: repeating-linear-gradient(0deg,
+                    transparent,
+                    transparent 4px,
+                    black 4px,
+                    black 8px);
             animation: dashFlow 2s linear infinite;
         }
 
@@ -1405,6 +1482,7 @@
                 mask-position: 0 0;
                 -webkit-mask-position: 0 0;
             }
+
             100% {
                 mask-position: 0 8px;
                 -webkit-mask-position: 0 8px;
@@ -1420,25 +1498,32 @@
                 transform: scaleX(0);
                 transform-origin: left;
             }
+
             to {
                 transform: scaleX(1);
             }
         }
 
         @keyframes flowProgress {
-            0%, 100% {
+
+            0%,
+            100% {
                 opacity: 0.6;
             }
+
             50% {
                 opacity: 1;
             }
         }
 
         @keyframes flowArrowDown {
-            0%, 100% {
+
+            0%,
+            100% {
                 opacity: 0.6;
                 transform: translateY(0);
             }
+
             50% {
                 opacity: 1;
                 transform: translateY(2px);
@@ -1465,6 +1550,7 @@
         }
     </style>
 </head>
+
 <body>
     <div class="container">
         {{ template "content" . }}
@@ -1474,4 +1560,5 @@
     <script src="/static/dashboard.js"></script>
     {{ template "scripts" . }}
 </body>
+
 </html>
