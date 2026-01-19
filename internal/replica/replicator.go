@@ -85,6 +85,12 @@ type Replicator struct {
 		latencies []float64 // in ms
 		mu        sync.Mutex
 	}
+
+	// Replication heartbeat tracking for REPLCONF ACK
+	lastAckedLSN  uint64    // Last LSN acknowledged to master
+	lastAckedTime time.Time // Last time we sent ACK
+	forcePing     bool      // Force immediate ACK on PING
+	ackMu         sync.Mutex // Protects ACK-related fields
 }
 
 // NewReplicator creates a new replicator
@@ -1194,6 +1200,62 @@ type FlowEntry struct {
 	Error  error
 }
 
+// sendREPLCONFAck sends REPLCONF ACK command to master with current LSN
+func (r *Replicator) sendREPLCONFAck() error {
+	r.ackMu.Lock()
+	lsn := r.lastAckedLSN
+	r.lastAckedTime = time.Now()
+	r.forcePing = false
+	r.ackMu.Unlock()
+
+	_, err := r.mainConn.Do("REPLCONF", "ACK", fmt.Sprintf("%d", lsn))
+	if err != nil {
+		log.Printf("⚠️  REPLCONF ACK failed (LSN=%d): %v", lsn, err)
+		return err
+	}
+
+	log.Printf("  ✓ REPLCONF ACK sent (LSN=%d)", lsn)
+	return nil
+}
+
+// startHeartbeat launches a goroutine that periodically sends REPLCONF ACK
+func (r *Replicator) startHeartbeat(done chan struct{}) {
+	ticker := time.NewTicker(1 * time.Second) // Send ACK every 1 second
+	defer ticker.Stop()
+
+	log.Println("  ✓ Heartbeat (REPLCONF ACK) goroutine started")
+
+	for {
+		select {
+		case <-ticker.C:
+			// Check if forced ping is set
+			r.ackMu.Lock()
+			forcePing := r.forcePing
+			r.ackMu.Unlock()
+
+			if forcePing {
+				// PING received, send ACK immediately
+				if err := r.sendREPLCONFAck(); err != nil {
+					log.Printf("⚠️  Heartbeat ACK failed: %v", err)
+				}
+			} else {
+				// Regular periodic ACK
+				if err := r.sendREPLCONFAck(); err != nil {
+					log.Printf("⚠️  Heartbeat ACK failed: %v", err)
+				}
+			}
+
+		case <-done:
+			log.Println("  ✓ Heartbeat goroutine stopped")
+			return
+
+		case <-r.ctx.Done():
+			log.Println("  ✓ Heartbeat goroutine cancelled")
+			return
+		}
+	}
+}
+
 // receiveJournal consumes journal streams from all FLOW connections in parallel
 func (r *Replicator) receiveJournal() error {
 	log.Println("")
@@ -1228,6 +1290,12 @@ func (r *Replicator) receiveJournal() error {
 		}
 	}()
 	defer close(perfDone)
+
+	// CRITICAL: Start REPLCONF ACK heartbeat to maintain connection with master
+	// DragonflyDB requires periodic ACKs to prevent replication timeout (default 30s)
+	heartbeatDone := make(chan struct{})
+	go r.startHeartbeat(heartbeatDone)
+	defer close(heartbeatDone)
 
 	log.Printf("  • Listening to all %d FLOW connections in parallel", numFlows)
 
@@ -1493,21 +1561,33 @@ func (r *Replicator) replayCommand(flowID int, entry *JournalEntry) error {
 		return nil
 
 	case OpPing:
-		// Ignore heartbeat
-		log.Printf("  [FLOW-%d] ⊘ Skipped PING (reason: heartbeat, no action needed)", flowID)
+		// CRITICAL: Master sent PING, we must respond immediately with ACK
+		log.Printf("  [FLOW-%d] ⊘ Received PING (forcing immediate ACK)", flowID)
+		r.ackMu.Lock()
+		r.forcePing = true
+		r.ackMu.Unlock()
+
 		r.replayStats.mu.Lock()
 		r.replayStats.Skipped++
 		r.replayStats.mu.Unlock()
 		return nil
 
 	case OpLSN:
-		// Track LSN only
+		// Track LSN and update last acked LSN for REPLCONF ACK
 		r.replayStats.mu.Lock()
 		if r.replayStats.FlowLSNs == nil {
 			r.replayStats.FlowLSNs = make(map[int]uint64)
 		}
 		r.replayStats.FlowLSNs[flowID] = entry.LSN
 		r.replayStats.mu.Unlock()
+
+		// Update last acked LSN for heartbeat
+		r.ackMu.Lock()
+		if entry.LSN > r.lastAckedLSN {
+			r.lastAckedLSN = entry.LSN
+		}
+		r.ackMu.Unlock()
+
 		r.recordFlowLSN(flowID, entry.LSN)
 		return nil
 
