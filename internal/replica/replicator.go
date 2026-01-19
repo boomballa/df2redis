@@ -2259,17 +2259,41 @@ func (r *Replicator) ReportOps(opsCount int) {
 		timestamp: now,
 	})
 
+	r.recalculateGlobalQPS(now)
+
+	// Update peak QPS
+	if r.globalPerfMetrics.qpsCurrent > r.globalPerfMetrics.qpsPeak {
+		r.globalPerfMetrics.qpsPeak = r.globalPerfMetrics.qpsCurrent
+	}
+
+	// Update average tracking
+	r.globalPerfMetrics.qpsSum += r.globalPerfMetrics.qpsCurrent
+	r.globalPerfMetrics.qpsCount++
+}
+
+// recalculateGlobalQPS prunes old window entries and calculates current QPS.
+// Caller must hold globalPerfMetrics.mu
+func (r *Replicator) recalculateGlobalQPS(now time.Time) {
 	// Remove operations older than 1 second
 	cutoff := now.Add(-1 * time.Second)
-	validIdx := 0
+
+	// Find first VALID index (atomic prune)
+	firstValid := -1
 	for i, record := range r.globalPerfMetrics.opsWindow {
 		if record.timestamp.After(cutoff) {
-			validIdx = i
+			firstValid = i
 			break
 		}
 	}
-	if validIdx > 0 && validIdx < len(r.globalPerfMetrics.opsWindow) {
-		r.globalPerfMetrics.opsWindow = r.globalPerfMetrics.opsWindow[validIdx:]
+
+	if firstValid == -1 {
+		// No valid records found (all expired or empty)
+		if len(r.globalPerfMetrics.opsWindow) > 0 {
+			r.globalPerfMetrics.opsWindow = r.globalPerfMetrics.opsWindow[:0]
+		}
+	} else if firstValid > 0 {
+		// Slice matches to keep only valid records
+		r.globalPerfMetrics.opsWindow = r.globalPerfMetrics.opsWindow[firstValid:]
 	}
 
 	// Calculate real global QPS: total ops in last 1 second across ALL flows
@@ -2287,17 +2311,9 @@ func (r *Replicator) ReportOps(opsCount int) {
 			r.globalPerfMetrics.qpsCurrent = float64(totalOps)
 		}
 	} else {
+		// No ops in window -> 0 QPS
 		r.globalPerfMetrics.qpsCurrent = 0
 	}
-
-	// Update peak QPS
-	if r.globalPerfMetrics.qpsCurrent > r.globalPerfMetrics.qpsPeak {
-		r.globalPerfMetrics.qpsPeak = r.globalPerfMetrics.qpsCurrent
-	}
-
-	// Update average tracking
-	r.globalPerfMetrics.qpsSum += r.globalPerfMetrics.qpsCurrent
-	r.globalPerfMetrics.qpsCount++
 }
 
 // collectPerfMetrics aggregates performance metrics from all flow writers
@@ -2308,6 +2324,9 @@ func (r *Replicator) collectPerfMetrics() {
 
 	// Use global QPS metrics (already calculated in ReportOps)
 	r.globalPerfMetrics.mu.Lock()
+	// CRITICAL FIX: Force recalculation to prune expired ops from window.
+	// This allows QPS to decay to 0 when no new ops are coming in (e.g. idle journal).
+	r.recalculateGlobalQPS(time.Now())
 	globalQPSCurrent := r.globalPerfMetrics.qpsCurrent
 	globalQPSPeak := r.globalPerfMetrics.qpsPeak
 	globalQPSAvg := 0.0
