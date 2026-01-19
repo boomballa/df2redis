@@ -29,6 +29,7 @@ type Snapshot struct {
 	Metrics        map[string]float64       `json:"metrics"`
 	Events         []Event                  `json:"events"`
 	Check          *CheckResult             `json:"check,omitempty"`
+	History        *HistoryStore            `json:"history,omitempty"` // Added for chart persistence
 	UpdatedAt      time.Time                `json:"updatedAt"`
 }
 

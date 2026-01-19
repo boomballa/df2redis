@@ -484,7 +484,7 @@
             padding: 10,
             displayColors: false,
             callbacks: {
-              label: function(context) {
+              label: function (context) {
                 return 'QPS: ' + context.parsed.y.toFixed(0);
               }
             }
@@ -552,7 +552,7 @@
             padding: 10,
             displayColors: true,
             callbacks: {
-              label: function(context) {
+              label: function (context) {
                 return context.dataset.label + ': ' + context.parsed.y.toFixed(1) + ' ms';
               }
             }
@@ -577,7 +577,7 @@
             },
             ticks: {
               color: '#64748b',
-              callback: function(value) {
+              callback: function (value) {
                 return value + ' ms';
               }
             }
@@ -598,27 +598,24 @@
     document.getElementById('qps-avg').textContent = qpsAvg > 0 ? qpsAvg.toFixed(0) : '--';
 
     // Update QPS chart
-    if (!qpsChart) {
-      initQPSChart();
-    }
+    if (qpsChart) {
+      const now = Date.now();
 
-    if (qpsChart && qpsCurrent > 0) {
-      const now = new Date();
-      const timeLabel = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-      qpsHistoryData.labels.push(timeLabel);
-      qpsHistoryData.datasets[0].data.push(qpsCurrent);
-
-      // Keep last 60 data points (5 minutes at 5s intervals)
-      if (qpsHistoryData.labels.length > 60) {
-        qpsHistoryData.labels.shift();
-        qpsHistoryData.datasets[0].data.shift();
+      // Use backend history if available (Syncs full history every 1s - simple but effective for localhost)
+      if (metrics.history && metrics.history.qps && metrics.history.qps.points) {
+        // Full replace strategy
+        const points = metrics.history.qps.points;
+        qpsHelperData.labels = points.map(p => formatTimeShort(p.ts));
+        qpsHelperData.datasets[0].data = points.map(p => p.v);
+      } else {
+        // Fallback: Client-side append only
+        const label = formatTimeShort(now);
+        addData(qpsChart, label, qpsCurrent);
       }
-
-      qpsChart.update('none'); // Update without animation for smoothness
+      qpsChart.update('none'); // 'none' mode for performance
     }
 
-    // Update Latency metrics
+    // Update Latency metrics (text)
     const latencyP50 = metrics['perf.latency.p50'] || 0;
     const latencyP95 = metrics['perf.latency.p95'] || 0;
     const latencyP99 = metrics['perf.latency.p99'] || 0;
@@ -632,30 +629,59 @@
     document.getElementById('latency-max').textContent = latencyMax > 0 ? latencyMax.toFixed(1) : '--';
 
     // Update Latency chart
-    if (!latencyChart) {
-      initLatencyChart();
-    }
+    if (latencyChart) {
+      if (metrics.history && metrics.history.latency_p50 && metrics.history.latency_p99) {
+        // Full replace strategy
+        const branchP50 = metrics.history.latency_p50.points || [];
+        const branchP95 = metrics.history.latency_p95.points || [];
+        const branchP99 = metrics.history.latency_p99.points || [];
 
-    if (latencyChart && (latencyP50 > 0 || latencyP95 > 0 || latencyP99 > 0)) {
-      const now = new Date();
-      const timeLabel = now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        // Assuming all have aligned timestamps, use P99 for labels
+        latencyHelperData.labels = branchP99.map(p => formatTimeShort(p.ts));
+        latencyHelperData.datasets[0].data = branchP99.map(p => p.v); // P99
+        latencyHelperData.datasets[1].data = branchP95.map(p => p.v); // P95
+        latencyHelperData.datasets[2].data = branchP50.map(p => p.v); // P50
+      } else {
+        // Fallback: Client-side append
+        const label = formatTimeShort(Date.now());
+        const latP50 = metrics['perf.latency.p50'] || 0;
+        const latP95 = metrics['perf.latency.p95'] || 0;
+        const latP99 = metrics['perf.latency.p99'] || 0;
 
-      latencyHistoryData.labels.push(timeLabel);
-      latencyHistoryData.datasets[0].data.push(latencyP99); // P99
-      latencyHistoryData.datasets[1].data.push(latencyP95); // P95
-      latencyHistoryData.datasets[2].data.push(latencyP50); // P50
-
-      // Keep last 60 data points (5 minutes at 5s intervals)
-      if (latencyHistoryData.labels.length > 60) {
-        latencyHistoryData.labels.shift();
-        latencyHistoryData.datasets[0].data.shift();
-        latencyHistoryData.datasets[1].data.shift();
-        latencyHistoryData.datasets[2].data.shift();
+        if (latencyChart.data.labels.length > 60) {
+          latencyChart.data.labels.shift();
+          latencyChart.data.datasets.forEach((dataset) => {
+            dataset.data.shift();
+          });
+        }
+        latencyChart.data.labels.push(label);
+        latencyChart.data.datasets[0].data.push(latP99);
+        latencyChart.data.datasets[1].data.push(latP95);
+        latencyChart.data.datasets[2].data.push(latP50);
       }
-
-      latencyChart.update('none'); // Update without animation for smoothness
+      latencyChart.update('none');
     }
   }
+
+  function addData(chart, label, data) {
+    if (chart.data.labels.length > 300) { // Keep last 5 mins client-side if no backend history
+      chart.data.labels.shift();
+      chart.data.datasets.forEach((dataset) => {
+        dataset.data.shift();
+      });
+    }
+    chart.data.labels.push(label);
+    chart.data.datasets.forEach((dataset) => {
+      dataset.data.push(data);
+    });
+  }
+
+  function formatTimeShort(ts) {
+    const d = new Date(ts);
+    return d.toTimeString().split(' ')[0]; // HH:MM:SS
+  }
+
+
 
   // ==============================================
   // Inconsistent Samples Display

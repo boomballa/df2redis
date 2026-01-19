@@ -34,6 +34,9 @@ type DashboardServer struct {
 	// Callback for dynamic configuration
 	onConfigUpdate func(qps int, batchSize int) error
 
+	// Provider for in-memory history
+	historyProvider func() *state.HistoryStore
+
 	// Check task management
 	checkMu      sync.RWMutex
 	checkRunning bool
@@ -46,10 +49,11 @@ type DashboardServer struct {
 
 // Options configure the dashboard server.
 type Options struct {
-	Addr           string
-	Cfg            *config.Config
-	Store          *state.Store
-	OnConfigUpdate func(qps int, batchSize int) error
+	Addr            string
+	Cfg             *config.Config
+	Store           *state.Store
+	OnConfigUpdate  func(qps int, batchSize int) error
+	HistoryProvider func() *state.HistoryStore
 }
 
 // New creates a dashboard server.
@@ -85,12 +89,13 @@ func New(opts Options) (*DashboardServer, error) {
 	}
 
 	return &DashboardServer{
-		addr:           opts.Addr,
-		cfg:            opts.Cfg,
-		store:          opts.Store,
-		tmpl:           tmpl,
-		onConfigUpdate: opts.OnConfigUpdate,
-		logger:         dashLogger,
+		addr:            opts.Addr,
+		cfg:             opts.Cfg,
+		store:           opts.Store,
+		tmpl:            tmpl,
+		onConfigUpdate:  opts.OnConfigUpdate,
+		historyProvider: opts.HistoryProvider,
+		logger:          dashLogger,
 	}, nil
 }
 
@@ -234,11 +239,7 @@ func (s *DashboardServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *DashboardServer) handleStatus(w http.ResponseWriter, r *http.Request) {
-	snap, err := s.store.Load()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	snap := s.currentSnapshot()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(snap)
 }
@@ -364,9 +365,15 @@ func (s *DashboardServer) currentSnapshot() state.Snapshot {
 	if snap.UpdatedAt.IsZero() {
 		loaded, err := s.store.Load()
 		if err == nil {
-			return loaded
+			snap = loaded
 		}
 	}
+
+	// Inject in-memory history if provider is available
+	if s.historyProvider != nil {
+		snap.History = s.historyProvider()
+	}
+
 	return snap
 }
 

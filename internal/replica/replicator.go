@@ -85,6 +85,9 @@ type Replicator struct {
 		latencies []float64 // in ms
 		mu        sync.Mutex
 	}
+
+	// Historical metrics for charts
+	history *state.HistoryStore
 }
 
 // NewReplicator creates a new replicator
@@ -115,6 +118,11 @@ func (r *Replicator) AttachStateStore(store *state.Store) {
 	if store != nil && r.metrics == nil {
 		r.metrics = newMetricsRecorder(store)
 	}
+}
+
+// GetHistoryStore returns the in-memory history store
+func (r *Replicator) GetHistoryStore() *state.HistoryStore {
+	return r.history
 }
 
 // Start launches the replication workflow
@@ -2399,12 +2407,29 @@ func (r *Replicator) collectPerfMetrics() {
 	r.metrics.Set(state.MetricQPSPeak, globalQPSPeak)
 	r.metrics.Set(state.MetricQPSAvg, globalQPSAvg)
 
+	// Push to history
+	r.history.QPS.Add(globalQPSCurrent)
+
 	if count > 0 {
+		avgP50 := totalLatencyP50 / float64(count)
+		avgP95 := totalLatencyP95 / float64(count)
+		avgP99 := totalLatencyP99 / float64(count)
+
 		// Use average latency across all flows for more dynamic visualization
-		r.metrics.Set(state.MetricLatencyP50, totalLatencyP50/float64(count))
-		r.metrics.Set(state.MetricLatencyP95, totalLatencyP95/float64(count))
-		r.metrics.Set(state.MetricLatencyP99, totalLatencyP99/float64(count))
+		r.metrics.Set(state.MetricLatencyP50, avgP50)
+		r.metrics.Set(state.MetricLatencyP95, avgP95)
+		r.metrics.Set(state.MetricLatencyP99, avgP99)
 		r.metrics.Set(state.MetricLatencyAvg, totalLatencyAvg/float64(count))
 		r.metrics.Set(state.MetricLatencyMax, maxLatencyMax)
+
+		// Push to history
+		r.history.LatencyP50.Add(avgP50)
+		r.history.LatencyP95.Add(avgP95)
+		r.history.LatencyP99.Add(avgP99)
+	} else {
+		// No activity, record 0 for latency in history to keep chart moving
+		r.history.LatencyP50.Add(0)
+		r.history.LatencyP95.Add(0)
+		r.history.LatencyP99.Add(0)
 	}
 }
