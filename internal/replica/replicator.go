@@ -1200,57 +1200,57 @@ type FlowEntry struct {
 	Error  error
 }
 
-// sendREPLCONFAck sends REPLCONF ACK command to master with current LSN
-func (r *Replicator) sendREPLCONFAck() error {
-	r.ackMu.Lock()
-	lsn := r.lastAckedLSN
-	r.lastAckedTime = time.Now()
-	r.forcePing = false
-	r.ackMu.Unlock()
+// sendFlowACK sends REPLCONF ACK command on a specific FLOW connection
+func (r *Replicator) sendFlowACK(flowID int, lsn uint64) error {
+	flowConn := r.flowConns[flowID]
+	if flowConn == nil {
+		return fmt.Errorf("flow connection %d is nil", flowID)
+	}
 
-	_, err := r.mainConn.Do("REPLCONF", "ACK", fmt.Sprintf("%d", lsn))
+	_, err := flowConn.Do("REPLCONF", "ACK", fmt.Sprintf("%d", lsn))
 	if err != nil {
-		log.Printf("⚠️  REPLCONF ACK failed (LSN=%d): %v", lsn, err)
+		log.Printf("  [FLOW-%d] ⚠️  REPLCONF ACK failed (LSN=%d): %v", flowID, lsn, err)
 		return err
 	}
 
-	log.Printf("  ✓ REPLCONF ACK sent (LSN=%d)", lsn)
+	log.Printf("  [FLOW-%d] ✓ REPLCONF ACK sent (LSN=%d)", flowID, lsn)
 	return nil
 }
 
-// startHeartbeat launches a goroutine that periodically sends REPLCONF ACK
-func (r *Replicator) startHeartbeat(done chan struct{}) {
+// startFlowHeartbeat launches a goroutine that periodically sends REPLCONF ACK for a specific FLOW
+func (r *Replicator) startFlowHeartbeat(flowID int, currentLSN *uint64, forcePing *bool, mu *sync.Mutex, done chan struct{}) {
 	ticker := time.NewTicker(1 * time.Second) // Send ACK every 1 second
 	defer ticker.Stop()
 
-	log.Println("  ✓ Heartbeat (REPLCONF ACK) goroutine started")
+	log.Printf("  [FLOW-%d] ✓ Heartbeat goroutine started", flowID)
 
 	for {
 		select {
 		case <-ticker.C:
-			// Check if forced ping is set
-			r.ackMu.Lock()
-			forcePing := r.forcePing
-			r.ackMu.Unlock()
+			mu.Lock()
+			lsn := *currentLSN
+			ping := *forcePing
+			*forcePing = false
+			mu.Unlock()
 
-			if forcePing {
+			if ping {
 				// PING received, send ACK immediately
-				if err := r.sendREPLCONFAck(); err != nil {
-					log.Printf("⚠️  Heartbeat ACK failed: %v", err)
+				if err := r.sendFlowACK(flowID, lsn); err != nil {
+					log.Printf("  [FLOW-%d] ⚠️  Heartbeat ACK failed: %v", flowID, err)
 				}
 			} else {
 				// Regular periodic ACK
-				if err := r.sendREPLCONFAck(); err != nil {
-					log.Printf("⚠️  Heartbeat ACK failed: %v", err)
+				if err := r.sendFlowACK(flowID, lsn); err != nil {
+					log.Printf("  [FLOW-%d] ⚠️  Heartbeat ACK failed: %v", flowID, err)
 				}
 			}
 
 		case <-done:
-			log.Println("  ✓ Heartbeat goroutine stopped")
+			log.Printf("  [FLOW-%d] ✓ Heartbeat goroutine stopped", flowID)
 			return
 
 		case <-r.ctx.Done():
-			log.Println("  ✓ Heartbeat goroutine cancelled")
+			log.Printf("  [FLOW-%d] ✓ Heartbeat goroutine cancelled", flowID)
 			return
 		}
 	}
@@ -1291,13 +1291,8 @@ func (r *Replicator) receiveJournal() error {
 	}()
 	defer close(perfDone)
 
-	// CRITICAL: Start REPLCONF ACK heartbeat to maintain connection with master
-	// DragonflyDB requires periodic ACKs to prevent replication timeout (default 30s)
-	heartbeatDone := make(chan struct{})
-	go r.startHeartbeat(heartbeatDone)
-	defer close(heartbeatDone)
-
 	log.Printf("  • Listening to all %d FLOW connections in parallel", numFlows)
+	log.Printf("  • Each FLOW will maintain independent REPLCONF ACK heartbeat")
 
 	// Channel for entries from all FLOWs
 	entryChan := make(chan *FlowEntry, 100)
@@ -1391,6 +1386,13 @@ func (r *Replicator) receiveJournal() error {
 	return nil
 }
 
+// FlowACKState tracks REPLCONF ACK state for a single FLOW
+type FlowACKState struct {
+	currentLSN uint64
+	forcePing  bool
+	mu         sync.Mutex
+}
+
 // readFlowJournal reads the journal stream for a specific FLOW
 func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg *sync.WaitGroup) {
 	defer wg.Done()
@@ -1400,6 +1402,16 @@ func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg
 	reader := NewJournalReader(r.flowBufReaders[flowID])
 	log.Printf("  [FLOW-%d] Starting journal stream reception", flowID)
 	r.recordFlowStage(flowID, "journal", "Listening to journal stream")
+
+	// CRITICAL: Start REPLCONF ACK heartbeat for THIS flow
+	// Each flow maintains its own connection to master and must send independent ACKs
+	ackState := &FlowACKState{
+		currentLSN: 0,
+		forcePing:  false,
+	}
+	heartbeatDone := make(chan struct{})
+	go r.startFlowHeartbeat(flowID, &ackState.currentLSN, &ackState.forcePing, &ackState.mu, heartbeatDone)
+	defer close(heartbeatDone)
 
 	for {
 		// Observe cancellation
@@ -1425,6 +1437,21 @@ func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg
 			}
 			r.recordFlowStage(flowID, "error", fmt.Sprintf("Journal read failed: %v", err))
 			return
+		}
+
+		// Update ACK state for LSN and PING opcodes
+		switch entry.Opcode {
+		case OpLSN:
+			ackState.mu.Lock()
+			if entry.LSN > ackState.currentLSN {
+				ackState.currentLSN = entry.LSN
+			}
+			ackState.mu.Unlock()
+
+		case OpPing:
+			ackState.mu.Lock()
+			ackState.forcePing = true
+			ackState.mu.Unlock()
 		}
 
 		// Forward entry
