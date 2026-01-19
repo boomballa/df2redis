@@ -109,6 +109,7 @@ func NewReplicator(cfg *config.Config) *Replicator {
 		checkpointMgr:      checkpoint.NewManager(checkpointPath),
 		checkpointInterval: checkpointInterval,
 		done:               make(chan struct{}),
+		history:            state.NewHistoryStore(),
 	}
 }
 
