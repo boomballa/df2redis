@@ -1204,45 +1204,70 @@ type FlowEntry struct {
 // CRITICAL: DragonflyDB master does NOT send a response to REPLCONF ACK commands
 // to avoid interleaving with journal stream. We must use raw write, not Do().
 func (r *Replicator) sendFlowACK(flowID int, lsn uint64) error {
+	log.Printf("  [FLOW-%d] [DEBUG] sendFlowACK entered with LSN=%d", flowID, lsn)
+
 	flowConn := r.flowConns[flowID]
 	if flowConn == nil {
+		log.Printf("  [FLOW-%d] [DEBUG] flowConn is nil!", flowID)
 		return fmt.Errorf("flow connection %d is nil", flowID)
 	}
+
+	log.Printf("  [FLOW-%d] [DEBUG] flowConn is valid, constructing command", flowID)
 
 	// Construct RESP protocol command manually: *3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$<len>\r\n<lsn>\r\n
 	lsnStr := fmt.Sprintf("%d", lsn)
 	cmd := fmt.Sprintf("*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$%d\r\n%s\r\n", len(lsnStr), lsnStr)
 
+	log.Printf("  [FLOW-%d] [DEBUG] Command constructed: %q", flowID, cmd)
+
 	// Write directly to underlying connection (no response expected)
-	_, err := flowConn.Write([]byte(cmd))
+	n, err := flowConn.Write([]byte(cmd))
 	if err != nil {
 		log.Printf("  [FLOW-%d] ⚠️  REPLCONF ACK failed (LSN=%d): %v", flowID, lsn, err)
 		return err
 	}
 
+	log.Printf("  [FLOW-%d] [DEBUG] Write succeeded, wrote %d bytes", flowID, n)
 	log.Printf("  [FLOW-%d] ✓ REPLCONF ACK sent (LSN=%d)", flowID, lsn)
 	return nil
 }
 
 // startFlowHeartbeat launches a goroutine that periodically sends REPLCONF ACK for a specific FLOW
 func (r *Replicator) startFlowHeartbeat(flowID int, currentLSN *uint64, forcePing *bool, mu *sync.Mutex, done chan struct{}) {
+	log.Printf("  [FLOW-%d] [DEBUG] startFlowHeartbeat function entered", flowID)
+
 	ticker := time.NewTicker(1 * time.Second) // Send ACK every 1 second
 	defer ticker.Stop()
 
-	log.Printf("  [FLOW-%d] ✓ Heartbeat goroutine started", flowID)
+	log.Printf("  [FLOW-%d] ✓ Heartbeat goroutine started, ticker created", flowID)
+	log.Printf("  [FLOW-%d] [DEBUG] About to enter for loop", flowID)
+
+	// Track first iteration
+	firstIteration := true
 
 	for {
+		if firstIteration {
+			log.Printf("  [FLOW-%d] [DEBUG] First iteration of for loop", flowID)
+			firstIteration = false
+		}
+
 		select {
 		case <-ticker.C:
+			log.Printf("  [FLOW-%d] [DEBUG] Ticker fired", flowID)
+
 			mu.Lock()
 			lsn := *currentLSN
 			*forcePing = false // Reset forcePing flag after reading LSN
 			mu.Unlock()
 
+			log.Printf("  [FLOW-%d] [DEBUG] About to call sendFlowACK with LSN=%d", flowID, lsn)
+
 			// Send ACK (either forced by PING or periodic)
 			if err := r.sendFlowACK(flowID, lsn); err != nil {
 				log.Printf("  [FLOW-%d] ⚠️  Heartbeat ACK failed: %v", flowID, err)
 			}
+
+			log.Printf("  [FLOW-%d] [DEBUG] sendFlowACK returned", flowID)
 
 		case <-done:
 			log.Printf("  [FLOW-%d] ✓ Heartbeat goroutine stopped", flowID)
