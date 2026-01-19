@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -77,6 +78,12 @@ type Replicator struct {
 		qpsSum     float64
 		qpsCount   int64
 		mu         sync.Mutex
+	}
+
+	// Journal phase latency tracking
+	journalPerf struct {
+		latencies []float64 // in ms
+		mu        sync.Mutex
 	}
 }
 
@@ -1195,11 +1202,31 @@ func (r *Replicator) receiveJournal() error {
 	// Update pipeline status to incremental now that journal streaming is starting
 	r.recordPipelineStatus("incremental", "Replaying journal incrementally")
 	r.recordStage("replicator", "journal", "Listening to journal stream")
+	r.state = StateStableSync // Set state to Incremental/Stable
 
 	numFlows := len(r.flowConns)
 	if numFlows == 0 {
 		return fmt.Errorf("no FLOW connections available")
 	}
+
+	// CRITICAL FIX: Periodically collect performance metrics during Journal phase.
+	// We reuse the same logic as in RDB phase to ensure dashboard is updated.
+	perfTicker := time.NewTicker(1 * time.Second)
+	perfDone := make(chan struct{})
+	go func() {
+		defer perfTicker.Stop()
+		for {
+			select {
+			case <-perfTicker.C:
+				r.collectPerfMetrics()
+			case <-perfDone:
+				return
+			case <-r.ctx.Done():
+				return
+			}
+		}
+	}()
+	defer close(perfDone)
 
 	log.Printf("  • Listening to all %d FLOW connections in parallel", numFlows)
 
@@ -1250,9 +1277,14 @@ func (r *Replicator) receiveJournal() error {
 		r.replayStats.TotalCommands++
 		r.replayStats.mu.Unlock()
 
+		// METRICS INSTRUMENTATION: Track latency and ops count
+		start := time.Now()
 		if err := r.replayCommand(flowEntry.FlowID, entry); err != nil {
 			log.Printf("  ✗ Replay failed: %v", err)
 		}
+		duration := time.Since(start)
+		r.addJournalLatency(duration)
+		r.ReportOps(1)
 
 		// Attempt automatic checkpoint save
 		r.tryAutoSaveCheckpoint()
@@ -2310,6 +2342,36 @@ func (r *Replicator) collectPerfMetrics() {
 		}
 
 		count++
+	}
+
+	// OVERRIDE: If in Journal phase, use journal-specific latency stats
+	if r.state == StateStableSync {
+		r.journalPerf.mu.Lock()
+		latencies := r.journalPerf.latencies
+		// Reset slice (keep capacity)
+		r.journalPerf.latencies = make([]float64, 0, len(latencies))
+		r.journalPerf.mu.Unlock()
+
+		count = 0 // Reset flow writer count to ignore them
+		if len(latencies) > 0 {
+			sort.Float64s(latencies)
+			count = 1 // Treat as single source
+
+			totalLatencyP50 = latencies[int(float64(len(latencies))*0.50)]
+			totalLatencyP95 = latencies[int(float64(len(latencies))*0.95)]
+			totalLatencyP99 = latencies[int(float64(len(latencies))*0.99)]
+
+			sum := 0.0
+			max := 0.0
+			for _, v := range latencies {
+				sum += v
+				if v > max {
+					max = v
+				}
+			}
+			totalLatencyAvg = sum / float64(len(latencies))
+			maxLatencyMax = max
+		}
 	}
 
 	// Record aggregated metrics
