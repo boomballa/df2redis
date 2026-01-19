@@ -143,9 +143,12 @@
 
     <!-- Row 2: Flow Visualization & Stage Progress -->
     <div class="grid grid-2" style="grid-template-columns: 1fr 1fr;">
-        <section class="card" id="flow-card">
-            <div class="card-title">Sync Flow Visualization</div>
-            <div class="flow-diagram" id="flow-diagram">
+        <!-- Flow Card: Matches height, content centered and scaled down -->
+        <section class="card" id="flow-card"
+            style="display:flex; flex-direction:column; justify-content:center; align-items:center; height: 650px;">
+            <div class="card-title" style="width:100%; margin-bottom:0;">Sync Flow Visualization</div>
+            <div class="flow-diagram" id="flow-diagram"
+                style="transform: scale(0.9); width:100%; flex:1; display:flex; flex-direction:column; justify-content:center;">
                 <div class="flow-step" data-status="completed">
                     <div class="flow-node">
                         <div class="flow-header">
@@ -193,7 +196,8 @@
             </div>
         </section>
 
-        <section class="card" style="display:flex; flex-direction:column; max-height: 580px;">
+        <!-- Stage Progress: Increased height to 650px -->
+        <section class="card" style="display:flex; flex-direction:column; height: 650px;">
             <div class="card-title">Stage progress</div>
             <div style="flex:1; overflow-y:auto; padding-right:4px;">
                 <table class="table" id="stages-table">
