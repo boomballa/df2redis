@@ -849,6 +849,16 @@ func (r *Replicator) receiveSnapshot() error {
 
 					if completedCount == numFlows {
 						log.Printf("  [FLOW-%d] 🎯 All FLOWs completed RDB! Broadcasting signal...", flowID)
+
+						// CRITICAL FIX: Send STARTSTABLE to tell Dragonfly to stop sending inline journal blobs and send EOF.
+						// Without this, we will read forever waiting for EOF.
+						go func() {
+							if err := r.sendStartStable(); err != nil {
+								log.Printf("  ❌ Failed to send STARTSTABLE: %v", err)
+								errChan <- err
+							}
+						}()
+
 						close(rdbCompletionBarrier)
 					}
 
