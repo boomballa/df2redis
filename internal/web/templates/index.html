@@ -145,60 +145,63 @@
     <div class="grid grid-2" style="grid-template-columns: 1fr 1fr;">
         <!-- Flow Card: Matches height, content centered and scaled down -->
         <section class="card" id="flow-card"
-            style="display:flex; flex-direction:column; justify-content:center; align-items:center; height: 650px;">
-            <div class="card-title" style="width:100%; margin-bottom:0;">Sync Flow Visualization</div>
-            <div class="flow-diagram" id="flow-diagram"
-                style="transform: scale(0.9); width:100%; flex:1; display:flex; flex-direction:column; justify-content:center;">
-                <div class="flow-step" data-status="completed">
-                    <div class="flow-node">
-                        <div class="flow-header">
-                            <div class="flow-icon">🤝</div>
-                            <div class="flow-label">Handshake</div>
+            style="display:flex; flex-direction:column; height: 850px; position: relative; overflow: hidden;">
+            <div class="card-title" style="flex-shrink: 0;">Sync Flow Visualization</div>
+
+            <!-- Flow Diagram Container: Centered vertically and horizontally -->
+            <div style="flex:1; display:flex; justify-content:center; align-items:center; width:100%;">
+                <div class="flow-diagram" id="flow-diagram" style="transform: scale(0.9); width:100%;">
+                    <div class="flow-step" data-status="completed">
+                        <div class="flow-node">
+                            <div class="flow-header">
+                                <div class="flow-icon">🤝</div>
+                                <div class="flow-label">Handshake</div>
+                            </div>
+                            <div class="flow-description">Establishing connection with Dragonfly</div>
+                            <div class="flow-status">Status: <span class="status-text">Completed ✓</span></div>
                         </div>
-                        <div class="flow-description">Establishing connection with Dragonfly</div>
-                        <div class="flow-status">Status: <span class="status-text">Completed ✓</span></div>
+                        <div class="flow-connector"></div>
                     </div>
-                    <div class="flow-connector"></div>
-                </div>
-                <div class="flow-step" data-status="completed">
-                    <div class="flow-node">
-                        <div class="flow-header">
-                            <div class="flow-icon">📦</div>
-                            <div class="flow-label">RDB Snapshot</div>
+                    <div class="flow-step" data-status="completed">
+                        <div class="flow-node">
+                            <div class="flow-header">
+                                <div class="flow-icon">📦</div>
+                                <div class="flow-label">RDB Snapshot</div>
+                            </div>
+                            <div class="flow-description">Full data transfer from source</div>
+                            <div class="flow-status">Imported: <span class="status-value">--</span> keys</div>
                         </div>
-                        <div class="flow-description">Full data transfer from source</div>
-                        <div class="flow-status">Imported: <span class="status-value">--</span> keys</div>
+                        <div class="flow-connector"></div>
                     </div>
-                    <div class="flow-connector"></div>
-                </div>
-                <div class="flow-step" data-status="active">
-                    <div class="flow-node">
-                        <div class="flow-header">
-                            <div class="flow-icon">📝</div>
-                            <div class="flow-label">Journal Stream (Continuous)</div>
+                    <div class="flow-step" data-status="active">
+                        <div class="flow-node">
+                            <div class="flow-header">
+                                <div class="flow-icon">📝</div>
+                                <div class="flow-label">Journal Stream (Continuous)</div>
+                            </div>
+                            <div class="flow-description">Real-time incremental replication</div>
+                            <div class="flow-status">Applied: <span class="status-value"
+                                    data-metric="sync.incremental.ops.success">--</span> operations</div>
                         </div>
-                        <div class="flow-description">Real-time incremental replication</div>
-                        <div class="flow-status">Applied: <span class="status-value"
-                                data-metric="sync.incremental.ops.success">--</span> operations</div>
+                        <div class="flow-connector"></div>
                     </div>
-                    <div class="flow-connector"></div>
-                </div>
-                <div class="flow-step" data-status="pending">
-                    <div class="flow-node">
-                        <div class="flow-header">
-                            <div class="flow-icon">✅</div>
-                            <div class="flow-label">Sync Complete</div>
+                    <div class="flow-step" data-status="pending">
+                        <div class="flow-node">
+                            <div class="flow-header">
+                                <div class="flow-icon">✅</div>
+                                <div class="flow-label">Sync Complete</div>
+                            </div>
+                            <div class="flow-description">Manually stopped by user</div>
+                            <div class="flow-status">Status: <span class="status-text">Standby</span></div>
                         </div>
-                        <div class="flow-description">Manually stopped by user</div>
-                        <div class="flow-status">Status: <span class="status-text">Standby</span></div>
                     </div>
                 </div>
             </div>
         </section>
 
-        <!-- Stage Progress: Increased height to 650px -->
-        <section class="card" style="display:flex; flex-direction:column; height: 650px;">
-            <div class="card-title">Stage progress</div>
+        <!-- Stage Progress: Increased height to 850px -->
+        <section class="card" style="display:flex; flex-direction:column; height: 850px;">
+            <div class="card-title" style="flex-shrink: 0;">Stage progress</div>
             <div style="flex:1; overflow-y:auto; padding-right:4px;">
                 <table class="table" id="stages-table">
                     <thead>
