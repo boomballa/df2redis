@@ -878,6 +878,87 @@
             opacity: 0.7;
         }
 
+        /* Tooltip Styles */
+        .tooltip-container {
+            position: relative;
+            cursor: help;
+        }
+
+        .info-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            font-size: 11px;
+            color: var(--text-muted);
+            transition: all 0.2s;
+        }
+
+        .tooltip-container:hover .info-icon {
+            background: var(--accent);
+            color: white;
+            border-color: var(--accent);
+        }
+
+        .tooltip-content {
+            position: absolute;
+            bottom: 150%;
+            right: 0;
+            width: 250px;
+            background: #1e293b;
+            border: 1px solid var(--border);
+            padding: 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--text-secondary);
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(4px);
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+            z-index: 50;
+            pointer-events: none;
+        }
+
+        /* Triangle for tooltip */
+        .tooltip-content::after {
+            content: '';
+            position: absolute;
+            top: 100%;
+            right: 5px;
+            border: 6px solid transparent;
+            border-top-color: #1e293b;
+        }
+
+        /* Triangle border */
+        .tooltip-content::before {
+            content: '';
+            position: absolute;
+            top: 100%;
+            right: 5px;
+            border: 6px solid transparent;
+            border-top-color: var(--border);
+            transform: translateY(1px);
+            z-index: -1;
+        }
+
+        .tooltip-container:hover .tooltip-content {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+
+        .tooltip-content strong {
+            color: var(--text-primary);
+            display: block;
+            margin-bottom: 4px;
+        }
+
         /* Default is collapsed in index.html logic, but button starts inactive. 
            If logs are collapsed, chevron points DOWN (▼). 
            When active (expanded), we want chevron to point UP. 

@@ -100,7 +100,18 @@
         </section>
 
         <section class="card">
-            <div class="card-title">🕐 Batch Write Latency</div>
+            <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+                <span>🕐 Batch Write Latency</span>
+                <div class="tooltip-container">
+                    <span class="info-icon">?</span>
+                    <div class="tooltip-content">
+                        <strong>Batch Processing Time</strong><br>
+                        Time taken to flush a full batch of keys (~2k-20k keys) to the target Redis.<br>
+                        <br>
+                        <span style="opacity:0.8">Example: 2000ms / 20k keys ≈ 0.1ms per key.</span>
+                    </div>
+                </div>
+            </div>
             <!-- Compact horizontal metrics display -->
             <div
                 style="display:flex; justify-content:space-around; padding:16px 0; border-bottom:1px solid rgba(51,65,85,0.5); margin-bottom:16px;">
