@@ -205,8 +205,19 @@ func (c *Client) Write(data []byte) (int, error) {
 		return 0, errors.New("redisx: client closed")
 	}
 
+	// Set write deadline to prevent indefinite blocking if TCP send buffer is full
+	// If Dragonfly master is not reading from the socket, Write() will timeout
+	if err := c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return 0, fmt.Errorf("redisx: failed to set write deadline: %w", err)
+	}
+
 	// Write directly without holding mutex (net.Conn is goroutine-safe)
-	return c.conn.Write(data)
+	n, err := c.conn.Write(data)
+
+	// Clear write deadline after write completes (or fails)
+	_ = c.conn.SetWriteDeadline(time.Time{})
+
+	return n, err
 }
 
 // Do sends a command and returns the parsed RESP reply.
