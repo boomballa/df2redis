@@ -188,6 +188,18 @@ func (c *Client) Read(buf []byte) (int, error) {
 	return c.reader.Read(buf)
 }
 
+// Write writes data directly to the underlying connection without waiting for a response.
+// This is used for REPLCONF ACK commands during journal streaming, where DragonflyDB master
+// does not send responses to avoid interleaving with journal data.
+func (c *Client) Write(data []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return 0, errors.New("redisx: client closed")
+	}
+	return c.conn.Write(data)
+}
+
 // Do sends a command and returns the parsed RESP reply.
 func (c *Client) Do(cmd string, args ...interface{}) (interface{}, error) {
 	c.mu.Lock()

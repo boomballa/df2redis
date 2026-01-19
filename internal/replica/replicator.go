@@ -1201,17 +1201,20 @@ type FlowEntry struct {
 }
 
 // sendFlowACK sends REPLCONF ACK command on a specific FLOW connection
+// CRITICAL: DragonflyDB master does NOT send a response to REPLCONF ACK commands
+// to avoid interleaving with journal stream. We must use raw write, not Do().
 func (r *Replicator) sendFlowACK(flowID int, lsn uint64) error {
-	log.Printf("  [FLOW-%d] [DEBUG] sendFlowACK called with LSN=%d", flowID, lsn)
-
 	flowConn := r.flowConns[flowID]
 	if flowConn == nil {
-		log.Printf("  [FLOW-%d] [DEBUG] flowConn is nil!", flowID)
 		return fmt.Errorf("flow connection %d is nil", flowID)
 	}
 
-	log.Printf("  [FLOW-%d] [DEBUG] Executing REPLCONF ACK command", flowID)
-	_, err := flowConn.Do("REPLCONF", "ACK", fmt.Sprintf("%d", lsn))
+	// Construct RESP protocol command manually: *3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$<len>\r\n<lsn>\r\n
+	lsnStr := fmt.Sprintf("%d", lsn)
+	cmd := fmt.Sprintf("*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$%d\r\n%s\r\n", len(lsnStr), lsnStr)
+
+	// Write directly to underlying connection (no response expected)
+	_, err := flowConn.Write([]byte(cmd))
 	if err != nil {
 		log.Printf("  [FLOW-%d] ⚠️  REPLCONF ACK failed (LSN=%d): %v", flowID, lsn, err)
 		return err
@@ -1231,28 +1234,15 @@ func (r *Replicator) startFlowHeartbeat(flowID int, currentLSN *uint64, forcePin
 	for {
 		select {
 		case <-ticker.C:
-			log.Printf("  [FLOW-%d] [DEBUG] Ticker fired, preparing to send ACK", flowID)
-
 			mu.Lock()
 			lsn := *currentLSN
 			ping := *forcePing
 			*forcePing = false
 			mu.Unlock()
 
-			log.Printf("  [FLOW-%d] [DEBUG] Current LSN=%d, forcePing=%v", flowID, lsn, ping)
-
-			if ping {
-				// PING received, send ACK immediately
-				log.Printf("  [FLOW-%d] [DEBUG] Sending ACK in response to PING", flowID)
-				if err := r.sendFlowACK(flowID, lsn); err != nil {
-					log.Printf("  [FLOW-%d] ⚠️  Heartbeat ACK failed: %v", flowID, err)
-				}
-			} else {
-				// Regular periodic ACK
-				log.Printf("  [FLOW-%d] [DEBUG] Sending periodic ACK", flowID)
-				if err := r.sendFlowACK(flowID, lsn); err != nil {
-					log.Printf("  [FLOW-%d] ⚠️  Heartbeat ACK failed: %v", flowID, err)
-				}
+			// Send ACK (either forced by PING or periodic)
+			if err := r.sendFlowACK(flowID, lsn); err != nil {
+				log.Printf("  [FLOW-%d] ⚠️  Heartbeat ACK failed: %v", flowID, err)
 			}
 
 		case <-done:
