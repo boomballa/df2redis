@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"strconv"
@@ -196,6 +197,9 @@ func (c *Client) Read(buf []byte) (int, error) {
 // reads and writes. Acquiring the mutex would cause deadlock when Read() is blocking
 // waiting for data while Write() tries to send REPLCONF ACK.
 func (c *Client) Write(data []byte) (int, error) {
+	t0 := time.Now()
+	log.Printf("[TRACE] Write() called at %s, data len=%d", t0.Format("15:04:05.000"), len(data))
+
 	// Check closed status without blocking (Read may hold the lock)
 	c.mu.Lock()
 	closed := c.closed
@@ -205,17 +209,29 @@ func (c *Client) Write(data []byte) (int, error) {
 		return 0, errors.New("redisx: client closed")
 	}
 
+	t1 := time.Now()
+	log.Printf("[TRACE] About to SetWriteDeadline at %s (elapsed: %v)", t1.Format("15:04:05.000"), t1.Sub(t0))
+
 	// Set write deadline to prevent indefinite blocking if TCP send buffer is full
 	// If Dragonfly master is not reading from the socket, Write() will timeout
 	if err := c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		return 0, fmt.Errorf("redisx: failed to set write deadline: %w", err)
 	}
 
+	t2 := time.Now()
+	log.Printf("[TRACE] About to call conn.Write() at %s (elapsed: %v)", t2.Format("15:04:05.000"), t2.Sub(t0))
+
 	// Write directly without holding mutex (net.Conn is goroutine-safe)
 	n, err := c.conn.Write(data)
 
+	t3 := time.Now()
+	log.Printf("[TRACE] conn.Write() returned at %s (elapsed: %v), n=%d, err=%v", t3.Format("15:04:05.000"), t3.Sub(t0), n, err)
+
 	// Clear write deadline after write completes (or fails)
 	_ = c.conn.SetWriteDeadline(time.Time{})
+
+	t4 := time.Now()
+	log.Printf("[TRACE] SetWriteDeadline cleared at %s (total elapsed: %v)", t4.Format("15:04:05.000"), t4.Sub(t0))
 
 	return n, err
 }

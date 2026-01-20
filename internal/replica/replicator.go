@@ -1205,7 +1205,8 @@ type FlowEntry struct {
 // CRITICAL: DragonflyDB master does NOT send a response to REPLCONF ACK commands
 // to avoid interleaving with journal stream. We must use raw write, not Do().
 func (r *Replicator) sendFlowACK(flowID int, lsn uint64) error {
-	logger.Debug("  [FLOW-%d] [DEBUG] sendFlowACK entered with LSN=%d", flowID, lsn)
+	t0 := time.Now()
+	logger.Debug("  [FLOW-%d] [TRACE] sendFlowACK entered at %s with LSN=%d", flowID, t0.Format("15:04:05.000"), lsn)
 
 	flowConn := r.flowConns[flowID]
 	if flowConn == nil {
@@ -1213,23 +1214,23 @@ func (r *Replicator) sendFlowACK(flowID int, lsn uint64) error {
 		return fmt.Errorf("flow connection %d is nil", flowID)
 	}
 
-	logger.Debug("  [FLOW-%d] [DEBUG] flowConn is valid, constructing command", flowID)
-
 	// Construct RESP protocol command manually: *3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$<len>\r\n<lsn>\r\n
 	lsnStr := fmt.Sprintf("%d", lsn)
 	cmd := fmt.Sprintf("*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$%d\r\n%s\r\n", len(lsnStr), lsnStr)
 
-	logger.Debug("  [FLOW-%d] [DEBUG] Command constructed: %q", flowID, cmd)
+	t1 := time.Now()
+	logger.Debug("  [FLOW-%d] [TRACE] About to call Write() at %s (elapsed: %v)", flowID, t1.Format("15:04:05.000"), t1.Sub(t0))
 
 	// Write directly to underlying connection (no response expected)
 	n, err := flowConn.Write([]byte(cmd))
+
+	t2 := time.Now()
 	if err != nil {
-		logger.Warn("  [FLOW-%d] ⚠️  REPLCONF ACK failed (LSN=%d): %v", flowID, lsn, err)
+		logger.Warn("  [FLOW-%d] ⚠️  REPLCONF ACK failed at %s (LSN=%d, elapsed=%v): %v", flowID, t2.Format("15:04:05.000"), lsn, t2.Sub(t0), err)
 		return err
 	}
 
-	logger.Debug("  [FLOW-%d] [DEBUG] Write succeeded, wrote %d bytes", flowID, n)
-	logger.Debug("  [FLOW-%d] ✓ REPLCONF ACK sent (LSN=%d)", flowID, lsn)
+	logger.Info("  [FLOW-%d] ✓ REPLCONF ACK sent at %s (LSN=%d, bytes=%d, elapsed=%v)", flowID, t2.Format("15:04:05.000"), lsn, n, t2.Sub(t0))
 	return nil
 }
 
@@ -1240,42 +1241,38 @@ func (r *Replicator) startFlowHeartbeat(flowID int, currentLSN *uint64, forcePin
 	ticker := time.NewTicker(1 * time.Second) // Send ACK every 1 second
 	defer ticker.Stop()
 
-	logger.Debug("  [FLOW-%d] ✓ Heartbeat goroutine started, ticker created", flowID)
-	logger.Debug("  [FLOW-%d] [DEBUG] About to enter for loop", flowID)
+	logger.Info("  [FLOW-%d] ✓ Heartbeat goroutine started", flowID)
 
-	// Track first iteration
-	firstIteration := true
+	ackCounter := 0
 
 	for {
-		if firstIteration {
-			logger.Debug("  [FLOW-%d] [DEBUG] First iteration of for loop", flowID)
-			firstIteration = false
-		}
-
 		select {
-		case <-ticker.C:
-			logger.Debug("  [FLOW-%d] [DEBUG] Ticker fired", flowID)
+		case tickTime := <-ticker.C:
+			ackCounter++
+			logger.Info("  [FLOW-%d] [TRACE] Ticker fired #%d at %s", flowID, ackCounter, tickTime.Format("15:04:05.000"))
 
 			mu.Lock()
 			lsn := *currentLSN
 			*forcePing = false // Reset forcePing flag after reading LSN
 			mu.Unlock()
 
-			logger.Debug("  [FLOW-%d] [DEBUG] About to call sendFlowACK with LSN=%d", flowID, lsn)
+			t0 := time.Now()
+			logger.Info("  [FLOW-%d] [TRACE] Calling sendFlowACK #%d with LSN=%d at %s", flowID, ackCounter, lsn, t0.Format("15:04:05.000"))
 
 			// Send ACK (either forced by PING or periodic)
 			if err := r.sendFlowACK(flowID, lsn); err != nil {
-				logger.Warn("  [FLOW-%d] ⚠️  Heartbeat ACK failed: %v", flowID, err)
+				logger.Warn("  [FLOW-%d] ⚠️  Heartbeat ACK #%d failed: %v", flowID, ackCounter, err)
 			}
 
-			logger.Debug("  [FLOW-%d] [DEBUG] sendFlowACK returned", flowID)
+			t1 := time.Now()
+			logger.Info("  [FLOW-%d] [TRACE] sendFlowACK #%d returned at %s (duration: %v)", flowID, ackCounter, t1.Format("15:04:05.000"), t1.Sub(t0))
 
 		case <-done:
-			logger.Debug("  [FLOW-%d] ✓ Heartbeat goroutine stopped", flowID)
+			logger.Info("  [FLOW-%d] ✓ Heartbeat goroutine stopped (total ACKs sent: %d)", flowID, ackCounter)
 			return
 
 		case <-r.ctx.Done():
-			logger.Debug("  [FLOW-%d] ✓ Heartbeat goroutine cancelled", flowID)
+			logger.Info("  [FLOW-%d] ✓ Heartbeat goroutine cancelled (total ACKs sent: %d)", flowID, ackCounter)
 			return
 		}
 	}
