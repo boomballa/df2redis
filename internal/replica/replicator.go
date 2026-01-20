@@ -1447,16 +1447,18 @@ func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg
 		// Read entry
 		entry, err := reader.ReadEntry()
 		if err != nil {
+			// In stable sync (incremental replication), any read error including EOF
+			// indicates an abnormal disconnection. Incremental sync should run indefinitely
+			// until explicitly stopped by user (Ctrl+C) or context cancellation.
 			if err == io.EOF {
-				log.Printf("  [FLOW-%d] Journal stream ended (EOF)", flowID)
-				r.recordFlowStage(flowID, "journal_done", "Journal stream finished")
-				return
+				err = fmt.Errorf("unexpected EOF: source connection closed (source instance may be down)")
 			}
 			// Send error to channel
 			entryChan <- &FlowEntry{
 				FlowID: flowID,
 				Error:  fmt.Errorf("read failed: %w", err),
 			}
+			log.Printf("  [FLOW-%d] ✗ Fatal error: %v", flowID, err)
 			r.recordFlowStage(flowID, "error", fmt.Sprintf("Journal read failed: %v", err))
 			return
 		}

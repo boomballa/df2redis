@@ -624,15 +624,15 @@ func runReplicate(args []string) int {
 			errCh <- err
 			return
 		}
-		// Keep running after handshake until interrupted
-		logger.Console("\n⌨️  Press Ctrl+C to stop the replicator")
-		select {}
+		// Replicator exited normally (SnapshotOnly mode or graceful shutdown via Ctrl+C)
+		logger.Console("\n⌨️  Replicator stopped")
 	}()
 
 	// Wait for error or signal
 	select {
 	case err := <-errCh:
-		logger.Error("❌ Replicator failed to start: %v", err)
+		logger.Error("❌ Replication failed: %v", err)
+		logger.Console("\n📄 Check logs for details: %s", logger.GetLogFilePath())
 		return 1
 	case sig := <-sigCh:
 		logger.Console("\n📡 Signal %v received, shutting down...", sig)
