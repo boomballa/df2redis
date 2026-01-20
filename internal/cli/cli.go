@@ -28,6 +28,12 @@ func Execute(args []string) int {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("[df2redis] ")
 
+	// Ignore SIGHUP to allow running in background without nohup
+	// When SSH session disconnects, the shell sends SIGHUP to all child processes.
+	// By ignoring SIGHUP, df2redis can continue running after session disconnect.
+	// This enables simple background execution: ./df2redis replicate &
+	signal.Ignore(syscall.SIGHUP)
+
 	if len(args) == 0 {
 		printUsage()
 		return 1
@@ -783,8 +789,20 @@ func initLogger(cfg *config.Config, mode string) error {
 	// Build file prefix
 	logFilePrefix := buildLogFilePrefix(cfg, mode)
 
+	// Smart console detection: disable console output if stdout is not a TTY
+	// This automatically handles background execution (nohup, systemd, Docker, etc.)
+	consoleEnabled := cfg.Log.ConsoleEnabledValue()
+	if consoleEnabled {
+		// Check if stdout is a terminal
+		if fileInfo, _ := os.Stdout.Stat(); (fileInfo.Mode() & os.ModeCharDevice) == 0 {
+			// stdout is not a TTY (redirected to file or pipe)
+			consoleEnabled = false
+			log.Printf("[df2redis] Detected non-TTY stdout, disabling console output (logs will continue to file)")
+		}
+	}
+
 	// Initialize logger
-	if err := logger.Init(logDir, level, logFilePrefix, cfg.Log.ConsoleEnabledValue()); err != nil {
+	if err := logger.Init(logDir, level, logFilePrefix, consoleEnabled); err != nil {
 		return fmt.Errorf("Failed to initialize logger: %w", err)
 	}
 	log.SetOutput(logger.Writer())

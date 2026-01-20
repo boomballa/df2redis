@@ -140,8 +140,10 @@ func logToConsole(format string, args ...interface{}) {
 	timestamp := time.Now().Format("2006/01/02 15:04:05")
 	message := fmt.Sprintf(format, args...)
 
-	// Use fmt directly to ensure output to stdout
-	fmt.Fprintf(os.Stdout, "%s [df2redis] %s\n", timestamp, message)
+	// Gracefully handle stdout write failures (e.g., when SSH session disconnects)
+	// If stdout is closed, the write will fail but won't crash the program
+	// Logs will continue to be written to file
+	_, _ = fmt.Fprintf(os.Stdout, "%s [df2redis] %s\n", timestamp, message)
 }
 
 // logToBoth mirrors the entry to both sinks
