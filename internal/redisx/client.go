@@ -41,7 +41,7 @@ type Client struct {
 	readDeadline time.Time
 
 	mu     sync.Mutex
-	closed int32 // 0 = open, 1 = closed (use atomic operations)
+	closed atomic.Int32 // 0 = open, 1 = closed
 }
 
 // Dial creates a new client connection.
@@ -119,11 +119,41 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 
 // Close terminates the connection.
 func (c *Client) Close() error {
-	// Use atomic CAS to ensure we only close once
-	if !atomic.CompareAndSwapInt32(&c.closed, 0, 1) {
+	// Atomic compare-and-swap to ensure we only close once
+	if !c.closed.CompareAndSwap(0, 1) {
 		return nil // Already closed
 	}
-	return c.conn.Close()
+
+	// Acquire mutex to safely access c.conn before closing
+	// This prevents a race condition if another goroutine tries to access c.conn
+	// (e.g., to set a deadline) while it's being closed.
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+
+	return conn.Close()
+}
+
+// CloseWrite performs a half-close: shuts down the write side of the connection,
+// sending TCP FIN without closing the read side. This enables graceful shutdown
+// when communicating with Dragonfly v1.36.0, which has a bug where abrupt
+// disconnection (RST) can cause deadlock in JournalStreamer::Cancel().
+//
+// After calling CloseWrite(), the connection can still receive data, but cannot send.
+// The caller should eventually call Close() to fully terminate the connection.
+func (c *Client) CloseWrite() error {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+
+	// Type assertion to get underlying *net.TCPConn
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		return tcpConn.CloseWrite()
+	}
+
+	// If not a TCP connection, fall back to full close
+	log.Printf("CloseWrite: not a TCP connection, falling back to Close()")
+	return c.Close()
 }
 
 // Ping verifies connectivity.
@@ -135,7 +165,7 @@ func (c *Client) Ping() error {
 // RawRead reads directly from the underlying connection (RDB snapshot/journal)
 // honoring the configured timeout (default 60s).
 func (c *Client) RawRead(buf []byte) (int, error) {
-	if atomic.LoadInt32(&c.closed) != 0 {
+	if c.closed.Load() != 0 {
 		return 0, errors.New("redisx: client closed")
 	}
 
@@ -153,7 +183,7 @@ func (c *Client) RawRead(buf []byte) (int, error) {
 // SetReadDeadline sets the read deadline for future Read calls.
 // If t is zero, the deadline is cleared (or falls back to default behavior).
 func (c *Client) SetReadDeadline(t time.Time) error {
-	if atomic.LoadInt32(&c.closed) != 0 {
+	if c.closed.Load() == 1 {
 		return errors.New("redisx: client closed")
 	}
 	c.mu.Lock()
@@ -165,17 +195,25 @@ func (c *Client) SetReadDeadline(t time.Time) error {
 // Read implements io.Reader for journal processing.
 // It reads via bufio.Reader to avoid skipping buffered bytes.
 func (c *Client) Read(buf []byte) (int, error) {
-	// Note: We still need mutex here to safely access c.readDeadline
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if atomic.LoadInt32(&c.closed) != 0 {
+	// CRITICAL FIX: Do NOT hold c.mu while reading!
+	// Reading from c.reader -> c.conn.Read() blocks until data arrives.
+	// If we hold c.mu here, Write() (which needs c.mu to check closed state or set deadline)
+	// will deadlock if the read blocks forever.
+
+	if c.closed.Load() != 0 {
 		return 0, errors.New("redisx: client closed")
 	}
 
+	// Acquire mutex only to safely access c.readDeadline and set the connection deadline.
+	// Release it before the potentially blocking read operation.
+	c.mu.Lock()
+	readDeadline := c.readDeadline
+	c.mu.Unlock()
+
 	// If an explicit deadline is set, use it.
 	// Otherwise, default to 24h for long-lived journal streams.
-	if !c.readDeadline.IsZero() {
-		if err := c.conn.SetReadDeadline(c.readDeadline); err != nil {
+	if !readDeadline.IsZero() {
+		if err := c.conn.SetReadDeadline(readDeadline); err != nil {
 			return 0, err
 		}
 	} else {
@@ -202,7 +240,7 @@ func (c *Client) Write(data []byte) (int, error) {
 	log.Printf("[TRACE] Write() called at %s, data len=%d", t0.Format("15:04:05.000"), len(data))
 
 	// Check closed status using atomic operation (no mutex needed, prevents deadlock with Read())
-	if atomic.LoadInt32(&c.closed) != 0 {
+	if c.closed.Load() == 1 {
 		return 0, errors.New("redisx: client closed")
 	}
 
@@ -235,7 +273,7 @@ func (c *Client) Write(data []byte) (int, error) {
 
 // Do sends a command and returns the parsed RESP reply.
 func (c *Client) Do(cmd string, args ...interface{}) (interface{}, error) {
-	if atomic.LoadInt32(&c.closed) != 0 {
+	if c.closed.Load() == 1 {
 		return nil, errors.New("redisx: client closed")
 	}
 	c.mu.Lock()
@@ -250,7 +288,7 @@ func (c *Client) Do(cmd string, args ...interface{}) (interface{}, error) {
 // DoWithTimeout sends a command with a custom timeout and returns the parsed RESP reply.
 // Useful for commands that may take longer than the default timeout (e.g., DFLY STARTSTABLE).
 func (c *Client) DoWithTimeout(timeout time.Duration, cmd string, args ...interface{}) (interface{}, error) {
-	if atomic.LoadInt32(&c.closed) != 0 {
+	if c.closed.Load() == 1 {
 		return nil, errors.New("redisx: client closed")
 	}
 	c.mu.Lock()
@@ -356,7 +394,7 @@ func (c *Client) Info(section string) (string, error) {
 // Returns a slice of results corresponding to each command.
 // If any command fails, returns error immediately.
 func (c *Client) Pipeline(cmds [][]interface{}) ([]interface{}, error) {
-	if atomic.LoadInt32(&c.closed) != 0 {
+	if c.closed.Load() != 0 {
 		return nil, errors.New("redisx: client closed")
 	}
 	c.mu.Lock()

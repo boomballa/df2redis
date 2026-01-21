@@ -220,31 +220,64 @@ func (r *Replicator) Start() error {
 	return nil
 }
 
-// Stop halts replication
+// Stop halts replication gracefully to avoid triggering Dragonfly v1.36.0 cleanup bug
+//
+// CRITICAL: Dragonfly v1.36.0 has a bug in JournalStreamer::Cancel() where it waits
+// indefinitely for inflight writes to complete when a replica disconnects abruptly.
+// To avoid triggering this bug (which can cause Dragonfly to hang or crash), we:
+// 1. Cancel context to stop heartbeat goroutines cleanly
+// 2. Wait briefly for inflight ACKs to be processed
+// 3. Half-close connections (send FIN, not RST) to signal graceful shutdown
+// 4. Wait for goroutines to exit cleanly
+//
+// This prevents Dragonfly from entering the deadlock path in WaitForInflightToComplete().
 func (r *Replicator) Stop() {
-	log.Println("⏸  Stopping replicator...")
+	log.Println("⏸  Stopping replicator gracefully...")
 
-	// Cancel the context first
+	// Step 1: Cancel context to stop heartbeat goroutines
+	// This stops new REPLCONF ACK from being sent
+	log.Println("  • Stopping heartbeat goroutines...")
 	r.cancel()
 
-	// Close all connections immediately so blocking reads fail fast
+	// Step 2: Wait for in-flight ACKs to be processed by Dragonfly
+	// Give Dragonfly time to process any pending writes before closing connections
+	// This prevents the WaitForInflightToComplete() deadlock
+	log.Println("  • Waiting for Dragonfly to process inflight ACKs (2 seconds)...")
+	time.Sleep(2 * time.Second)
+
+	// Step 3: Gracefully half-close FLOW connections (send FIN, not RST)
+	// Using CloseWrite() sends TCP FIN (graceful shutdown) instead of RST (abrupt reset)
+	// This allows Dragonfly's cleanup logic to run normally without deadlock
+	for i, conn := range r.flowConns {
+		if conn != nil {
+			log.Printf("  • Gracefully closing FLOW-%d connection", i)
+			conn.CloseWrite() // Send FIN, don't close read side yet
+		}
+	}
+
+	// Step 4: Wait briefly for Dragonfly to acknowledge FIN
+	log.Println("  • Waiting for Dragonfly to acknowledge shutdown (1 second)...")
+	time.Sleep(1 * time.Second)
+
+	// Step 5: Now fully close all connections (both read and write sides)
 	if r.mainConn != nil {
+		log.Println("  • Closing main connection")
 		r.mainConn.Close()
 	}
 	for i, conn := range r.flowConns {
 		if conn != nil {
-			log.Printf("  • Closing FLOW-%d connection", i)
+			log.Printf("  • Fully closing FLOW-%d connection", i)
 			conn.Close()
 		}
 	}
 
-	// Wait for Start() to finish (including checkpoint persistence)
+	// Step 6: Wait for Start() to finish (including checkpoint persistence)
 	log.Println("  • Waiting for all goroutines to exit...")
 	<-r.done
 
 	r.state = StateStopped
-	r.recordPipelineStatus("stopped", "Replicator stopped")
-	log.Println("✓ Replicator stopped")
+	r.recordPipelineStatus("stopped", "Replicator stopped gracefully")
+	log.Println("✓ Replicator stopped gracefully (Dragonfly v1.36.0 bug workaround applied)")
 }
 
 // UpdateConfig updates dynamic parameters for all flows
