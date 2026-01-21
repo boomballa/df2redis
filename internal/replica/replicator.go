@@ -1278,37 +1278,63 @@ func (r *Replicator) sendFlowACK(flowID int, lsn uint64) error {
 }
 
 // startFlowHeartbeat launches a goroutine that periodically sends REPLCONF ACK for a specific FLOW
+// startFlowHeartbeat launches a goroutine that periodically sends REPLCONF ACK for a specific FLOW
+// Smart Heartbeat: Only sends ACK if LSN changed or keepalive timeout (10s) reached.
 func (r *Replicator) startFlowHeartbeat(flowID int, currentLSN *uint64, forcePing *bool, mu *sync.Mutex, done chan struct{}) {
-	logger.Debug("  [FLOW-%d] [DEBUG] startFlowHeartbeat function entered", flowID)
+	logger.Debug("  [FLOW-%d] [DEBUG] Smart Heartbeat function entered", flowID)
 
-	ticker := time.NewTicker(1 * time.Second) // Send ACK every 1 second
+	ticker := time.NewTicker(1 * time.Second) // Check state every 1 second
 	defer ticker.Stop()
 
-	logger.Info("  [FLOW-%d] ✓ Heartbeat goroutine started", flowID)
+	logger.Info("  [FLOW-%d] ✓ Smart Heartbeat goroutine started", flowID)
 
 	ackCounter := 0
+	lastSentAckLSN := uint64(0)
+	// Initialize lastSentAckTime to 0 so the first tick always sends a keepalive/initial ACK
+	lastSentAckTime := time.Time{}
 
 	for {
 		select {
-		case tickTime := <-ticker.C:
-			ackCounter++
-			logger.Info("  [FLOW-%d] [TRACE] Ticker fired #%d at %s", flowID, ackCounter, tickTime.Format("15:04:05.000"))
-
+		case <-ticker.C:
 			mu.Lock()
 			lsn := *currentLSN
-			*forcePing = false // Reset forcePing flag after reading LSN
+			shouldForcePing := *forcePing
+			*forcePing = false // Reset forcePing flag
 			mu.Unlock()
 
-			t0 := time.Now()
-			logger.Info("  [FLOW-%d] [TRACE] Calling sendFlowACK #%d with LSN=%d at %s", flowID, ackCounter, lsn, t0.Format("15:04:05.000"))
+			// Smart Heartbeat Logic
+			shouldSend := false
+			reason := ""
 
-			// Send ACK (either forced by PING or periodic)
-			if err := r.sendFlowACK(flowID, lsn); err != nil {
-				logger.Warn("  [FLOW-%d] ⚠️  Heartbeat ACK #%d failed: %v", flowID, ackCounter, err)
+			if lsn > lastSentAckLSN {
+				shouldSend = true
+				reason = "data_update" // LSN changed
+			} else if shouldForcePing {
+				shouldSend = true
+				reason = "force_ping" // Explicit PING from source
+			} else if time.Since(lastSentAckTime) >= 10*time.Second {
+				shouldSend = true
+				reason = "keepalive" // 10s timeout
 			}
 
-			t1 := time.Now()
-			logger.Info("  [FLOW-%d] [TRACE] sendFlowACK #%d returned at %s (duration: %v)", flowID, ackCounter, t1.Format("15:04:05.000"), t1.Sub(t0))
+			if shouldSend {
+				ackCounter++
+				// Log significant events (suppress keepalive noise if preferred, but useful for debug)
+				if reason != "keepalive" {
+					logger.Info("  [FLOW-%d] [TRACE] Sending ACK #%d (LSN=%d, Reason=%s)", flowID, ackCounter, lsn, reason)
+				} else {
+					// Log keepalive at trace/debug level or just simpler info to avoid spamming logs every 10s
+					logger.Debug("  [FLOW-%d] [TRACE] Sending Keepalive ACK #%d (LSN=%d)", flowID, ackCounter, lsn)
+				}
+
+				if err := r.sendFlowACK(flowID, lsn); err != nil {
+					logger.Warn("  [FLOW-%d] ⚠️  Heartbeat ACK #%d failed: %v", flowID, ackCounter, err)
+					// Do not update lastSentAck* on failure, so we retry next tick
+				} else {
+					lastSentAckLSN = lsn
+					lastSentAckTime = time.Now()
+				}
+			}
 
 		case <-done:
 			logger.Info("  [FLOW-%d] ✓ Heartbeat goroutine stopped (total ACKs sent: %d)", flowID, ackCounter)
