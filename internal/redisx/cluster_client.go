@@ -9,7 +9,6 @@ import (
 	"net"
 	"strconv"
 	"sync"
-	"sync/atomic"
 )
 
 // ClusterClient manages corrections to a Redis Cluster.
@@ -121,7 +120,7 @@ func (cc *ClusterClient) GetNodeClient(addr string) (*Client, error) {
 
 	cc.mu.RLock()
 	client, ok := cc.clients[addr]
-	if ok && atomic.LoadInt32(&client.closed) == 0 {
+	if ok && client.closed.Load() == 0 {
 		cc.mu.RUnlock()
 		return client, nil
 	}
@@ -132,7 +131,7 @@ func (cc *ClusterClient) GetNodeClient(addr string) (*Client, error) {
 	defer cc.mu.Unlock()
 
 	// Double check
-	if client, ok := cc.clients[addr]; ok && atomic.LoadInt32(&client.closed) == 0 {
+	if client, ok := cc.clients[addr]; ok && client.closed.Load() == 0 {
 		return client, nil
 	}
 
@@ -193,7 +192,7 @@ func (cc *ClusterClient) fetchSlots(ctx context.Context, addr string) ([]cluster
 
 	// Check if we have an active client for this addr
 	cc.mu.RLock()
-	if existing, ok := cc.clients[addr]; ok && atomic.LoadInt32(&existing.closed) == 0 {
+	if existing, ok := cc.clients[addr]; ok && existing.closed.Load() == 0 {
 		client = existing
 	}
 	cc.mu.RUnlock()
@@ -315,7 +314,7 @@ func (cc *ClusterClient) getRandomClient() (*Client, error) {
 	defer cc.mu.RUnlock()
 
 	for _, client := range cc.clients {
-		if atomic.LoadInt32(&client.closed) == 0 {
+		if client.closed.Load() == 0 {
 			return client, nil
 		}
 	}
