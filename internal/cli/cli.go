@@ -631,7 +631,12 @@ func runReplicate(args []string) int {
 	// Wait for error or signal
 	select {
 	case err := <-errCh:
+		// CRITICAL: Call Stop() to gracefully close connections before exiting
+		// This prevents triggering Dragonfly v1.36.0 cleanup bug (see docs/zh/Dragonfly-v1.36.0-Bug-Workaround.md)
+		// Without graceful shutdown, connections close abruptly (TCP RST) which can crash Dragonfly
 		logger.Error("❌ Replication failed: %v", err)
+		logger.Console("\n🔌 Gracefully closing connections to avoid crashing Dragonfly...")
+		replicator.Stop() // Send FIN instead of RST
 		logger.Console("\n📄 Check logs for details: %s", logger.GetLogFilePath())
 		return 1
 	case sig := <-sigCh:

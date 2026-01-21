@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"df2redis/internal/checkpoint"
@@ -41,6 +42,7 @@ type Replicator struct {
 	// Replication state
 	state      ReplicaState
 	masterInfo MasterInfo
+	stopped    atomic.Int32 // 0 = running, 1 = stopped (for Stop() idempotency)
 
 	flows       []FlowInfo
 	flowWriters []*FlowWriter // Active flow writers (for dynamic config update)
@@ -231,7 +233,15 @@ func (r *Replicator) Start() error {
 // 4. Wait for goroutines to exit cleanly
 //
 // This prevents Dragonfly from entering the deadlock path in WaitForInflightToComplete().
+//
+// This method is idempotent and can be safely called multiple times.
 func (r *Replicator) Stop() {
+	// Ensure Stop() only executes once (idempotent)
+	if !r.stopped.CompareAndSwap(0, 1) {
+		log.Println("⏸  Stop() already called, skipping")
+		return
+	}
+
 	log.Println("⏸  Stopping replicator gracefully...")
 
 	// Step 1: Cancel context to stop heartbeat goroutines
