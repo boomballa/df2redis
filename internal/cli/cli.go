@@ -34,6 +34,11 @@ func Execute(args []string) int {
 	// This enables simple background execution: ./df2redis replicate &
 	signal.Ignore(syscall.SIGHUP)
 
+	// Ignore SIGPIPE to prevent exit when writing to closed stdout/stderr (e.g. SSH disconnect)
+	// Go runtime defaults to exit on SIGPIPE. Ignoring it allows Write to return EPIPE error instead,
+	// which our logger handles gracefully.
+	signal.Ignore(syscall.SIGPIPE)
+
 	if len(args) == 0 {
 		printUsage()
 		return 1
