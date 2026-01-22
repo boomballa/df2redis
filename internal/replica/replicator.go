@@ -1536,21 +1536,31 @@ func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg
 			return
 		}
 
-		// Update ACK state: Count every operation to simulate native replica behavior
-		// This makes the lag metric on Master smooth instead of jumpy
+		// Update ACK state to simulate native Dragonfly replica behavior
+		// ACK value = currentLSN + opsCount (operations executed since last LSN checkpoint)
 		ackState.mu.Lock()
-		ackState.opsCount++
 
-		switch entry.Opcode {
-		case OpLSN:
-			if entry.LSN > ackState.currentLSN {
+		// Handle OpLSN: Check if this is a checkpoint that advances our position
+		if entry.Opcode == OpLSN {
+			currentTotal := ackState.currentLSN + ackState.opsCount
+			if entry.LSN > currentTotal {
+				// Jump forward: new LSN checkpoint is ahead of our current position
 				ackState.currentLSN = entry.LSN
-				ackState.opsCount = 0 // Reset local counter relative to new LSN base
+				ackState.opsCount = 0
+			} else {
+				// No jump: LSN checkpoint is behind or equal, treat as regular opcode
+				ackState.opsCount++
 			}
+		} else {
+			// All non-LSN opcodes increment the operation counter
+			ackState.opsCount++
+		}
 
-		case OpPing:
+		// Handle OpPing: force immediate ACK
+		if entry.Opcode == OpPing {
 			ackState.forcePing = true
 		}
+
 		ackState.mu.Unlock()
 
 		// Forward entry
