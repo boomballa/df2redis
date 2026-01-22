@@ -1279,8 +1279,8 @@ func (r *Replicator) sendFlowACK(flowID int, lsn uint64) error {
 
 // startFlowHeartbeat launches a goroutine that periodically sends REPLCONF ACK for a specific FLOW
 // startFlowHeartbeat launches a goroutine that periodically sends REPLCONF ACK for a specific FLOW
-// Smart Heartbeat: Only sends ACK if LSN changed or keepalive timeout (10s) reached.
-func (r *Replicator) startFlowHeartbeat(flowID int, currentLSN *uint64, forcePing *bool, mu *sync.Mutex, done chan struct{}) {
+// Smart Heartbeat: Only sends ACK if ACK value changed or keepalive timeout (10s) reached.
+func (r *Replicator) startFlowHeartbeat(flowID int, currentLSN *uint64, opsCount *uint64, forcePing *bool, mu *sync.Mutex, done chan struct{}) {
 	logger.Debug("  [FLOW-%d] [DEBUG] Smart Heartbeat function entered", flowID)
 
 	ticker := time.NewTicker(1 * time.Second) // Check state every 1 second
@@ -1289,7 +1289,7 @@ func (r *Replicator) startFlowHeartbeat(flowID int, currentLSN *uint64, forcePin
 	logger.Info("  [FLOW-%d] ✓ Smart Heartbeat goroutine started", flowID)
 
 	ackCounter := 0
-	lastSentAckLSN := uint64(0)
+	lastSentAckVal := uint64(0)
 	// Initialize lastSentAckTime to 0 so the first tick always sends a keepalive/initial ACK
 	lastSentAckTime := time.Time{}
 
@@ -1298,6 +1298,8 @@ func (r *Replicator) startFlowHeartbeat(flowID int, currentLSN *uint64, forcePin
 		case <-ticker.C:
 			mu.Lock()
 			lsn := *currentLSN
+			ops := *opsCount
+			ackVal := lsn + ops
 			shouldForcePing := *forcePing
 			*forcePing = false // Reset forcePing flag
 			mu.Unlock()
@@ -1306,9 +1308,9 @@ func (r *Replicator) startFlowHeartbeat(flowID int, currentLSN *uint64, forcePin
 			shouldSend := false
 			reason := ""
 
-			if lsn > lastSentAckLSN {
+			if ackVal > lastSentAckVal {
 				shouldSend = true
-				reason = "data_update" // LSN changed
+				reason = "data_update" // ACK value (LSN or ops) changed
 			} else if shouldForcePing {
 				shouldSend = true
 				reason = "force_ping" // Explicit PING from source
@@ -1321,17 +1323,17 @@ func (r *Replicator) startFlowHeartbeat(flowID int, currentLSN *uint64, forcePin
 				ackCounter++
 				// Log significant events (suppress keepalive noise if preferred, but useful for debug)
 				if reason != "keepalive" {
-					logger.Info("  [FLOW-%d] [TRACE] Sending ACK #%d (LSN=%d, Reason=%s)", flowID, ackCounter, lsn, reason)
+					logger.Info("  [FLOW-%d] [TRACE] Sending ACK #%d (LSN=%d, Ops=%d, ACK=%d, Reason=%s)", flowID, ackCounter, lsn, ops, ackVal, reason)
 				} else {
 					// Log keepalive at trace/debug level or just simpler info to avoid spamming logs every 10s
-					logger.Debug("  [FLOW-%d] [TRACE] Sending Keepalive ACK #%d (LSN=%d)", flowID, ackCounter, lsn)
+					logger.Debug("  [FLOW-%d] [TRACE] Sending Keepalive ACK #%d (ACK=%d)", flowID, ackCounter, ackVal)
 				}
 
-				if err := r.sendFlowACK(flowID, lsn); err != nil {
+				if err := r.sendFlowACK(flowID, ackVal); err != nil {
 					logger.Warn("  [FLOW-%d] ⚠️  Heartbeat ACK #%d failed: %v", flowID, ackCounter, err)
 					// Do not update lastSentAck* on failure, so we retry next tick
 				} else {
-					lastSentAckLSN = lsn
+					lastSentAckVal = ackVal
 					lastSentAckTime = time.Now()
 				}
 			}
@@ -1480,6 +1482,7 @@ func (r *Replicator) receiveJournal() error {
 // FlowACKState tracks REPLCONF ACK state for a single FLOW
 type FlowACKState struct {
 	currentLSN uint64
+	opsCount   uint64 // Number of operations executed since last LSN
 	forcePing  bool
 	mu         sync.Mutex
 }
@@ -1498,10 +1501,11 @@ func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg
 	// Each flow maintains its own connection to master and must send independent ACKs
 	ackState := &FlowACKState{
 		currentLSN: 0,
+		opsCount:   0,
 		forcePing:  false,
 	}
 	heartbeatDone := make(chan struct{})
-	go r.startFlowHeartbeat(flowID, &ackState.currentLSN, &ackState.forcePing, &ackState.mu, heartbeatDone)
+	go r.startFlowHeartbeat(flowID, &ackState.currentLSN, &ackState.opsCount, &ackState.forcePing, &ackState.mu, heartbeatDone)
 	defer close(heartbeatDone)
 
 	for {
@@ -1532,20 +1536,22 @@ func (r *Replicator) readFlowJournal(flowID int, entryChan chan<- *FlowEntry, wg
 			return
 		}
 
-		// Update ACK state for LSN and PING opcodes
+		// Update ACK state: Count every operation to simulate native replica behavior
+		// This makes the lag metric on Master smooth instead of jumpy
+		ackState.mu.Lock()
+		ackState.opsCount++
+
 		switch entry.Opcode {
 		case OpLSN:
-			ackState.mu.Lock()
 			if entry.LSN > ackState.currentLSN {
 				ackState.currentLSN = entry.LSN
+				ackState.opsCount = 0 // Reset local counter relative to new LSN base
 			}
-			ackState.mu.Unlock()
 
 		case OpPing:
-			ackState.mu.Lock()
 			ackState.forcePing = true
-			ackState.mu.Unlock()
 		}
+		ackState.mu.Unlock()
 
 		// Forward entry
 		entryChan <- &FlowEntry{
