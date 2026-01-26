@@ -21,7 +21,7 @@ df2redis 是一个高性能的复制工具，实现了 Dragonfly 的原生复制
 
 ## 系统架构
 
-![系统架构概览](../../images/architecture/RDB%2BJournal-data-flow.png)
+![系统架构概览](../../images/architecture/RDB%2BJournal-data-flow.svg)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐

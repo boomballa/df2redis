@@ -6,7 +6,7 @@ This document explains the critical optimization that enables df2redis to achiev
 
 ### Initial Naive Implementation ❌
 
-![Cluster Routing Strategy](../../images/architecture/cluster-routing.png)
+![Cluster Routing Strategy](../../images/architecture/cluster-routing.svg)
 
 
 ```go

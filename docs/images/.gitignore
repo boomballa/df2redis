@@ -1,0 +1,7 @@
+# Exclude PNG files from Git (keep SVG only)
+# PNG files are kept locally as backup but not committed
+*.png
+
+# Exception: keep small icons/logos
+!**/logo*.png
+!**/icon*.png

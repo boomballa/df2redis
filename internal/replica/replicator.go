@@ -1290,8 +1290,8 @@ func (r *Replicator) startFlowHeartbeat(flowID int, currentLSN *uint64, opsCount
 
 	ackCounter := 0
 	lastSentAckVal := uint64(0)
-	// Initialize lastSentAckTime to 0 so the first tick always sends a keepalive/initial ACK
-	lastSentAckTime := time.Time{}
+	// Initialize lastSentAckTime to now to prevent immediate keepalive ACK=0 on first tick
+	lastSentAckTime := time.Now()
 
 	for {
 		select {

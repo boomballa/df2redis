@@ -1,0 +1,117 @@
+%%{init: {'theme':'base', 'themeVariables': { 'fontSize':'14px', 'fontFamily':'Arial, sans-serif'}}}%%
+stateDiagram-v2
+    classDef handshakeClass fill:#dceefb,stroke:#2196f3,stroke-width:2px,color:#000
+    classDef flowClass fill:#dcf4e4,stroke:#4caf50,stroke-width:2px,color:#000
+    classDef fullsyncClass fill:#fff3e0,stroke:#ff9800,stroke-width:2px,color:#000
+    classDef barrierClass fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px,color:#000
+    classDef stableClass fill:#e0f7fa,stroke:#00bcd4,stroke-width:2px,color:#000
+    classDef errorClass fill:#ffebee,stroke:#f44336,stroke-width:2px,color:#000
+    classDef criticalClass fill:#ffe6e6,stroke:#d32f2f,stroke-width:3px,color:#000
+
+    [*] --> Disconnected: 🚀 Start
+
+    note right of Disconnected
+        Initial state
+        Waiting for connection
+    end note
+
+    Disconnected --> Handshake: Connect to Dragonfly
+
+    state Handshake {
+        [*] --> SendREPLCONF
+        SendREPLCONF --> ReceiveMasterID: REPLCONF capa dragonfly
+        ReceiveMasterID --> ExtractParams: Parse response
+        ExtractParams --> SendVersion: Extract master_id, session_id, num_flows (N)
+        SendVersion --> [*]: REPLCONF version 1
+    }
+    class Handshake handshakeClass
+
+    Handshake --> FLOWRegistration: ✅ Handshake Success
+
+    state FLOWRegistration {
+        [*] --> RegisterFLOWs
+        RegisterFLOWs --> AllFLOWsReady: Register N FLOWs (0..N-1)
+        AllFLOWsReady --> [*]
+
+        note right of RegisterFLOWs
+            N = Dragonfly shard count (typically 8-16)
+            Each FLOW maps to one shard
+            Command: DFLY FLOW <master_id> <session_id> <flow_id>
+        end note
+    }
+    class FLOWRegistration flowClass
+
+    FLOWRegistration --> FullSync: ✅ N FLOWs Registered
+
+    state FullSync {
+        [*] --> SendDFLYSYNC
+        SendDFLYSYNC --> ReceiveFULLSYNC: DFLY SYNC <session_id>
+        ReceiveFULLSYNC --> ParseRDB: +FULLSYNC response
+        ParseRDB --> ConsumeEOF: Opcode 200 (END)
+        ConsumeEOF --> ReceiveOffset: Read 40-byte EOF
+        ReceiveOffset --> [*]: Opcode 211 (OFFSET)
+
+        note right of ParseRDB
+            Parse RDB stream:
+            • Opcode 0-15: Standard RDB
+            • Opcode 210: Inline Journal
+            • Opcode 200: FULLSYNC_END
+        end note
+
+        note right of ConsumeEOF
+            ⚠️ Critical: Must read 40-byte SHA1
+            Otherwise Journal parser will misread
+        end note
+    }
+    class FullSync fullsyncClass
+
+    FullSync --> GlobalBarrier: ✅ RDB Complete
+
+    state GlobalBarrier {
+        [*] --> WaitAllFLOWs
+        WaitAllFLOWs --> AllReady: rdbCompleteCount == N
+        AllReady --> [*]
+
+        note right of WaitAllFLOWs
+            Wait for all N FLOWs to complete RDB
+            Atomic counter ensures sync
+        end note
+    }
+    class GlobalBarrier barrierClass
+
+    GlobalBarrier --> StableSync: ✅ Global Sync Complete
+
+    state StableSync {
+        [*] --> SendSTARTSTABLE
+        SendSTARTSTABLE --> StreamJournal: DFLY STARTSTABLE <sid> <lsn>
+        StreamJournal --> StreamJournal: Continuous running
+
+        note right of StreamJournal
+            Handle Journal Opcodes:
+            • 6: SELECT (switch DB)
+            • 9: EXPIRED (expiry)
+            • 10: COMMAND (replay)
+            • 13: PING (heartbeat)
+            • 15: LSN (checkpoint)
+            Send: REPLCONF ACK <offset>
+        end note
+    }
+    class StableSync stableClass
+
+    state ErrorHandling {
+        [*] --> StopHeartbeat
+        StopHeartbeat --> WaitInflight: Stop ACK
+        WaitInflight --> SendFIN: Wait 2s
+        SendFIN --> WaitAck: CloseWrite()
+        WaitAck --> FullClose: Wait 1s
+        FullClose --> [*]: Close connection
+    }
+    class ErrorHandling errorClass
+
+    Handshake --> ErrorHandling: ❌ Error
+    FLOWRegistration --> ErrorHandling: ❌ Error
+    FullSync --> ErrorHandling: ❌ Error
+    StableSync --> ErrorHandling: 🛑 Stop
+
+    ErrorHandling --> Disconnected: 🔄 Reconnect
+    ErrorHandling --> [*]: 🚪 Exit

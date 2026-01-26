@@ -1,0 +1,117 @@
+%%{init: {'theme':'base', 'themeVariables': { 'fontSize':'14px', 'fontFamily':'Arial, Microsoft YaHei, sans-serif'}}}%%
+stateDiagram-v2
+    classDef handshakeClass fill:#dceefb,stroke:#2196f3,stroke-width:2px,color:#000
+    classDef flowClass fill:#dcf4e4,stroke:#4caf50,stroke-width:2px,color:#000
+    classDef fullsyncClass fill:#fff3e0,stroke:#ff9800,stroke-width:2px,color:#000
+    classDef barrierClass fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px,color:#000
+    classDef stableClass fill:#e0f7fa,stroke:#00bcd4,stroke-width:2px,color:#000
+    classDef errorClass fill:#ffebee,stroke:#f44336,stroke-width:2px,color:#000
+    classDef criticalClass fill:#ffe6e6,stroke:#d32f2f,stroke-width:3px,color:#000
+
+    [*] --> Disconnected: 🚀 启动
+
+    note right of Disconnected
+        初始状态
+        等待连接
+    end note
+
+    Disconnected --> Handshake: 连接到 Dragonfly
+
+    state Handshake {
+        [*] --> SendREPLCONF
+        SendREPLCONF --> ReceiveMasterID: REPLCONF capa dragonfly
+        ReceiveMasterID --> ExtractParams: 解析响应
+        ExtractParams --> SendVersion: 提取 master_id, session_id, num_flows (N)
+        SendVersion --> [*]: REPLCONF version 1
+    }
+    class Handshake handshakeClass
+
+    Handshake --> FLOWRegistration: ✅ 握手成功
+
+    state FLOWRegistration {
+        [*] --> RegisterFLOWs
+        RegisterFLOWs --> AllFLOWsReady: 注册 N 个 FLOW (0..N-1)
+        AllFLOWsReady --> [*]
+
+        note right of RegisterFLOWs
+            N = Dragonfly 分片数（通常 8-16）
+            每个 FLOW 对应一个分片
+            命令：DFLY FLOW <master_id> <session_id> <flow_id>
+        end note
+    }
+    class FLOWRegistration flowClass
+
+    FLOWRegistration --> FullSync: ✅ N 个 FLOW 已注册
+
+    state FullSync {
+        [*] --> SendDFLYSYNC
+        SendDFLYSYNC --> ReceiveFULLSYNC: DFLY SYNC <session_id>
+        ReceiveFULLSYNC --> ParseRDB: +FULLSYNC 响应
+        ParseRDB --> ConsumeEOF: Opcode 200 (END)
+        ConsumeEOF --> ReceiveOffset: 读取 40 字节 EOF
+        ReceiveOffset --> [*]: Opcode 211 (OFFSET)
+
+        note right of ParseRDB
+            解析 RDB 流：
+            • Opcode 0-15: 标准 RDB
+            • Opcode 210: 内联 Journal
+            • Opcode 200: FULLSYNC_END
+        end note
+
+        note right of ConsumeEOF
+            ⚠️ 关键：必须读取 40 字节 SHA1
+            否则 Journal 解析器会误读
+        end note
+    }
+    class FullSync fullsyncClass
+
+    FullSync --> GlobalBarrier: ✅ RDB 完成
+
+    state GlobalBarrier {
+        [*] --> WaitAllFLOWs
+        WaitAllFLOWs --> AllReady: rdbCompleteCount == N
+        AllReady --> [*]
+
+        note right of WaitAllFLOWs
+            等待所有 N 个 FLOW 完成 RDB
+            原子计数器确保同步
+        end note
+    }
+    class GlobalBarrier barrierClass
+
+    GlobalBarrier --> StableSync: ✅ 全局同步完成
+
+    state StableSync {
+        [*] --> SendSTARTSTABLE
+        SendSTARTSTABLE --> StreamJournal: DFLY STARTSTABLE <sid> <lsn>
+        StreamJournal --> StreamJournal: 持续运行
+
+        note right of StreamJournal
+            处理 Journal Opcode：
+            • 6: SELECT (切换 DB)
+            • 9: EXPIRED (过期)
+            • 10: COMMAND (重放)
+            • 13: PING (心跳)
+            • 15: LSN (检查点)
+            发送 REPLCONF ACK <offset>
+        end note
+    }
+    class StableSync stableClass
+
+    state ErrorHandling {
+        [*] --> StopHeartbeat
+        StopHeartbeat --> WaitInflight: 停止 ACK
+        WaitInflight --> SendFIN: 等待 2 秒
+        SendFIN --> WaitAck: CloseWrite()
+        WaitAck --> FullClose: 等待 1 秒
+        FullClose --> [*]: 关闭连接
+    }
+    class ErrorHandling errorClass
+
+    Handshake --> ErrorHandling: ❌ 错误
+    FLOWRegistration --> ErrorHandling: ❌ 错误
+    FullSync --> ErrorHandling: ❌ 错误
+    StableSync --> ErrorHandling: 🛑 停止
+
+    ErrorHandling --> Disconnected: 🔄 重连
+    ErrorHandling --> [*]: 🚪 退出
