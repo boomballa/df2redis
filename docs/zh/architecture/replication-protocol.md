@@ -59,7 +59,7 @@ func (r *Replicator) handshake() error {
 
 ### 时序图
 
-![复制协议时序图](../../images/architecture/replication-protocol.svg)
+![复制协议时序图](../../images/architecture/replication-protocol-zh.svg)
 
 ```
 Client                   Dragonfly Master

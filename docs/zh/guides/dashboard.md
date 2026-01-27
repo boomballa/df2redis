@@ -1,6 +1,6 @@
 # df2redis Dashboard 前端方案（草案）
 
-[English Version](../en/dashboard.md) | [接口文档](../api/dashboard-api.md)
+[English Version](../../en/guides/dashboard.md) | [接口文档](../../api/dashboard-api.md)
 
 ## 目标
 

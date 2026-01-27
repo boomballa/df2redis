@@ -1,6 +1,6 @@
 # redis-full-check Installation Guide
 
-[中文文档](../redis-full-check-setup.md)
+[中文文档](../../zh/troubleshooting/redis-full-check-setup.md)
 
 This is a condensed translation of the Chinese installation guide for Alibaba's `redis-full-check`.
 

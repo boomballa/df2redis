@@ -4,7 +4,7 @@ sequenceDiagram
     participant C as df2redis Client
     participant D as Dragonfly Master
 
-    rect rgb(220, 237, 250)
+    rect rgb(187, 222, 251)
         Note over C,D: 🤝 Phase 1: Handshake
         C->>D: REPLCONF listening-port 0
         D-->>C: OK
@@ -14,7 +14,7 @@ sequenceDiagram
         D-->>C: OK
     end
 
-    rect rgb(220, 250, 230)
+    rect rgb(200, 230, 201)
         Note over C,D: 🔌 Phase 2: FLOW Registration
         Note over C: N = num_flows (typically 8-16, depends on shard count)
         loop For each FLOW (0..N-1)
@@ -23,7 +23,7 @@ sequenceDiagram
         end
     end
 
-    rect rgb(255, 243, 224)
+    rect rgb(225, 190, 231)
         Note over C,D: 📦 Phase 3: Full Sync
         C->>D: DFLY SYNC <session_id>
         D-->>C: +FULLSYNC
@@ -35,22 +35,22 @@ sequenceDiagram
         D->>C: FULLSYNC_END (Opcode 200)
     end
 
-    rect rgb(255, 230, 230)
+    rect rgb(255, 224, 178)
         Note over C: ⚠️ Critical: Read 40-byte EOF Token
         D->>C: 40-byte SHA1 Checksum (EOF)
         Note over C: consumeEOFToken()<br/>Must explicitly read and discard!
     end
 
-    rect rgb(255, 243, 224)
+    rect rgb(225, 190, 231)
         D->>C: JOURNAL_OFFSET (Opcode 211)
     end
 
-    rect rgb(243, 229, 245)
+    rect rgb(209, 196, 233)
         Note over C,D: 🚧 Phase 4: Global Barrier
         Note over C: Wait for all FLOWs to complete RDB<br/>Condition: rdbCompleteCount == numFlows<br/>Atomic counter ensures sync
     end
 
-    rect rgb(224, 247, 250)
+    rect rgb(178, 235, 242)
         Note over C,D: 🔄 Phase 5: Stable Sync
         C->>D: DFLY STARTSTABLE <session_id> <lsn>
         D-->>C: OK
@@ -64,7 +64,7 @@ sequenceDiagram
         end
     end
 
-    rect rgb(255, 240, 245)
+    rect rgb(207, 216, 220)
         Note over C,D: 💡 Graceful Shutdown Process
         Note over C: 1. Stop sending ACK (2s)<br/>2. CloseWrite() send FIN<br/>3. Wait for ack (1s)<br/>4. Fully close connection
     end

@@ -1,6 +1,6 @@
 # 数据一致性校验
 
-[English Version](en/data-validation.md) | [中文版](data-validation.md)
+[English Version](../../en/guides/data-validation.md) | [中文版](data-validation.md)
 
 df2redis 集成了 [redis-full-check](https://github.com/alibaba/RedisFullCheck) 来提供生产级的数据一致性校验功能。
 
@@ -57,7 +57,7 @@ sudo chmod +x /usr/local/bin/redis-full-check
 redis-full-check --version
 ```
 
-更多安装方法请参考 [redis-full-check 安装指南](redis-full-check-setup.md)。
+更多安装方法请参考 [redis-full-check 安装指南](../troubleshooting/redis-full-check-setup.md)。
 
 ## 使用方法
 
@@ -527,5 +527,5 @@ cat ./check-results/check_latest.json | jq '{
 ## 参考资源
 
 - [redis-full-check GitHub](https://github.com/alibaba/RedisFullCheck)
-- [redis-full-check 安装指南](redis-full-check-setup.md)
-- [df2redis 架构文档](architecture.md)
+- [redis-full-check 安装指南](../troubleshooting/redis-full-check-setup.md)
+- [df2redis 架构文档](../architecture/overview.md)

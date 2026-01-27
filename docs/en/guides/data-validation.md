@@ -1,6 +1,6 @@
 # Data Consistency Validation
 
-[中文文档](../data-validation.md)
+[中文文档](../../zh/guides/data-validation.md)
 
 df2redis integrates [redis-full-check](https://github.com/alibaba/RedisFullCheck) so operators can validate Dragonfly → Redis migrations.
 

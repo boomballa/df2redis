@@ -4,7 +4,7 @@ sequenceDiagram
     participant C as df2redis 客户端
     participant D as Dragonfly 主节点
 
-    rect rgb(220, 237, 250)
+    rect rgb(187, 222, 251)
         Note over C,D: 🤝 阶段 1: 握手（Handshake）
         C->>D: REPLCONF listening-port 0
         D-->>C: OK
@@ -14,7 +14,7 @@ sequenceDiagram
         D-->>C: OK
     end
 
-    rect rgb(220, 250, 230)
+    rect rgb(200, 230, 201)
         Note over C,D: 🔌 阶段 2: FLOW 注册
         Note over C: N = num_flows（通常 8-16，取决于分片数）
         loop 为每个 FLOW (0..N-1)
@@ -23,7 +23,7 @@ sequenceDiagram
         end
     end
 
-    rect rgb(255, 243, 224)
+    rect rgb(225, 190, 231)
         Note over C,D: 📦 阶段 3: 全量同步（Full Sync）
         C->>D: DFLY SYNC <session_id>
         D-->>C: +FULLSYNC
@@ -35,22 +35,22 @@ sequenceDiagram
         D->>C: FULLSYNC_END (Opcode 200)
     end
 
-    rect rgb(255, 230, 230)
+    rect rgb(255, 224, 178)
         Note over C: ⚠️ 关键：读取 40 字节 EOF Token
         D->>C: 40-byte SHA1 Checksum (EOF)
         Note over C: consumeEOFToken()<br/>必须显式读取并丢弃！
     end
 
-    rect rgb(255, 243, 224)
+    rect rgb(225, 190, 231)
         D->>C: JOURNAL_OFFSET (Opcode 211)
     end
 
-    rect rgb(243, 229, 245)
+    rect rgb(209, 196, 233)
         Note over C,D: 🚧 阶段 4: 全局屏障（Global Barrier）
         Note over C: 等待所有 FLOW 完成 RDB 阶段<br/>条件：rdbCompleteCount == numFlows<br/>原子计数器确保同步
     end
 
-    rect rgb(224, 247, 250)
+    rect rgb(178, 235, 242)
         Note over C,D: 🔄 阶段 5: 稳定同步（Stable Sync）
         C->>D: DFLY STARTSTABLE <session_id> <lsn>
         D-->>C: OK
@@ -64,7 +64,7 @@ sequenceDiagram
         end
     end
 
-    rect rgb(255, 240, 245)
+    rect rgb(207, 216, 220)
         Note over C,D: 💡 优雅关闭流程
         Note over C: 1. 停止发送 ACK (2s)<br/>2. CloseWrite() 发送 FIN<br/>3. 等待确认 (1s)<br/>4. 完全关闭连接
     end

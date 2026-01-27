@@ -72,18 +72,18 @@ mmdc -i "$SCRIPT_DIR/state-machine-diagram-en.mmd" \
      -w 2400 -H 3600 -b transparent
 
 echo ""
-echo "📋 Copying default versions (Chinese)..."
+echo "📋 Copying default versions (English)..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-cp "$OUTPUT_DIR/replication-protocol-zh.svg" "$OUTPUT_DIR/replication-protocol.svg"
-cp "$OUTPUT_DIR/replication-protocol-zh.png" "$OUTPUT_DIR/replication-protocol.png"
-cp "$OUTPUT_DIR/state-machine-diagram-zh.svg" "$OUTPUT_DIR/state-machine-diagram.svg"
-cp "$OUTPUT_DIR/state-machine-diagram-zh.png" "$OUTPUT_DIR/state-machine-diagram.png"
+cp "$OUTPUT_DIR/replication-protocol-en.svg" "$OUTPUT_DIR/replication-protocol.svg"
+cp "$OUTPUT_DIR/replication-protocol-en.png" "$OUTPUT_DIR/replication-protocol.png"
+cp "$OUTPUT_DIR/state-machine-diagram-en.svg" "$OUTPUT_DIR/state-machine-diagram.svg"
+cp "$OUTPUT_DIR/state-machine-diagram-en.png" "$OUTPUT_DIR/state-machine-diagram.png"
 
-echo "  ✓ replication-protocol.svg"
-echo "  ✓ replication-protocol.png"
-echo "  ✓ state-machine-diagram.svg"
-echo "  ✓ state-machine-diagram.png"
+echo "  ✓ replication-protocol.svg (English)"
+echo "  ✓ replication-protocol.png (English)"
+echo "  ✓ state-machine-diagram.svg (English)"
+echo "  ✓ state-machine-diagram.png (English)"
 
 echo ""
 echo "✅ All diagrams generated successfully!"
