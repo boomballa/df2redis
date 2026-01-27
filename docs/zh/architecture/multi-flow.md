@@ -4,7 +4,7 @@ df2redis 实现了完全并行的多 FLOW 架构，与 Dragonfly 的分片设计
 
 ## 概览
 
-![多 FLOW 架构](../../images/architecture/multi-flow.svg)
+<img src="../../images/architecture/multi-flow.svg" alt="多 FLOW 架构" width="800" style="max-width: 100%;" />
 
 ```
 Dragonfly Master (N 个 Shard)

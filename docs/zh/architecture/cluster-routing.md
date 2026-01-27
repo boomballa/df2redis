@@ -6,7 +6,7 @@
 
 ### 初始错误实现 ❌
 
-![集群路由策略](../../images/architecture/cluster-routing.svg)
+<img src="../../images/architecture/cluster-routing.svg" alt="集群路由策略" width="800" style="max-width: 100%;" />
 
 ```go
 // ❌ 错误：按 Slot 分组

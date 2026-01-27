@@ -17,7 +17,7 @@ Dragonfly (源端)     df2redis (流水线)     Redis Cluster (目标端)
 
 ## 流水线架构
 
-![数据流水线架构](../../images/architecture/data-pipeline.svg)
+<img src="../../images/architecture/data-pipeline.svg" alt="数据流水线架构" width="800" style="max-width: 100%;" />
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐

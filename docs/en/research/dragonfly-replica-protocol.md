@@ -25,7 +25,7 @@ The typical state transition flow:
 ```
 R_ENABLED → R_TCP_CONNECTED → R_GREETED → R_SYNCING → R_SYNC_OK
 
-![Replica State Machine](../../images/architecture/state-machine-diagram-en.svg)
+<img src="../../images/architecture/state-machine-diagram-en.svg" alt="Replica State Machine" width="800" style="max-width: 100%;" />
 ```
 
 Core execution flow reference:

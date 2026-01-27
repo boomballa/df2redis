@@ -59,7 +59,7 @@ Create one TCP connection per Dragonfly shard for parallel data transfer.
 
 ### Sequence Diagram
 
-![Replication Protocol Sequence](../../images/architecture/replication-protocol-en.svg)
+<img src="../../images/architecture/replication-protocol-en.svg" alt="Replication Protocol Sequence" width="800" style="max-width: 100%;" />
 
 
 ```

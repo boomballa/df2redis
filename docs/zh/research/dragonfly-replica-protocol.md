@@ -38,7 +38,7 @@ Replica 的主流程在 **`MainReplicationFb`** 中实现，状态转换如下�
 ```
 R_ENABLED → R_TCP_CONNECTED → R_GREETED → R_SYNCING → R_SYNC_OK
 
-![Replica State Machine](../../images/architecture/state-machine-diagram-zh.svg) → 稳定同步
+<img src="../../images/architecture/state-machine-diagram-zh.svg" alt="Replica State Machine" width="800" style="max-width: 100%;" /> → 稳定同步
 ```
 
 `replica.cc:186-271`
