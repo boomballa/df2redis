@@ -26,43 +26,43 @@ df2redis is a high-performance replication toolkit that implements Dragonfly's n
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Dragonfly Master (Source)                     │
-│                      N Shards (FLOW 0-N)                         │
+│                    Dragonfly Master (Source)                    │
+│                      N Shards (FLOW 0-N)                        │
 └────────┬────────────────────────────────────────────────────────┘
          │
          │ RDB Stream + Journal Stream
          │
          ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                         df2redis                                 │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  FLOW Layer (N Goroutines)                               │  │
-│  │    Reader 0-7: TCP connection per FLOW                   │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  Parser Layer (N Goroutines)                             │  │
-│  │    RDB Parser: Opcode → Entry                            │  │
-│  │    Journal Parser: LSN, TxID, Command                    │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  Global Synchronization Barrier                          │  │
-│  │    Wait for all FLOWs to complete RDB phase              │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  Writer Layer (N Goroutines)                             │  │
-│  │    Batch: 20K entries, Buffer: 2M entries                │  │
-│  │    Cluster Router: Node-based grouping                   │  │
-│  └──────────────────────────────────────────────────────────┘  │
+│                         df2redis                                │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  FLOW Layer (N Goroutines)                               │   │
+│  │    Reader 0-7: TCP connection per FLOW                   │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  Parser Layer (N Goroutines)                             │   │
+│  │    RDB Parser: Opcode → Entry                            │   │
+│  │    Journal Parser: LSN, TxID, Command                    │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  Global Synchronization Barrier                          │   │
+│  │    Wait for all FLOWs to complete RDB phase              │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  Writer Layer (N Goroutines)                             │   │
+│  │    Batch: 20K entries, Buffer: 2M entries                │   │
+│  │    Cluster Router: Node-based grouping                   │   │
+│  └──────────────────────────────────────────────────────────┘   │
 └────────┬────────────────────────────────────────────────────────┘
          │
          │ Pipeline Commands
          │
          ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│              Redis Cluster (Target)                              │
-│  Master 1 (Slots 0-5460)                                         │
-│  Master 2 (Slots 5461-10922)                                     │
-│  Master 3 (Slots 10923-16383)                                    │
+│              Redis Cluster (Target)                             │
+│  Master 1 (Slots 0-5460)                                        │
+│  Master 2 (Slots 5461-10922)                                    │
+│  Master 3 (Slots 10923-16383)                                   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
