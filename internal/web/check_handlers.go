@@ -6,10 +6,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"path/filepath"
 	"time"
 
-	"df2redis/internal/executor/fullcheck"
+	"df2redis/internal/checker"
 )
 
 // handleCheckStart handles POST /api/check/start
@@ -21,7 +20,7 @@ func (s *DashboardServer) handleCheckStart(w http.ResponseWriter, r *http.Reques
 
 	// Parse request body
 	var req struct {
-		CompareMode  int `json:"compareMode"`  // 1=full value, 2=length, 3=key outline, 4=smart
+		CompareMode  int `json:"compareMode"`  // 1=full, 2=length, 3=outline, 4=smart
 		CompareTimes int `json:"compareTimes"` // number of comparison rounds
 		QPS          int `json:"qps"`          // QPS limit
 		BatchCount   int `json:"batchCount"`   // batch size
@@ -36,21 +35,22 @@ func (s *DashboardServer) handleCheckStart(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Set default values
+	// Set default values matching legacy full-check behavior
+	// 1=full, 2=length (default), 3=outline, 4=smart
 	if req.CompareMode <= 0 {
-		req.CompareMode = 2 // Default: length comparison
+		req.CompareMode = 2
 	}
 	if req.CompareTimes <= 0 {
-		req.CompareTimes = 3 // Default: 3 rounds
+		req.CompareTimes = 3
 	}
 	if req.QPS <= 0 {
-		req.QPS = 5000 // Default: 5000 (reduced to lower pressure on source and target)
+		req.QPS = 5000
 	}
 	if req.BatchCount <= 0 {
-		req.BatchCount = 256 // Default: 256
+		req.BatchCount = 256
 	}
 	if req.Parallel <= 0 {
-		req.Parallel = 2 // Default: 2 (reduced parallelism to save resources)
+		req.Parallel = 2
 	}
 
 	// Check if a task is already running
@@ -68,7 +68,7 @@ func (s *DashboardServer) handleCheckStart(w http.ResponseWriter, r *http.Reques
 	s.checkRunning = true
 	s.checkStatus = &CheckStatus{
 		Running:       true,
-		CompareMode:   req.CompareMode,
+		CompareMode:   req.CompareMode, // Store int for UI compatibility
 		CompareTimes:  req.CompareTimes,
 		QPS:           req.QPS,
 		StartedAt:     time.Now(),
@@ -146,8 +146,8 @@ func (s *DashboardServer) handleCheckStatus(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, status)
 }
 
-// runRealCheckTask runs real redis-full-check task
-func (s *DashboardServer) runRealCheckTask(ctx context.Context, compareMode, compareTimes, qps, batchCount, parallel int) {
+// runRealCheckTask runs real native checker task
+func (s *DashboardServer) runRealCheckTask(ctx context.Context, compareModeInt int, compareTimes, qps, batchCount, parallel int) {
 	defer func() {
 		s.checkMu.Lock()
 		s.checkRunning = false
@@ -162,33 +162,53 @@ func (s *DashboardServer) runRealCheckTask(ctx context.Context, compareMode, com
 	if stateDir == "" {
 		stateDir = "state"
 	}
-	resultDB := filepath.Join(stateDir, "check_result.db")
-	resultFile := filepath.Join(stateDir, "check_result.txt")
 
 	// Create progress channel
-	progressCh := make(chan fullcheck.Progress, 100)
+	progressCh := make(chan checker.Progress, 100)
 
-	// Create checker
-	checker := fullcheck.NewChecker(fullcheck.CheckConfig{
-		Binary:       "./bin/redis-full-check", // Relative to working directory
-		SourceAddr:   s.cfg.Source.Addr,
-		SourcePass:   s.cfg.Source.Password,
-		TargetAddr:   s.cfg.Target.Addr,
-		TargetPass:   s.cfg.Target.Password,
-		CompareMode:  compareMode,
-		CompareTimes: compareTimes,
-		QPS:          qps,
-		BatchCount:   batchCount,
-		Parallel:     parallel,
-		ResultDB:     resultDB,
-		ResultFile:   resultFile,
-	}, progressCh)
+	// Map legacy int mode to native checker.CheckMode
+	var cm checker.CheckMode
+	switch compareModeInt {
+	case 1:
+		cm = checker.ModeFullValue
+	case 2:
+		cm = checker.ModeValueLength
+	case 4:
+		cm = checker.ModeSmartBigKey
+	case 3:
+		fallthrough
+	default:
+		cm = checker.ModeKeyOutline
+	}
+
+	// Create checker options
+	cfg := checker.Config{
+		SourceAddr:     s.cfg.Source.Addr,
+		SourcePassword: s.cfg.Source.Password,
+		TargetAddr:     s.cfg.Target.Addr,
+		TargetPassword: s.cfg.Target.Password,
+		Mode:           cm,
+		QPS:            qps,
+		Parallel:       parallel,
+		ResultDir:      stateDir,
+		BatchSize:      batchCount,
+		Timeout:        3600,
+		CompareTimes:   compareTimes,
+		TaskName:       "dashboard-check",
+	}
+
+	c := checker.NewChecker(cfg)
 
 	// Start progress update goroutine
 	go s.updateCheckProgressFromChannel(progressCh)
 
 	// Execute validation
-	if err := checker.Run(ctx); err != nil {
+	result, err := c.Run(ctx, progressCh)
+
+	// Close progress channel after run returns
+	close(progressCh)
+
+	if err != nil {
 		log.Printf("[Check] Validation failed: %v", err)
 		s.updateCheckStatus(func(status *CheckStatus) {
 			status.Message = fmt.Sprintf("Validation failed: %v", err)
@@ -204,56 +224,24 @@ func (s *DashboardServer) runRealCheckTask(ctx context.Context, compareMode, com
 		status.Message = "Validation completed"
 		status.Running = false
 		status.ElapsedSeconds = time.Since(status.StartedAt).Seconds()
-		// Ensure final round is displayed
-		status.Round = status.CompareTimes
+
+		status.TotalKeys = result.TotalKeys
+		status.ConsistentKeys = result.ConsistentKeys
+		status.InconsistentKeys = result.InconsistentKeys
 	})
 
 	log.Println("[Check] Validation task completed")
 }
 
 // updateCheckProgressFromChannel updates status from progress channel
-func (s *DashboardServer) updateCheckProgressFromChannel(progressCh <-chan fullcheck.Progress) {
+func (s *DashboardServer) updateCheckProgressFromChannel(progressCh <-chan checker.Progress) {
 	for progress := range progressCh {
 		s.updateCheckStatus(func(status *CheckStatus) {
-			status.Round = progress.Round
 			status.TotalKeys = progress.TotalKeys
 			status.CheckedKeys = progress.CheckedKeys
-			status.ErrorCount = progress.ErrorCount
+			status.ConsistentKeys = progress.ConsistentKeys
+			status.InconsistentKeys = progress.InconsistentKeys
 			status.Message = progress.Message
-
-			inconsistent := progress.ConflictKeys + progress.MissingKeys
-			if inconsistent < 0 {
-				inconsistent = 0
-			}
-			status.InconsistentKeys = inconsistent
-			consistent := progress.CheckedKeys - inconsistent
-			if consistent < 0 {
-				consistent = 0
-			}
-			status.ConsistentKeys = consistent
-
-			// Track per-round progress separately.
-			roundProgress := progress.Progress
-			if roundProgress < 0 {
-				roundProgress = 0
-			} else if roundProgress > 1 {
-				roundProgress = 1
-			}
-			status.RoundProgress = roundProgress
-
-			// Calculate overall progress across rounds
-			// Overall progress = (completed rounds + current round progress) / total rounds
-			if progress.CompareTimes > 0 && progress.Round > 0 {
-				completedRounds := float64(progress.Round - 1)
-				status.Progress = (completedRounds + roundProgress) / float64(progress.CompareTimes)
-
-				// Ensure progress does not exceed 1.0
-				if status.Progress > 1.0 {
-					status.Progress = 1.0
-				}
-			} else {
-				status.Progress = roundProgress
-			}
 		})
 	}
 }

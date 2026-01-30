@@ -15,9 +15,7 @@ import (
 
 	"df2redis/internal/checker"
 	"df2redis/internal/config"
-	"df2redis/internal/executor/shake"
 	"df2redis/internal/logger"
-	"df2redis/internal/pipeline"
 	"df2redis/internal/replica"
 	"df2redis/internal/state"
 	"df2redis/internal/web"
@@ -49,8 +47,6 @@ func Execute(args []string) int {
 		return runPrepare(args[1:])
 	case "migrate":
 		return runMigrate(args[1:])
-	case "cold-import":
-		return runColdImport(args[1:])
 	case "replicate":
 		return runReplicate(args[1:])
 	case "check":
@@ -61,8 +57,7 @@ func Execute(args []string) int {
 		return runRollback(args[1:])
 	case "dashboard":
 		return runDashboard(args[1:])
-	case "compare-keys":
-		return runCompareKeys(args[1:])
+
 	case "help", "-h", "--help":
 		printUsage()
 		return 0
@@ -100,11 +95,14 @@ func runMigrate(args []string) int {
 	var dryRun bool
 	var showPort int
 	var showAddr string
+	var verify bool // New flag
+
 	fs.StringVar(&configPath, "config", "", "Configuration file path (YAML)")
 	fs.StringVar(&configPath, "c", "", "Configuration file path (YAML)")
 	fs.BoolVar(&dryRun, "dry-run", false, "Validate configuration only without running migration")
 	fs.IntVar(&showPort, "show", 0, "Start embedded dashboard on the given port (e.g. --show 8080)")
 	fs.StringVar(&showAddr, "show-addr", "", "Start embedded dashboard on the given address (e.g. --show-addr 0.0.0.0:8080)")
+	fs.BoolVar(&verify, "verify", false, "Run data consistency check after migration (smart mode)")
 
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -134,10 +132,6 @@ func runMigrate(args []string) int {
 		log.Println("🚧 Dry-run mode: configuration only; no migration will run.")
 		return 0
 	}
-
-	// runCtx not needed anymore as Replicator manages its own context/signals
-	// runCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	// defer stopSignals()
 
 	if err := cfg.EnsureStateDir(); err != nil {
 		log.Printf("Failed to create state directory: %v", err)
@@ -225,147 +219,66 @@ func runMigrate(args []string) int {
 			return 1
 		}
 		logger.Console("\n✅ Migration completed successfully")
+
+		// ---------------------
+		// Post-Migration Verify
+		// ---------------------
+		if verify {
+			logger.Console("\n🔍 Starting post-migration verification (smart mode)...")
+
+			// Create checker config
+			checkCfg := checker.Config{
+				SourceAddr:      cfg.Source.Addr,
+				SourcePassword:  cfg.Source.Password,
+				TargetAddr:      cfg.Target.Addr,
+				TargetPassword:  cfg.Target.Password,
+				Mode:            checker.ModeSmartBigKey, // Default to smart mode for verify flag
+				QPS:             5000,
+				Parallel:        4,
+				ResultDir:       "check-results",
+				BatchSize:       1000,
+				Timeout:         3600,
+				BigKeyThreshold: 5000,
+				TaskName:        "verify-after-migrate",
+			}
+
+			c := checker.NewChecker(checkCfg)
+			progressCh := make(chan checker.Progress, 100)
+
+			// Simple progress reporter for CLI
+			go func() {
+				for p := range progressCh {
+					if p.TotalKeys > 0 && p.TotalKeys%1000 == 0 {
+						fmt.Printf("\rChecked: %d keys | Inconsistent: %d | Missing: %d", p.CheckedKeys, p.InconsistentKeys, p.MissingKeys)
+					}
+				}
+				fmt.Println()
+			}()
+
+			ctx := context.Background()
+			result, err := c.Run(ctx, progressCh)
+			close(progressCh)
+
+			if err != nil {
+				logger.Error("❌ Verification failed: %v", err)
+				return 1
+			}
+
+			c.PrintResult(result)
+
+			if result.InconsistentKeys > 0 || result.MissingKeys > 0 {
+				logger.Error("❌ Verification found inconsistencies! See %s", result.ResultFile)
+				return 1
+			}
+			logger.Console("✅ Verification passed! Source and Target are consistent.")
+		}
+
 		return 0
 	case sig := <-sigCh:
 		logger.Console("\n📡 Signal %v received, shutting down...", sig)
 		replicator.Stop()
 		return 0
 	}
-}
-
-func runColdImport(args []string) int {
-	fs := flag.NewFlagSet("cold-import", flag.ContinueOnError)
-	fs.SetOutput(os.Stdout)
-	var configPath string
-	var rdbPath string
-	var shakeBinary string
-	var shakeConfig string
-	var shakeArgs string
-	var taskNameFlag string
-	fs.StringVar(&configPath, "config", "", "Configuration file path (YAML)")
-	fs.StringVar(&configPath, "c", "", "Configuration file path (YAML)")
-	fs.StringVar(&rdbPath, "rdb", "", "Existing RDB file path (overrides migrate.snapshotPath)")
-	fs.StringVar(&shakeBinary, "shake-binary", "", "redis-shake binary path (overrides migrate.shakeBinary)")
-	fs.StringVar(&shakeConfig, "shake-conf", "", "redis-shake config file (overrides migrate.shakeConfigFile)")
-	fs.StringVar(&shakeArgs, "shake-args", "", "redis-shake runtime args (overrides migrate.shakeArgs)")
-	fs.StringVar(&taskNameFlag, "task-name", "", "Task name for log file prefix")
-
-	if err := fs.Parse(args); err != nil {
-		if err == flag.ErrHelp {
-			return 0
-		}
-		log.Printf("Failed to parse arguments: %v", err)
-		return 1
-	}
-	if configPath == "" {
-		fs.Usage()
-		return 2
-	}
-
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return errorToExitCode(err)
-	}
-
-	if taskNameFlag != "" {
-		cfg.TaskName = taskNameFlag
-	}
-
-	// Partial validation for cold-import (Source is not required)
-	var errs []string
-	if cfg.Target.Addr == "" && len(cfg.Target.Cluster.Seeds) == 0 {
-		errs = append(errs, "target.addr or target.cluster.seeds is required")
-	}
-	if cfg.Migrate.SnapshotPath == "" && cfg.Migrate.ShakeConfigFile == "" && rdbPath == "" && shakeConfig == "" {
-		errs = append(errs, "migrate.snapshotPath or shake-conf is required")
-	}
-	if cfg.Migrate.ShakeBinary == "" && shakeBinary == "" {
-		errs = append(errs, "migrate.shakeBinary is required")
-	}
-	if len(errs) > 0 {
-		log.Printf("Config validation failed for cold-import:\n - %s", strings.Join(errs, "\n - "))
-		return 2
-	}
-
-	if rdbPath != "" {
-		cfg.Migrate.SnapshotPath = rdbPath
-	}
-	if shakeBinary != "" {
-		cfg.Migrate.ShakeBinary = shakeBinary
-	}
-	if shakeConfig != "" {
-		cfg.Migrate.ShakeConfigFile = shakeConfig
-	}
-	if shakeArgs != "" {
-		cfg.Migrate.ShakeArgs = shakeArgs
-	}
-
-	if err := cfg.EnsureStateDir(); err != nil {
-		log.Printf("Failed to create state directory: %v", err)
-		return 1
-	}
-
-	migrateCfg := cfg.ResolvedMigrateConfig()
-	cfg.Migrate = migrateCfg
-
-	// Validation: RDB path is required UNLESS a shake config file is provided (which might contain it)
-	if cfg.Migrate.SnapshotPath == "" && cfg.Migrate.ShakeConfigFile == "" {
-		log.Println("migrate.snapshotPath is not configured (and no shake-conf provided)")
-		return 2
-	}
-	if cfg.Migrate.ShakeBinary == "" {
-		log.Println("migrate.shakeBinary is not configured")
-		return 2
-	}
-
-	if err := initLogger(cfg, "cold-import"); err != nil {
-		log.Printf("Failed to initialize logging: %v", err)
-		return 1
-	}
-	defer logger.Close()
-
-	if cfg.Migrate.SnapshotPath != "" {
-		if _, err := os.Stat(cfg.Migrate.SnapshotPath); err != nil {
-			logger.Error("RDB file unavailable: %v", err)
-			return 1
-		}
-	}
-	if _, err := os.Stat(cfg.Migrate.ShakeBinary); err != nil {
-		logger.Error("redis-shake binary unavailable: %v", err)
-		return 1
-	}
-
-	if strings.TrimSpace(cfg.Migrate.ShakeArgs) == "" && strings.TrimSpace(cfg.Migrate.ShakeConfigFile) == "" {
-		path, err := pipeline.GenerateShakeConfigFile(cfg, cfg.ResolveStateDir())
-		if err != nil {
-			logger.Error("Failed to generate redis-shake config: %v", err)
-			return 1
-		}
-		logger.Console("🛠️ Generated redis-shake config: %s", path)
-	}
-
-	importer, err := shake.NewImporter(cfg.Migrate, cfg.Target)
-	if err != nil {
-		logger.Error("Failed to initialize redis-shake: %v", err)
-		return 1
-	}
-
-	logger.Console("❄️ Cold import started")
-	if cfg.Migrate.SnapshotPath != "" {
-		logger.Console("📦 RDB file: %s", cfg.Migrate.SnapshotPath)
-	} else {
-		logger.Console("📦 RDB file: (configured in shake-conf)")
-	}
-	logger.Console("🎯 Target: %s @ %s", cfg.Target.Type, cfg.Target.Addr)
-	logger.Console("⚙️ redis-shake: %s", cfg.Migrate.ShakeBinary)
-	logger.Console("⚠️ Existing data on the target may be overwritten")
-
-	if err := importer.Run(context.Background()); err != nil {
-		logger.Error("cold-import failed: %v", err)
-		return 1
-	}
-	logger.Console("✅ Cold import completed")
-	return 0
 }
 
 func runStatus(args []string) int {
@@ -655,12 +568,12 @@ func runCheck(args []string) int {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
 	var (
-		configPath      string
-		mode            string
-		qps             int
-		parallel        int
-		resultDir       string
-		binary          string
+		configPath string
+		mode       string
+		qps        int
+		parallel   int
+		resultDir  string
+
 		filterList      string
 		compareTimes    int
 		interval        int
@@ -675,7 +588,7 @@ func runCheck(args []string) int {
 	fs.IntVar(&qps, "qps", 500, "QPS limit")
 	fs.IntVar(&parallel, "parallel", 4, "Parallelism")
 	fs.StringVar(&resultDir, "result-dir", "./check-results", "Result output directory")
-	fs.StringVar(&binary, "binary", "redis-full-check", "redis-full-check binary path")
+
 	fs.StringVar(&filterList, "filter", "", "Key filter list with prefix matching (e.g. 'user:*|session:*')")
 	fs.IntVar(&compareTimes, "compare-times", 3, "Number of comparison rounds")
 	fs.IntVar(&interval, "interval", 5, "Interval between rounds (seconds)")
@@ -728,7 +641,6 @@ func runCheck(args []string) int {
 		QPS:             qps,
 		Parallel:        parallel,
 		ResultDir:       resultDir,
-		BinaryPath:      binary,
 		FilterList:      filterList,
 		CompareTimes:    compareTimes,
 		Interval:        interval,
@@ -744,7 +656,7 @@ func runCheck(args []string) int {
 
 	// Run comparison
 	ctx := context.Background()
-	result, err := c.Run(ctx)
+	result, err := c.Run(ctx, nil)
 	if err != nil {
 		log.Printf("Validation failed: %v", err)
 		return 1
@@ -771,7 +683,6 @@ Usage:
 Available commands:
   prepare    Pre-check environment, dependencies, and config
   migrate    Run the migration pipeline (supports --dry-run)
-  cold-import Use redis-shake once to import an RDB into target Redis
   replicate  Start the Dragonfly replicator (handshake test)
   check      Validate data consistency (redis-full-check)
   status     Show current migration status

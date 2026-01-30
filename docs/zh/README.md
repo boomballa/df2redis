@@ -76,5 +76,5 @@
 
 - [项目 GitHub](https://github.com/boomballa/df2redis)
 - [English Documentation](../en/README.md)
-- [API 文档](../api/dashboard-api.md)
+- [API 文档](../api/dashboard-api.zh.md)
 - [开发日志归档](../archive/development-logs/)

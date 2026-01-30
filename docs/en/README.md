@@ -76,5 +76,5 @@ Main diagrams:
 
 - [Project GitHub](https://github.com/boomballa/df2redis)
 - [中文文档](../zh/README.md)
-- [API Documentation](../api/dashboard-api.md)
+- [API Documentation](../api/dashboard-api.en.md)
 - [Development Logs Archive](../archive/development-logs/)

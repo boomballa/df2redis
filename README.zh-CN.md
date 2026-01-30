@@ -65,7 +65,7 @@
   - MOVED/ASK 错误处理
 
 - ✅ **数据校验**
-  - 集成 [redis-full-check](https://github.com/alibaba/RedisFullCheck)
+  - 原生并行校验器
   - 三种校验模式：完整/大纲/长度对比
   - 详细的不一致性报告，JSON 输出
   - 性能控制（QPS 限制、并行调优）
@@ -138,8 +138,7 @@ GOOS=darwin GOARCH=amd64 go build -o bin/df2redis-mac ./cmd/df2redis
 | --- | --- |
 | `df2redis replicate --config <file>` | 启动完整复制（全量 RDB + 增量 Journal），持续运行。 |
 | `df2redis migrate --config <file>` | 启动迁移（仅全量 RDB），完成后自动退出。使用高性能原生协议。 |
-| `df2redis cold-import --config <file>` | 离线导入本地 RDB 文件（基于 `redis-shake`）。 |
-| `df2redis check --config <file>` | 数据一致性校验（基于 `redis-full-check`）。 |
+| `df2redis check --config <file>` | 原生数据一致性校验（并行扫描与对比）。 |
 | `df2redis dashboard --config <file>` | 启动独立 Dashboard 服务。 |
 
 ---
@@ -182,12 +181,7 @@ checkpoint:
 
 # 查看实时日志
 tail -f logs/df2redis.log
-
-# 冷态一次性导入 RDB（使用 redis-shake）
-./bin/df2redis cold-import --config config.yaml --rdb ../tmp/latest.rdb
 ```
-
-> `cold-import` 会直接调用 redis-shake，复用配置中的 `migrate.*` 字段（或 `--rdb` 覆盖）把 RDB 文件灌入目标 Redis，不会启动增量同步。
 
 #### 3. 监控进度
 
@@ -246,24 +240,7 @@ df2redis 实现了完全并行的多 FLOW 架构，与 Dragonfly 的分片设计
 
 ### 高层设计
 
-```
-┌─────────────┐                    ┌──────────────┐
-│             │   DFLY REPLICAOF  │              │
-│  Dragonfly  │◄──────────────────│  df2redis    │
-│   (Master)  │                    │  (Replica)   │
-│             │                    │              │
-│             │   Nx FLOW Streams  │              │
-│             ├───────────────────►│              │
-│             │   RDB + Journal    │              │
-└─────────────┘                    └──────┬───────┘
-                                          │
-                                          │ Redis Protocol
-                                          ▼
-                                   ┌──────────────┐
-                                   │    Redis     │
-                                   │   Cluster    │
-                                   └──────────────┘
-```
+![System Architecture](docs/images/architecture/df2redis_handdrawn.png)
 
 ### 核心设计原则
 
@@ -549,8 +526,15 @@ go build -o bin/df2redis ./cmd/df2redis
 
 ## 🙏 致谢
 
-- [Dragonfly](https://github.com/dragonflydb/dragonfly) - 现代化的 Redis 替代方案
-- [Redis](https://redis.io/) - 内存数据结构存储
+## 🙏 致谢
+
+特别感谢以下优秀的开源项目：
+
+- [RedisFullCheck](https://github.com/tair-opensource/RedisFullCheck) - df2redis 的数据校验功能（`check`）的设计参考了 RedisFullCheck 的实现方法。
+- [RedisShake](https://github.com/tair-opensource/RedisShake) - 优秀的数据迁移工具。如果您需要进行 RDB 文件离线灌入，推荐参考 RedisShake 的方案。
+    - *注意*：Dragonfly 在执行 BGSAVE 时，请使用 RDB 模式（例如命令 `BGSAVE RDB` 或配置 `DF_SNAPSHOT_FORMAT=RDB`），以生成兼容 Redis 的 RDB 文件。
+- [Dragonfly](https://github.com/dragonflydb/dragonfly) - 本工具的总体设计参考了 Dragonfly 源码实现，旨在适配其高性能复制协议实现数据同步。
+    - *推荐*：如果您需要查看 Dragonfly 官方文档的中文翻译，可以参考作者维护的 [dragonfly-translate](https://github.com/boomballa/dragonfly-translate) 项目。
 - [Go 社区](https://go.dev/) - 优秀的工具和生态系统
 
 ---

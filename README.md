@@ -44,7 +44,7 @@ Key ideas:
 ### Operational tooling
 
 - 🛠 `df2redis replicate` – connect to Dragonfly, establish FLOWs, receive RDB, and start journal replay.
-- 🧪 `df2redis check` – wrapper around `redis-full-check` with friendly defaults.
+- 🧪 `df2redis check` – Native parallel data consistency checker.
 - 📊 Dashboard stub (HTTP) powered by the `dashboard` command and persisted state files.
 - 📂 Rich documentation under `docs/` (Chinese originals) plus the English excerpts in this README.
 
@@ -90,16 +90,7 @@ Helpful tips:
 
 df2redis implements a fully parallel, multi-FLOW architecture that matches Dragonfly's shard-based design for maximum throughput.
 
-```
-Dragonfly (source)
-   ├─ Main connection (handshake, STARTSTABLE)
-   ├─ FLOW-0 ... FLOW-n (RDB + journal)
-   └─ Checkpoints persisted locally
-
-Redis / Redis Cluster (target)
-   ├─ Cluster client with slot routing
-   └─ Conflict policy + TTL restoration
-```
+![System Architecture](docs/images/architecture/df2redis_handdrawn.png)
 
 ### Core Design Principles
 
@@ -126,12 +117,10 @@ Redis / Redis Cluster (target)
 | --- | --- |
 | `df2redis replicate --config <file>` | Run full replication (Snapshot + Incremental Journal). Keeps running. |
 | `df2redis migrate --config <file>` | Run migration (Snapshot Only). Exits after RDB phase. High performance. |
-| `df2redis cold-import --config <file>` | Offline RDB import using `redis-shake`. |
-| `df2redis check --config <file> [flags]` | Launch data consistency check (wrapper around `redis-full-check`) |
+| `df2redis check --config <file> [flags]` | Launch native data consistency check (parallel scan & diff) |
 | `df2redis dashboard --config <file>` | Start the standalone dashboard service |
 
 `replicate` and `migrate` both use the native Dragonfly replication protocol for high-performance data transfer.
-`cold-import` wraps `redis-shake` for loading local RDB files.
 
 The embedded dashboard listens on `config.dashboard.addr` (default `:8080`). Override it in the YAML or pass `--dashboard-addr` to `replicate`/`--addr` to `dashboard`.
 
@@ -193,7 +182,7 @@ Operational documentation for users and operators:
 
 - [Chinese Documentation](docs/zh/) – Comprehensive Chinese technical documentation
 - [Test Scripts Guide](scripts/README.md) – Comprehensive testing documentation
-- [Dashboard API Reference](docs/api/dashboard-api.md) – JSON endpoints for monitoring
+- [Dashboard API Reference](docs/api/dashboard-api.en.md) – JSON endpoints for monitoring
 
 ---
 
@@ -205,3 +194,16 @@ Operational documentation for users and operators:
 4. For protocol questions, read the Dragonfly sources under `dragonfly/src/server` or ping the maintainers.
 
 MIT licensed. PRs and issues are always welcome!
+
+---
+
+## 🙏 Acknowledgements
+
+We would like to express our gratitude to the following outstanding open-source projects:
+
+- [RedisFullCheck](https://github.com/tair-opensource/RedisFullCheck) - Our data consistency checker (`df2redis check`) is inspired by and references the design of RedisFullCheck.
+- [RedisShake](https://github.com/tair-opensource/RedisShake) - An excellent tool for data migration. If you need to import RDB files, we recommend referring to RedisShake's approach.
+    - *Note*: When generating RDB files from Dragonfly for use with tools like RedisShake, please ensure you use `DF_SNAPSHOT_FORMAT=RDB` (or the equivalent `BGSAVE RDB` command) to produce Redis-compatible RDB files.
+- [Dragonfly](https://github.com/dragonflydb/dragonfly) - This tool's core design references the Dragonfly source code, and its existence is dedicated to adapting Dragonfly's high-performance replication protocol for Redis synchronization.
+
+---
