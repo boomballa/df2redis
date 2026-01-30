@@ -87,3 +87,14 @@ examples/logslog/
 # Local Configuration Directory
 conf/*
 !conf/README.md
+
+# External Tools & Dependencies
+RedisFullCheck/
+redis-shake-v4/
+check-results/
+state/
+checkpoint/
+logs/
+
+# 忽略外部依赖项目
+RedisFullCheck/
