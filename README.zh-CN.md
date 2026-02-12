@@ -272,12 +272,15 @@ df2redis 实现了完全并行的多 FLOW 架构，与 Dragonfly 的分片设计
 - **[Stream RDB 格式](docs/zh/research/dragonfly-stream-rdb-format.md)** – Stream 序列化格式在 V1/V2/V3 版本中的详细分解和 PEL 编码
 - **[Stream 同步机制](docs/zh/research/dragonfly-stream-sync.md)** – Journal 重写和精确 ID 跟踪以确保 Stream 一致性
 - **[全量同步性能](docs/zh/research/dragonfly-fullsync-performance.md)** – 高性能架构分析和 Redis 写入优化
+- **[性能基准测试](docs/zh/research/benchmark.md)** – 全量迁移性能对比报告 (df2redis vs RedisShake)
 
 ### 使用指南
 
 操作文档，面向用户和运维人员：
 
 - **[数据校验指南](docs/zh/guides/data-validation.md)** – 使用 `redis-full-check` 进行一致性验证
+- **[部署指南](docs/zh/guides/deployment.md)** – Docker Compose 与 Systemd 生产部署最佳实践
+- **[常见问题 (FAQ)](docs/zh/guides/faq.md)** – 性能、连接与数据一致性排查手册
 - **[Dashboard 设计](docs/zh/guides/dashboard.md)** – Material UI + Chart.js 布局方案和实现路线图
 
 ### 其他资源
@@ -536,6 +539,16 @@ go build -o bin/df2redis ./cmd/df2redis
 - [Dragonfly](https://github.com/dragonflydb/dragonfly) - 本工具的总体设计参考了 Dragonfly 源码实现，旨在适配其高性能复制协议实现数据同步。
     - *推荐*：如果您需要查看 Dragonfly 官方文档的中文翻译，可以参考作者维护的 [dragonfly-translate](https://github.com/boomballa/dragonfly-translate) 项目。
 - [Go 社区](https://go.dev/) - 优秀的工具和生态系统
+
+### 核心依赖
+
+本项目使用了以下优秀的 Go 开源库：
+
+- **[go-redis/v9](https://github.com/redis/go-redis)** - 强大的 Redis 客户端，用于连接目标端 Redis/Cluster。
+- **[pierrec/lz4](https://github.com/pierrec/lz4)** - 高性能 LZ4 压缩/解压缩库，用于解析 Dragonfly 的 RDB 快照。
+- **[zhuyie/golzf](https://github.com/zhuyie/golzf)** - LZF 压缩算法实现，用于支持 Redis LZF 编码。
+- **[klauspost/compress](https://github.com/klauspost/compress)** - 优化的压缩库集合。
+- **[golang.org/x/time](https://pkg.go.dev/golang.org/x/time)** - 标准限流库，用于控制同步速率保护目标端。
 
 ---
 

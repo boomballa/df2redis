@@ -170,13 +170,16 @@ Protocol analysis and implementation research:
 - **[Stream RDB Format](docs/en/research/dragonfly-stream-rdb-format.md)** – Stream serialization format across V1/V2/V3 and PEL encoding
 - **[Stream Sync Mechanism](docs/en/research/dragonfly-stream-sync.md)** – Journal rewriting and precise ID tracking for Stream consistency
 - **[Full Sync Performance](docs/en/research/dragonfly-fullsync-performance.md)** – High-performance architecture and Redis write optimizations
+- **[Benchmark Report](docs/zh/research/benchmark.md)** *(Chinese)* – Performance comparison (df2redis vs RedisShake)
 
 ### User Guides
 
 Operational documentation for users and operators:
 
 - **[Data Validation Guide](docs/en/guides/data-validation.md)** – Using `redis-full-check` for consistency verification
-- **[Dashboard Design](docs/en/guides/dashboard.md)** – Material UI + Chart.js layout plan and implementation roadmap
+- **[Deployment Guide](docs/zh/guides/deployment.md)** *(Chinese)* – Docker Compose & Systemd best practices
+- **[FAQ](docs/zh/guides/faq.md)** *(Chinese)* – Troubleshooting performance & connectivity
+- **[Dashboard Design](docs/zh/guides/dashboard.md)** – Material UI + Chart.js layout plan and implementation roadmap
 
 ### Additional Resources
 
@@ -205,5 +208,15 @@ We would like to express our gratitude to the following outstanding open-source 
 - [RedisShake](https://github.com/tair-opensource/RedisShake) - An excellent tool for data migration. If you need to import RDB files, we recommend referring to RedisShake's approach.
     - *Note*: When generating RDB files from Dragonfly for use with tools like RedisShake, please ensure you use `DF_SNAPSHOT_FORMAT=RDB` (or the equivalent `BGSAVE RDB` command) to produce Redis-compatible RDB files.
 - [Dragonfly](https://github.com/dragonflydb/dragonfly) - This tool's core design references the Dragonfly source code, and its existence is dedicated to adapting Dragonfly's high-performance replication protocol for Redis synchronization.
+
+### Core Dependencies
+
+We rely on these excellent open-source libraries:
+
+- **[go-redis/v9](https://github.com/redis/go-redis)** - Robust Redis client.
+- **[pierrec/lz4](https://github.com/pierrec/lz4)** - High-performance LZ4 compression used for RDB parsing.
+- **[zhuyie/golzf](https://github.com/zhuyie/golzf)** - LZF compression for Redis encoding support.
+- **[klauspost/compress](https://github.com/klauspost/compress)** - Optimized compression packages.
+- **[golang.org/x/time](https://pkg.go.dev/golang.org/x/time)** - Rate limiting support.
 
 ---
