@@ -1,0 +1,28 @@
+########################################
+##### 🧪 Integration Test Config #########
+########################################
+# Used by tests/integration/integration_test.go
+
+# Source Dragonfly instance
+source:
+  addr: "127.0.0.1:6379"
+  password: ""
+
+# Target Redis instance
+target:
+  type: "redis-standalone"
+  addr: "127.0.0.1:6380"
+  password: ""
+
+# General settings
+log:
+  level: "info"
+  consoleEnabled: true
+
+conflict:
+  policy: "overwrite"
+
+# Test-specific settings
+test:
+  keyPrefix: "integration_test:"
+  itemCount: 100

@@ -155,14 +155,14 @@ cp examples/replicate.sample.yaml config.yaml
 
 ```yaml
 source:
-  addr: "192.168.1.100:16379"     # Dragonfly 地址
+  addr: "192.168.1.x:16379"     # Dragonfly 地址
   password: ""                    # 可选密码
   tls: false
 
 target:
   type: "redis-cluster"           # 或 "redis-standalone"
-  addr: "192.168.2.200:6379"      # Redis 地址
-  password: "your-password"
+  addr: "192.168.2.x:6379"      # Redis 地址
+  password: "your_password"
   tls: false
 
 checkpoint:
@@ -190,7 +190,7 @@ tail -f logs/df2redis.log
 ```
 🚀 启动 Dragonfly 复制器
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔗 连接到 Dragonfly: 192.168.1.100:16379
+🔗 连接到 Dragonfly: 192.168.1.x:16379
 ✓ 主连接建立成功
 
 🤝 开始握手流程
@@ -297,7 +297,7 @@ df2redis 实现了完全并行的多 FLOW 架构，与 Dragonfly 的分片设计
 
 ```yaml
 source:
-  addr: "192.168.1.100:16379" # Dragonfly 地址（必填）
+  addr: "192.168.1.x:16379" # Dragonfly 地址（必填）
   password: ""                # 认证密码（可选）
   tls: false                  # 启用 TLS（可选）
 ```
@@ -309,7 +309,7 @@ source:
 ```yaml
 target:
   type: "redis-cluster"       # "redis-standalone" 或 "redis-cluster"（必填）
-  addr: "192.168.2.200:6379"  # Redis 地址（必填）
+  addr: "192.168.2.x:6379"  # Redis 地址（必填）
   password: "your_redis_password"  # 认证密码（可选）
   tls: false                  # 启用 TLS（可选）
 ```

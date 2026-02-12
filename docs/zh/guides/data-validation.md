@@ -120,13 +120,13 @@ check 命令会从配置文件中读取源端和目标端的连接信息：
 ```yaml
 # config.yaml
 source:
-  addr: "192.168.1.100:16379"      # Dragonfly 地址
+  addr: "192.168.1.x:16379"      # Dragonfly 地址
   password: ""                    # 可选
 
 target:
   type: "redis-cluster"           # 或 "redis-standalone"
-  addr: "192.168.2.200:6379"      # Redis 地址
-  password: "your-password"       # 可选
+  addr: "192.168.2.x:6379"      # Redis 地址
+  password: "your_password"       # 可选
   tls: false
 ```
 

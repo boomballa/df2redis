@@ -21,8 +21,8 @@
   "stage": "full_sync",
   "stageMessage": "FLOW 建立完成",
   "stageUpdatedAt": "2025-03-21T10:33:11Z",
-  "source": { "type": "dragonfly", "addr": "10.0.0.1:7380" },
-  "target": { "type": "redis-cluster", "seed": "10.0.2.10:6379", "initialKeys": 1200 },
+  "source": { "type": "dragonfly", "addr": "192.168.1.x:7380" },
+  "target": { "type": "redis-cluster", "seed": "192.168.2.x:6379", "initialKeys": 1200 },
   "checkpoint": {
     "enabled": true,
     "file": "/opt/df2redis/state/checkpoint.json",

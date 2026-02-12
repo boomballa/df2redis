@@ -199,7 +199,7 @@ During cluster resharding, slots may move between nodes:
 
 ```
 Client → Node A: SET key value
-Node A → Client: -MOVED 12345 10.0.0.2:6379
+Node A → Client: -MOVED 12345 10.x.x.x:6379
 Client → Node B: SET key value
 Node B → Client: OK
 ```
@@ -224,7 +224,7 @@ func (c *ClusterClient) Do(cmd string, args ...string) (interface{}, error) {
 
         // Check for MOVED error
         if strings.HasPrefix(err.Error(), "MOVED ") {
-            // Parse: "MOVED 12345 10.0.0.2:6379"
+            // Parse: "MOVED 12345 10.x.x.x:6379"
             parts := strings.Fields(err.Error())
             newSlot, _ := strconv.Atoi(parts[1])
             newAddr := parts[2]
@@ -249,7 +249,7 @@ func (c *ClusterClient) Do(cmd string, args ...string) (interface{}, error) {
 
 ```
 Client → Node A: SET key value
-Node A → Client: -ASK 12345 10.0.0.2:6379
+Node A → Client: -ASK 12345 10.x.x.x:6379
 Client → Node B: ASKING
 Client → Node B: SET key value
 Node B → Client: OK
