@@ -101,21 +101,24 @@ func NewChecker(config Config) *Checker {
 	return &Checker{config: config}
 }
 
-// Run executes data consistency validation
+// Run executes data consistency validation, supporting multiple rounds via config.CompareTimes.
+// Round 1 scans all keys. Subsequent rounds re-scan all keys after a configurable interval,
+// stopping early when no inconsistencies remain.
 func (c *Checker) Run(ctx context.Context, progressCh chan<- Progress) (*Result, error) {
 	// Create result directory
 	if err := os.MkdirAll(c.config.ResultDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create result directory: %w", err)
 	}
 
-	result := &Result{
-		InconsistentSamples: make([]string, 0),
-	}
 	startTime := time.Now()
+	compareTimes := c.config.CompareTimes
+	if compareTimes <= 0 {
+		compareTimes = 1
+	}
 
-	log.Printf("🚀 Starting native check (Mode: %s, Parallel: %d)", c.config.Mode, c.config.Parallel)
+	log.Printf("🚀 Starting native check (Mode: %s, Parallel: %d, Rounds: %d)", c.config.Mode, c.config.Parallel, compareTimes)
 
-	// Connect to Source and Target
+	// Connect once; reuse across rounds
 	src, err := redisx.Dial(ctx, redisx.Config{Addr: c.config.SourceAddr, Password: c.config.SourcePassword})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to source: %w", err)
@@ -128,10 +131,63 @@ func (c *Checker) Run(ctx context.Context, progressCh chan<- Progress) (*Result,
 	}
 	defer tgt.Close()
 
-	// Channels for pipeline
+	finalResult := &Result{InconsistentSamples: make([]string, 0)}
+
+	for round := 1; round <= compareTimes; round++ {
+		// Wait between rounds
+		if round > 1 {
+			interval := c.config.Interval
+			if interval <= 0 {
+				interval = 5
+			}
+			select {
+			case <-ctx.Done():
+				finalResult.Duration = time.Since(startTime)
+				return finalResult, ctx.Err()
+			case <-time.After(time.Duration(interval) * time.Second):
+			}
+		}
+
+		// Notify round start
+		if progressCh != nil {
+			select {
+			case progressCh <- Progress{
+				Round:   round,
+				Message: fmt.Sprintf("Round %d/%d: scanning...", round, compareTimes),
+			}:
+			default:
+			}
+		}
+
+		roundResult := c.runOneRound(ctx, src, tgt, round, compareTimes, progressCh)
+
+		// First round establishes the total key count baseline
+		if round == 1 {
+			finalResult.TotalKeys = roundResult.TotalKeys
+		}
+		finalResult.ConsistentKeys = roundResult.ConsistentKeys
+		finalResult.InconsistentKeys = roundResult.InconsistentKeys
+		finalResult.MissingKeys = roundResult.MissingKeys
+		finalResult.InconsistentSamples = roundResult.InconsistentSamples
+
+		if roundResult.InconsistentKeys == 0 {
+			log.Printf("✓ Round %d/%d: all consistent, stopping early", round, compareTimes)
+			break
+		}
+		log.Printf("⚠ Round %d/%d: %d inconsistent keys", round, compareTimes, roundResult.InconsistentKeys)
+	}
+
+	finalResult.Duration = time.Since(startTime)
+	c.PrintResult(finalResult)
+	return finalResult, nil
+}
+
+// runOneRound performs a single full scan-and-compare pass.
+func (c *Checker) runOneRound(ctx context.Context, src, tgt *redisx.Client, round, totalRounds int, progressCh chan<- Progress) *Result {
+	result := &Result{InconsistentSamples: make([]string, 0)}
+
 	keyChan := make(chan string, c.config.BatchSize*2)
 
-	// Start Scanner
 	var scanWg sync.WaitGroup
 	scanWg.Add(1)
 	go func() {
@@ -140,7 +196,6 @@ func (c *Checker) Run(ctx context.Context, progressCh chan<- Progress) (*Result,
 		c.scanSource(ctx, src, keyChan)
 	}()
 
-	// Start Workers
 	var workerWg sync.WaitGroup
 	var inconsistenciesMutex sync.Mutex
 
@@ -148,18 +203,12 @@ func (c *Checker) Run(ctx context.Context, progressCh chan<- Progress) (*Result,
 		workerWg.Add(1)
 		go func() {
 			defer workerWg.Done()
-			// Create dedicated clients for workers if needed or reuse if client is thread-safe (redisx is likely thread-safe if it uses go-redis)
-			// Assuming redisx.Client is a wrapper around go-redis which is thread safe.
-			c.processKeys(ctx, src, tgt, keyChan, result, &inconsistenciesMutex, progressCh)
+			c.processKeys(ctx, src, tgt, keyChan, result, &inconsistenciesMutex, progressCh, round, totalRounds)
 		}()
 	}
 
-	// Wait for completion
 	workerWg.Wait()
-	result.Duration = time.Since(startTime)
-
-	c.PrintResult(result)
-	return result, nil
+	return result
 }
 
 func (c *Checker) scanSource(ctx context.Context, client *redisx.Client, out chan<- string) {
@@ -206,23 +255,23 @@ func (c *Checker) scanSource(ctx context.Context, client *redisx.Client, out cha
 	}
 }
 
-func (c *Checker) processKeys(ctx context.Context, src, tgt *redisx.Client, keys <-chan string, res *Result, lock *sync.Mutex, progressCh chan<- Progress) {
+func (c *Checker) processKeys(ctx context.Context, src, tgt *redisx.Client, keys <-chan string, res *Result, lock *sync.Mutex, progressCh chan<- Progress, round, totalRounds int) {
 	batchSize := 100
 	batch := make([]string, 0, batchSize)
 
 	for key := range keys {
 		batch = append(batch, key)
 		if len(batch) >= batchSize {
-			c.processBatch(ctx, src, tgt, batch, res, lock, progressCh)
+			c.processBatch(ctx, src, tgt, batch, res, lock, progressCh, round, totalRounds)
 			batch = batch[:0]
 		}
 	}
 	if len(batch) > 0 {
-		c.processBatch(ctx, src, tgt, batch, res, lock, progressCh)
+		c.processBatch(ctx, src, tgt, batch, res, lock, progressCh, round, totalRounds)
 	}
 }
 
-func (c *Checker) processBatch(ctx context.Context, src, tgt *redisx.Client, keys []string, res *Result, lock *sync.Mutex, progressCh chan<- Progress) {
+func (c *Checker) processBatch(ctx context.Context, src, tgt *redisx.Client, keys []string, res *Result, lock *sync.Mutex, progressCh chan<- Progress, round, totalRounds int) {
 	if len(keys) == 0 {
 		return
 	}
@@ -304,7 +353,7 @@ func (c *Checker) processBatch(ctx context.Context, src, tgt *redisx.Client, key
 	}
 
 	// Progress Reporting
-	c.reportProgress(res, progressCh)
+	c.reportProgress(res, progressCh, round, totalRounds)
 }
 
 func (c *Checker) batchVerifyStrings(src, tgt *redisx.Client, keys []string, res *Result, lock *sync.Mutex) {
@@ -396,16 +445,18 @@ func (c *Checker) recordInconsistency(res *Result, lock *sync.Mutex, key, srcInf
 	lock.Unlock()
 }
 
-func (c *Checker) reportProgress(res *Result, progressCh chan<- Progress) {
+func (c *Checker) reportProgress(res *Result, progressCh chan<- Progress, round, totalRounds int) {
 	total := atomic.LoadInt64(&res.TotalKeys)
 	if progressCh != nil && total%1000 == 0 { // Reduce frequency
 		select {
 		case progressCh <- Progress{
+			Round:            round,
 			TotalKeys:        total,
 			CheckedKeys:      total,
+			ConsistentKeys:   atomic.LoadInt64(&res.ConsistentKeys),
 			InconsistentKeys: atomic.LoadInt64(&res.InconsistentKeys),
 			MissingKeys:      atomic.LoadInt64(&res.MissingKeys),
-			Message:          "Running native check...",
+			Message:          fmt.Sprintf("Round %d/%d: running check...", round, totalRounds),
 		}:
 		default:
 		}

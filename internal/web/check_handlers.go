@@ -221,11 +221,13 @@ func (s *DashboardServer) runRealCheckTask(ctx context.Context, compareModeInt i
 	s.updateCheckStatus(func(status *CheckStatus) {
 		status.Progress = 1.0
 		status.RoundProgress = 1.0
+		status.Round = status.CompareTimes // Show final round on completion
 		status.Message = "Validation completed"
 		status.Running = false
 		status.ElapsedSeconds = time.Since(status.StartedAt).Seconds()
 
 		status.TotalKeys = result.TotalKeys
+		status.CheckedKeys = result.TotalKeys // Ensure progress bar reaches 100%
 		status.ConsistentKeys = result.ConsistentKeys
 		status.InconsistentKeys = result.InconsistentKeys
 	})
@@ -237,7 +239,12 @@ func (s *DashboardServer) runRealCheckTask(ctx context.Context, compareModeInt i
 func (s *DashboardServer) updateCheckProgressFromChannel(progressCh <-chan checker.Progress) {
 	for progress := range progressCh {
 		s.updateCheckStatus(func(status *CheckStatus) {
-			status.TotalKeys = progress.TotalKeys
+			if progress.Round > 0 {
+				status.Round = progress.Round
+			}
+			if progress.TotalKeys > 0 {
+				status.TotalKeys = progress.TotalKeys
+			}
 			status.CheckedKeys = progress.CheckedKeys
 			status.ConsistentKeys = progress.ConsistentKeys
 			status.InconsistentKeys = progress.InconsistentKeys

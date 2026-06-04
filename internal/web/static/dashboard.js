@@ -1445,6 +1445,11 @@
         isRunning = false;
         checkStartBtn.style.display = 'inline-flex';
         checkStopBtn.style.display = 'none';
+        // Force progress bar to 100% on normal completion
+        const progressBar = document.getElementById('check-progress-bar');
+        const progressLabel = document.getElementById('check-progress-percent');
+        if (progressBar) progressBar.style.width = '100%';
+        if (progressLabel) progressLabel.textContent = '100.0%';
       }
     } catch (err) {
       console.error('Poll status error:', err);
@@ -1455,10 +1460,11 @@
   function updateUI(status) {
     if (!status) return;
 
-    // Update round indicator
+    // Update round indicator — default to round 1 when backend hasn't emitted a round yet
     const roundIndicator = document.getElementById('check-round-indicator');
-    if (roundIndicator && status.round && status.compareTimes) {
-      roundIndicator.textContent = `Round ${status.round}/${status.compareTimes}`;
+    if (roundIndicator && status.compareTimes) {
+      const currentRound = (status.round > 0) ? status.round : 1;
+      roundIndicator.textContent = `Round ${currentRound}/${status.compareTimes}`;
     }
 
     // Prefer deriving progress from checked/total to reflect the current round.
