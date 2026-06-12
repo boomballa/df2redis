@@ -29,7 +29,6 @@ func (c *Checker) verifyFullValue(src, tgt *redisx.Client, key, keyType string) 
 }
 
 func (c *Checker) compareString(src, tgt *redisx.Client, key string) (bool, error) {
-	// STRLEN check first for optimization
 	lenSrc, err := redisx.ToInt64(must(src.Do("STRLEN", key)))
 	if err != nil {
 		return false, err
@@ -43,7 +42,12 @@ func (c *Checker) compareString(src, tgt *redisx.Client, key string) (bool, erro
 		return false, nil
 	}
 
-	// If Smart Mode and big key, skip value check
+	// Length-only mode: byte length matches, consider consistent.
+	if c.config.Mode == ModeValueLength {
+		return true, nil
+	}
+
+	// Smart mode: skip GET for big keys, length match is sufficient.
 	if c.config.Mode == ModeSmartBigKey && int(lenSrc) > c.config.BigKeyThreshold {
 		return true, nil
 	}
@@ -73,7 +77,10 @@ func (c *Checker) compareList(src, tgt *redisx.Client, key string) (bool, error)
 		return false, nil
 	}
 
-	// Smart Mode skip
+	if c.config.Mode == ModeValueLength {
+		return true, nil
+	}
+
 	if c.config.Mode == ModeSmartBigKey && int(lenSrc) > c.config.BigKeyThreshold {
 		return true, nil
 	}
@@ -118,6 +125,10 @@ func (c *Checker) compareSet(src, tgt *redisx.Client, key string) (bool, error) 
 		return false, nil
 	}
 
+	if c.config.Mode == ModeValueLength {
+		return true, nil
+	}
+
 	if c.config.Mode == ModeSmartBigKey && int(lenSrc) > c.config.BigKeyThreshold {
 		return true, nil
 	}
@@ -160,6 +171,10 @@ func (c *Checker) compareHash(src, tgt *redisx.Client, key string) (bool, error)
 
 	if lenSrc != lenTgt {
 		return false, nil
+	}
+
+	if c.config.Mode == ModeValueLength {
+		return true, nil
 	}
 
 	if c.config.Mode == ModeSmartBigKey && int(lenSrc) > c.config.BigKeyThreshold {
@@ -208,6 +223,10 @@ func (c *Checker) compareZSet(src, tgt *redisx.Client, key string) (bool, error)
 		return false, nil
 	}
 
+	if c.config.Mode == ModeValueLength {
+		return true, nil
+	}
+
 	if c.config.Mode == ModeSmartBigKey && int(lenSrc) > c.config.BigKeyThreshold {
 		return true, nil
 	}
@@ -247,10 +266,6 @@ func (c *Checker) compareStream(src, tgt *redisx.Client, key string) (bool, erro
 		return false, nil
 	}
 
-	// XINFO STREAM check (basic)
-	// We ignore infoSrc variable usage to avoid lint error, just check equality
-	// But redisx.Do returns interface{}, difficult to compare deeply without robust parser.
-	// For now, XLEN equality is our primary check in this prototype.
-
+	// Stream full-value comparison is not yet implemented; XLEN equality is the best check available.
 	return true, nil
 }

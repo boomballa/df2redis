@@ -321,15 +321,22 @@ func (c *Checker) processBatch(ctx context.Context, src, tgt *redisx.Client, key
 			continue
 		}
 
-		// Types match. Check Value if needed.
-		if c.config.Mode == ModeFullValue || c.config.Mode == ModeValueLength { // Todo: ModeValueLength handling
-			if srcType == "string" && c.config.Mode == ModeFullValue {
+		// Types match. Check value if the mode requires it.
+		switch c.config.Mode {
+		case ModeFullValue, ModeSmartBigKey:
+			// ModeFullValue: full value comparison for all types.
+			// ModeSmartBigKey: full value for small keys, length-only for big keys (decided inside compare* funcs).
+			if srcType == "string" {
+				// Batch string keys together for pipelined STRLEN+GET.
 				stringKeys = append(stringKeys, key)
 			} else {
 				otherKeys = append(otherKeys, struct{ k, t string }{key, srcType})
 			}
-		} else {
-			// Outline mode, consistent
+		case ModeValueLength:
+			// Length-only comparison: compare element count / byte length, skip reading actual values.
+			otherKeys = append(otherKeys, struct{ k, t string }{key, srcType})
+		default:
+			// ModeKeyOutline: type match is sufficient, count as consistent.
 			atomic.AddInt64(&res.ConsistentKeys, 1)
 		}
 	}
