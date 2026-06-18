@@ -333,7 +333,7 @@ func (c *Checker) processBatch(ctx context.Context, src, tgt *redisx.Client, key
 				otherKeys = append(otherKeys, struct{ k, t string }{key, srcType})
 			}
 		case ModeValueLength:
-			// Length-only comparison: compare element count / byte length, skip reading actual values.
+			// Length-only comparison: batched via pipeline below, not via verifyFullValue.
 			otherKeys = append(otherKeys, struct{ k, t string }{key, srcType})
 		default:
 			// ModeKeyOutline: type match is sufficient, count as consistent.
@@ -341,21 +341,28 @@ func (c *Checker) processBatch(ctx context.Context, src, tgt *redisx.Client, key
 		}
 	}
 
-	// 3. Batch Verify Strings
+	// 3. Batch Verify Strings (ModeFullValue / ModeSmartBigKey)
 	if len(stringKeys) > 0 {
 		c.batchVerifyStrings(src, tgt, stringKeys, res, lock)
 	}
 
-	// 4. Verify Others Iteratively
-	for _, item := range otherKeys {
-		isConsistent, err := c.verifyFullValue(src, tgt, item.k, item.t)
-		if err != nil {
-			log.Printf("Value check error for %s: %v", item.k, err)
-			c.recordInconsistency(res, lock, item.k, fmt.Sprintf("%s(err)", item.t), "error")
-		} else if !isConsistent {
-			c.recordInconsistency(res, lock, item.k, item.t, item.t)
-		} else {
-			atomic.AddInt64(&res.ConsistentKeys, 1)
+	// 4. Verify others
+	if c.config.Mode == ModeValueLength {
+		// Pipeline all length commands in one round-trip per side instead of
+		// issuing one STRLEN/LLEN/HLEN/… per key, which is the main reason
+		// ModeValueLength used to take ~150 s for ~900 k keys.
+		c.batchVerifyLengths(src, tgt, otherKeys, res, lock)
+	} else {
+		for _, item := range otherKeys {
+			isConsistent, err := c.verifyFullValue(src, tgt, item.k, item.t)
+			if err != nil {
+				log.Printf("Value check error for %s: %v", item.k, err)
+				c.recordInconsistency(res, lock, item.k, fmt.Sprintf("%s(err)", item.t), "error")
+			} else if !isConsistent {
+				c.recordInconsistency(res, lock, item.k, item.t, item.t)
+			} else {
+				atomic.AddInt64(&res.ConsistentKeys, 1)
+			}
 		}
 	}
 
@@ -440,6 +447,65 @@ func (c *Checker) batchVerifyStrings(src, tgt *redisx.Client, keys []string, res
 		} else {
 			atomic.AddInt64(&res.ConsistentKeys, 1)
 		}
+	}
+}
+
+// batchVerifyLengths pipelines the appropriate length command (STRLEN/LLEN/HLEN/SCARD/ZCARD/XLEN)
+// for all items in a single round-trip to each side. This is the fast path for ModeValueLength,
+// replacing the previous approach of calling verifyFullValue once per key (which issued two
+// individual Do() calls per key and accounted for ~150 s on 900 k keys).
+func (c *Checker) batchVerifyLengths(src, tgt *redisx.Client, items []struct{ k, t string }, res *Result, lock *sync.Mutex) {
+	if len(items) == 0 {
+		return
+	}
+
+	cmds := make([][]interface{}, len(items))
+	for i, item := range items {
+		cmds[i] = lengthCmd(item.t, item.k)
+	}
+
+	srcLens, err := src.Pipeline(cmds)
+	if err != nil {
+		log.Printf("Source length pipeline failed: %v", err)
+		return
+	}
+	tgtLens, err := tgt.Pipeline(cmds)
+	if err != nil {
+		log.Printf("Target length pipeline failed: %v", err)
+		return
+	}
+
+	for i, item := range items {
+		l1, err1 := redisx.ToInt64(srcLens[i])
+		l2, err2 := redisx.ToInt64(tgtLens[i])
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		if l1 != l2 {
+			c.recordInconsistency(res, lock, item.k, fmt.Sprintf("len:%d", l1), fmt.Sprintf("len:%d", l2))
+		} else {
+			atomic.AddInt64(&res.ConsistentKeys, 1)
+		}
+	}
+}
+
+// lengthCmd returns the appropriate Redis length command for a given key type.
+func lengthCmd(keyType, key string) []interface{} {
+	switch keyType {
+	case "string":
+		return []interface{}{"STRLEN", key}
+	case "list":
+		return []interface{}{"LLEN", key}
+	case "set":
+		return []interface{}{"SCARD", key}
+	case "zset":
+		return []interface{}{"ZCARD", key}
+	case "hash":
+		return []interface{}{"HLEN", key}
+	case "stream":
+		return []interface{}{"XLEN", key}
+	default:
+		return []interface{}{"TYPE", key}
 	}
 }
 
