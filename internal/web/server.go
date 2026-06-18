@@ -2,9 +2,11 @@ package web
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"log"
 	"math/rand"
 	"net"
@@ -21,6 +23,9 @@ import (
 	"df2redis/internal/logger"
 	"df2redis/internal/state"
 )
+
+//go:embed templates static
+var embeddedFS embed.FS
 
 // DashboardServer exposes a simple web UI for df2redis state.
 type DashboardServer struct {
@@ -161,7 +166,8 @@ func (s *DashboardServer) Start(ready chan<- string) error {
 	mux.HandleFunc("/api/check/start", s.handleCheckStart)
 	mux.HandleFunc("/api/check/stop", s.handleCheckStop)
 	mux.HandleFunc("/api/check/status", s.handleCheckStatus)
-	fileServer := http.FileServer(http.Dir(staticDir()))
+	staticSub, _ := fs.Sub(embeddedFS, "static")
+	fileServer := http.FileServer(http.FS(staticSub))
 	mux.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
 		// Disable caching for static files to ensure updates are loaded immediately
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
@@ -368,17 +374,7 @@ func (s *DashboardServer) currentSnapshot() state.Snapshot {
 }
 
 func loadTemplates() (*template.Template, error) {
-	layout := filepath.Join(templatesDir(), "layout.html")
-	index := filepath.Join(templatesDir(), "index.html")
-	return template.ParseFiles(layout, index)
-}
-
-func templatesDir() string {
-	return "internal/web/templates"
-}
-
-func staticDir() string {
-	return "internal/web/static"
+	return template.ParseFS(embeddedFS, "templates/layout.html", "templates/index.html")
 }
 
 func writeJSON(w http.ResponseWriter, payload interface{}) {
