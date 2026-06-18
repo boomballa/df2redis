@@ -240,13 +240,9 @@ func (c *Config) Validate() error {
 	if c.Target.Addr == "" && len(c.Target.Cluster.Seeds) == 0 {
 		errs = append(errs, "target.addr or target.cluster.seeds is required")
 	}
-	if c.Migrate.SnapshotPath == "" {
-		errs = append(errs, "migrate.snapshotPath is required (RDB file path)")
-	}
-	if c.Migrate.ShakeBinary == "" {
-		errs = append(errs, "migrate.shakeBinary is required (redis-shake binary path)")
-	}
-	// When neither shakeArgs nor shakeConfigFile is provided a config file will be generated
+	// migrate.snapshotPath and migrate.shakeBinary are legacy fields retained for config
+	// compatibility. The replication pipeline no longer uses redis-shake; full sync is
+	// performed natively via the Dragonfly FLOW protocol. No validation required.
 
 	if len(errs) > 0 {
 		return &ValidationError{Path: c.path, Errors: errs}
@@ -319,7 +315,9 @@ func (c *Config) PrettySummary() string {
 		targetParams = fmt.Sprintf("%v", c.Target.Cluster.Seeds)
 	}
 	fmt.Fprintf(&b, "  🎯 target    : %s @ %s\n", c.Target.Type, targetParams)
-	fmt.Fprintf(&b, "  🚚 migrate   : snapshot=%s\n", c.Migrate.SnapshotPath)
+	if c.Migrate.SnapshotPath != "" {
+		fmt.Fprintf(&b, "  🚚 migrate   : snapshot=%s\n", c.Migrate.SnapshotPath)
+	}
 	fmt.Fprintf(&b, "  📂 stateDir  : %s\n", c.ResolveStateDir())
 	fmt.Fprintf(&b, "  📝 statusFile: %s", c.StatusFilePath())
 	return b.String()
