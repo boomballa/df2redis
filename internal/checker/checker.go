@@ -183,6 +183,8 @@ func (c *Checker) Run(ctx context.Context, progressCh chan<- Progress) (*Result,
 }
 
 // runOneRound performs a single full scan-and-compare pass.
+// Each worker gets its own dedicated source and target connections to avoid
+// mutex contention on the shared redisx.Client (which serializes Pipeline calls).
 func (c *Checker) runOneRound(ctx context.Context, src, tgt *redisx.Client, round, totalRounds int, progressCh chan<- Progress) *Result {
 	result := &Result{InconsistentSamples: make([]string, 0)}
 
@@ -203,7 +205,29 @@ func (c *Checker) runOneRound(ctx context.Context, src, tgt *redisx.Client, roun
 		workerWg.Add(1)
 		go func() {
 			defer workerWg.Done()
-			c.processKeys(ctx, src, tgt, keyChan, result, &inconsistenciesMutex, progressCh, round, totalRounds)
+			// Each worker dials its own connections so Pipeline() calls from
+			// different goroutines do not contend on the same mutex.
+			workerSrc, err := redisx.Dial(ctx, redisx.Config{
+				Addr:     c.config.SourceAddr,
+				Password: c.config.SourcePassword,
+			})
+			if err != nil {
+				log.Printf("Worker failed to connect to source: %v", err)
+				return
+			}
+			defer workerSrc.Close()
+
+			workerTgt, err := redisx.Dial(ctx, redisx.Config{
+				Addr:     c.config.TargetAddr,
+				Password: c.config.TargetPassword,
+			})
+			if err != nil {
+				log.Printf("Worker failed to connect to target: %v", err)
+				return
+			}
+			defer workerTgt.Close()
+
+			c.processKeys(ctx, workerSrc, workerTgt, keyChan, result, &inconsistenciesMutex, progressCh, round, totalRounds)
 		}()
 	}
 
